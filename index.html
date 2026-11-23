@@ -102,13 +102,13 @@
       window.navigator.standalone === true || params.get('open') === '1';
 
     // Some phones refuse Google's cookies inside a frame, and Google then answers "unable to open the file". The app says "ready" when it has loaded in the frame;
-    // if it has not said so within 15 seconds, the app is opened directly instead (and remembered, so the next start goes straight there; ?frame=1 undoes that).
+    // if it has not said so within 30 seconds, the app is opened directly instead (and remembered, so the next start goes straight there; ?frame=1 undoes that).
     var DIRECT_KEY = 'govilink_direct';
     function goDirect(remember) { try { if (remember) window.localStorage.setItem(DIRECT_KEY, '1'); } catch (e) { /* not remembered */ } window.location.replace(APP_URL); }
     function startApp() {
       if (params.get('frame') === '1') { try { window.localStorage.removeItem(DIRECT_KEY); } catch (e) { /* nothing to clear */ } }
       else { var direct = ''; try { direct = window.localStorage.getItem(DIRECT_KEY) || ''; } catch (e) { /* unknown */ } if (direct === '1') { goDirect(false); return; } }
-      var readyTimer = setTimeout(function () { goDirect(true); }, 15000);
+      var readyTimer = setTimeout(function () { goDirect(true); }, 30000);
       window.addEventListener('message', function (e) { if (e.data && e.data.govilink === 'ready') clearTimeout(readyTimer); });
       $('gate').style.display = 'none';
       $('splash').style.display = 'grid';
