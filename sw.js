@@ -1,6 +1,6 @@
 // Minimal service worker: lets browsers treat GoviLink as an installable app. The app itself always comes from the network
 // (it holds live farmer data), so only the small wrapper page and its icons are kept for a quick start.
-var CACHE = 'govilink-shell-v4';
+var CACHE = 'govilink-shell-v5';
 var SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'favicon.png'];
 
 self.addEventListener('install', function (e) {
