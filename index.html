@@ -106,6 +106,9 @@
     var DIRECT_KEY = 'govilink_direct';
     function goDirect(remember) { try { if (remember) window.localStorage.setItem(DIRECT_KEY, '1'); } catch (e) { /* not remembered */ } window.location.replace(APP_URL); }
     function startApp() {
+      // The app's screens are hosted here (app.html, kept on the device by sw.js, so it opens at once and with no connection) and talk to the Apps Script web
+      // app with fetch. ?legacy=1 opens the old way: the Apps Script page inside a frame (below).
+      if (params.get('legacy') !== '1') { window.location.replace('app.html'); return; }
       if (params.get('frame') === '1') { try { window.localStorage.removeItem(DIRECT_KEY); } catch (e) { /* nothing to clear */ } }
       else { var direct = ''; try { direct = window.localStorage.getItem(DIRECT_KEY) || ''; } catch (e) { /* unknown */ } if (direct === '1') { goDirect(false); return; } }
       var readyTimer = setTimeout(function () { goDirect(true); }, 30000);
