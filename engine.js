@@ -1,0 +1,6419 @@
+// GoviLink local database engine (built by tools/build_engine.js; do not edit)
+// The Google services the server code uses, made of plain JavaScript so the SAME server code can run on the phone (see engine/README in HANDOFF 4d16).
+// A sheet is a list of rows; only what the server code really uses is built. Nothing here talks to Google.
+var __LS = (function () {
+  function LRange(sh, r, c, nr, nc) { this.sh = sh; this.r = r; this.c = c; this.nr = nr; this.nc = nc; }
+  LRange.prototype.getValues = function () {
+    var out = [];
+    for (var i = 0; i < this.nr; i++) { var row = []; for (var j = 0; j < this.nc; j++) row.push(this.sh.cell(this.r + i, this.c + j)); out.push(row); }
+    return out;
+  };
+  LRange.prototype.setValues = function (v) { for (var i = 0; i < v.length; i++) for (var j = 0; j < v[i].length; j++) this.sh.set(this.r + i, this.c + j, v[i][j]); return this; };
+  LRange.prototype.getValue = function () { return this.sh.cell(this.r, this.c); };
+  LRange.prototype.setValue = function (x) { this.sh.set(this.r, this.c, x); return this; };
+  LRange.prototype.clearContent = function () { for (var i = 0; i < this.nr; i++) for (var j = 0; j < this.nc; j++) this.sh.set(this.r + i, this.c + j, ''); return this; };
+  LRange.prototype.setNumberFormat = function () { return this; };
+  LRange.prototype.setFontWeight = function () { return this; };
+  LRange.prototype.setBackground = function () { return this; };
+
+  function LRangeList(sh, list) { this.sh = sh; this.list = list; }
+  LRangeList.prototype.cells = function () {
+    var out = [], sh = this.sh;
+    this.list.forEach(function (a) {
+      var m = /^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/.exec(a);
+      if (!m) throw new Error('bad A1 ' + a);
+      var col = function (x) { return x.split('').reduce(function (n, ch) { return n * 26 + ch.charCodeAt(0) - 64; }, 0); };
+      var c1 = col(m[1]), r1 = +m[2], c2 = m[3] ? col(m[3]) : c1, r2 = m[4] ? +m[4] : r1;
+      for (var r = r1; r <= r2; r++) for (var c = c1; c <= c2; c++) out.push([r, c]);
+    });
+    return out;
+  };
+  LRangeList.prototype.setValue = function (v) { var sh = this.sh; this.cells().forEach(function (rc) { if (rc[0] > sh.maxRows || rc[1] > sh.maxCols) throw new Error('outside sheet'); sh.set(rc[0], rc[1], v); }); return this; };
+  LRangeList.prototype.setNumberFormat = function () { return this; };
+
+  // d[r - 1][c - 1] is the cell in row r, column c. lastRow is the last row with something in it (kept up to date as cells are set).
+  function LSheet(name) { this.name = name; this.d = []; this.maxRows = 1000; this.maxCols = 26; this.lastRow = 0; this.stale = false; this.frozen = 0; this.version = 0; }
+  LSheet.prototype.cell = function (r, c) { var row = this.d[r - 1]; if (!row) return ''; var v = row[c - 1]; return v === undefined ? '' : v; };
+  LSheet.prototype.set = function (r, c, x) {
+    var row = this.d[r - 1];
+    if (!row) { row = []; this.d[r - 1] = row; }
+    row[c - 1] = x;
+    if (x !== '' && x !== undefined && x !== null) { if (r > this.lastRow) this.lastRow = r; } else if (r === this.lastRow) this.stale = true;
+    this.version++;
+  };
+  LSheet.prototype.getLastRow = function () {
+    if (this.stale) {
+      var i = this.d.length;
+      while (i > 0) { var row = this.d[i - 1]; if (row && row.some(function (v) { return v !== '' && v !== undefined && v !== null; })) break; i--; }
+      this.lastRow = i; this.stale = false;
+    }
+    return this.lastRow;
+  };
+  LSheet.prototype.getMaxRows = function () { return this.maxRows; };
+  LSheet.prototype.insertRowsAfter = function (pos, n) { this.maxRows += n; };
+  LSheet.prototype.getMaxColumns = function () { return this.maxCols; };
+  LSheet.prototype.insertColumnsAfter = function (pos, n) { this.maxCols += n; };
+  LSheet.prototype.getLastColumn = function () { var m = 0; this.d.forEach(function (row) { if (row) row.forEach(function (v, i) { if (v !== '' && v !== undefined) m = Math.max(m, i + 1); }); }); return m; };
+  LSheet.prototype.getRangeList = function (list) { return new LRangeList(this, list); };
+  LSheet.prototype.getRange = function (r, c, nr, nc) {
+    nr = nr === undefined ? 1 : nr; nc = nc === undefined ? 1 : nc;
+    if (r + nr - 1 > this.maxRows || c + nc - 1 > this.maxCols) throw new Error('The coordinates of the range are outside the dimensions of the sheet.');
+    return new LRange(this, r, c, nr, nc);
+  };
+  LSheet.prototype.setFrozenRows = function (n) { this.frozen = n; };
+  LSheet.prototype.clear = function () { this.d = []; this.lastRow = 0; this.stale = false; this.version++; };
+  LSheet.prototype.deleteRow = function (r) { this.d.splice(r - 1, 1); this.stale = true; this.version++; };
+  LSheet.prototype.deleteRows = function (from, n) { this.d.splice(from - 1, n); this.maxRows -= n; this.stale = true; this.version++; if (this.maxRows < 1) throw new Error('cannot delete all rows'); };
+  LSheet.prototype.deleteColumns = function () { throw new Error('Not available on the device.'); };
+  // the header row, then the data rows (used by the copy of the tables kept on the device)
+  LSheet.prototype.setHeaders = function (h) { this.d = [h.slice()]; this.lastRow = 1; this.stale = false; this.maxCols = Math.max(this.maxCols, h.length); this.version++; };
+  LSheet.prototype.exportRows = function (ncols) {
+    var last = this.getLastRow(), out = [];
+    for (var i = 1; i < last; i++) { var row = this.d[i] || [], o = new Array(ncols); for (var c = 0; c < ncols; c++) o[c] = row[c] === undefined ? '' : row[c]; out.push(o); }
+    return out;
+  };
+  LSheet.prototype.importRows = function (headers, rows) {
+    this.d = [headers.slice()];
+    for (var i = 0; i < rows.length; i++) this.d.push(rows[i].slice());
+    this.lastRow = this.d.length; this.stale = true; this.maxRows = Math.max(1000, this.d.length + 500); this.version++;
+  };
+
+  function LSS() { this.sheets = []; }
+  LSS.prototype.getId = function () { return 'device-copy'; };
+  LSS.prototype.getSheets = function () { return this.sheets; };
+  LSS.prototype.getSheetByName = function (n) { for (var i = 0; i < this.sheets.length; i++) if (this.sheets[i].name === n) return this.sheets[i]; return null; };
+  LSS.prototype.insertSheet = function (n) { var s = new LSheet(n); this.sheets.push(s); return s; };
+  LSS.prototype.deleteSheet = function (s) { this.sheets = this.sheets.filter(function (x) { return x !== s; }); };
+  return { LSheet: LSheet, LSS: LSS };
+})();
+
+var __SS = new __LS.LSS();
+var __props = {}, __cache = {};
+var SpreadsheetApp = { getActiveSpreadsheet: function () { return __SS; }, openById: function () { return __SS; } };
+var PropertiesService = { getScriptProperties: function () { return {
+  getProperty: function (k) { return __props[k] === undefined ? null : __props[k]; }, setProperty: function (k, v) { __props[k] = String(v); },
+  getProperties: function () { return Object.assign({}, __props); }, setProperties: function (o) { Object.keys(o).forEach(function (k) { __props[k] = String(o[k]); }); }, deleteProperty: function (k) { delete __props[k]; } }; } };
+var LockService = { getScriptLock: function () { return { waitLock: function () {}, releaseLock: function () {} }; } };
+var CacheService = { getScriptCache: function () { return {
+  get: function (k) { return __cache[k] === undefined ? null : __cache[k]; }, put: function (k, v) { __cache[k] = String(v); }, remove: function (k) { delete __cache[k]; },
+  getAll: function (ks) { var o = {}; ks.forEach(function (k) { if (__cache[k] !== undefined) o[k] = __cache[k]; }); return o; }, putAll: function (o) { Object.keys(o).forEach(function (k) { __cache[k] = String(o[k]); }); } }; } };
+// the device has no developer account: the data it receives already shows the developer as "system"
+var Session = { getActiveUser: function () { return { getEmail: function () { return ''; } }; }, getEffectiveUser: function () { return { getEmail: function () { return ''; } }; } };
+var __unavailable = function () { throw new Error('Not available on the device.'); };
+var Utilities = { DigestAlgorithm: { SHA_256: 'SHA_256' }, getUuid: function () { return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) { var r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }); },
+  computeDigest: __unavailable, computeHmacSha256Signature: __unavailable, newBlob: __unavailable, gzip: __unavailable, ungzip: __unavailable, base64Encode: __unavailable, base64Decode: __unavailable };
+var DriveApp = { createFolder: __unavailable, getFolderById: __unavailable, getFileById: __unavailable };
+var MimeType = { PLAIN_TEXT: 'text/plain' };
+var ScriptApp = { WeekDay: { SUNDAY: 'SUNDAY' }, getProjectTriggers: function () { return []; }, newTrigger: __unavailable };
+var ContentService = { createTextOutput: function (t) { return { setMimeType: function () { return this; }, getContent: function () { return t; } }; }, MimeType: { JSON: 'json' } };
+var HtmlService = { createHtmlOutputFromFile: __unavailable, createTemplateFromFile: __unavailable, XFrameOptionsMode: { ALLOWALL: 'ALLOWALL' } };
+var Logger = { log: function () {} };
+
+// ---- Archive.gs
+// The archive: old records move out of the live sheet into files in a Drive folder, so the sheet stays small and fast however long the app runs.
+//
+// What moves:
+//   Services  closed jobs (Completed / Cancelled) whose day lies more than ARCH_KEEP_SERVICE_MONTHS months back. Open bookings never move.
+//   AuditLog  entries older than ARCH_KEEP_AUDIT_MONTHS months (nothing in the app reads them).
+// Where it goes: one file per table and month in the Drive folder (services_2025-03.json ...), plus one small "compact" file with a short line per
+// archived job (services_compact.json) for the screens that need every job of all time (the map, message groups, the device copy).
+// The tab ArchiveIndex lists the files (table, month, Drive file id, row count, sums for checking).
+//
+// Safety, in this order, for every batch: the month file is written (merged with what it already holds) -> read back and compared (a digest of
+// every row) -> the compact file is updated and compared -> the index is updated -> ONLY THEN the rows are removed from the live sheet. A crash
+// before the last step leaves a row in both places; every reader drops an archived row whose id is also live (the live one wins), and the next run
+// finishes the job. Nothing is ever deleted from Drive by the app.
+//
+// Reading: while no month is archived (the index is empty) nothing here touches Drive at all. Readers that need old jobs ask for them through
+// the helpers below (archivedServiceRows_ for a period, farmerServiceRows_ for one farmer, archivedCompact_ for all of time).
+// Editing an archived job brings it back to the live sheet first (restoreServiceRow_).
+//
+// Set up once from the script editor: run setupArchive() (it asks for Drive permission), then the weekly timer does the rest. archiveNow() runs it at once.
+
+const ARCH_KEEP_SERVICE_MONTHS = 12;     // the current month and this many before it stay in the live sheet
+const ARCH_KEEP_AUDIT_MONTHS = 6;
+const ARCH_MAX_MONTHS_PER_RUN = 4;       // per table and run (keeps one run short; the next run takes the next months)
+const ARCH_MIN_GAP_MS = 6 * 3600 * 1000; // an automatic run does nothing if the last one was less than this long ago
+const ARCH_TIME_BUDGET_MS = 150000;      // no new month is started after this long
+const ARCH_TABLES_ = ['Services', 'AuditLog'];
+const ARCH_FOLDER_NAME = 'GoviLink archive';
+const ARCH_COMPACT_NAME = 'services_compact.json';
+// the places of the fields in a compact line
+const CP_ID = 0, CP_FARMER = 1, CP_DAY = 2, CP_REQ = 3, CP_STATUS = 4, CP_ACRES = 5, CP_RATING = 6, CP_TYPE = 7, CP_PILOT = 8, CP_PILOT_NAME = 9, CP_UPD = 10;
+
+var ARCH_MEMO_ = null;
+function archMemo_() { return ARCH_MEMO_ || (ARCH_MEMO_ = { index: null, files: {}, compact: null }); }
+
+// ---------- small helpers ----------
+
+function isDateValue_(v) { return Object.prototype.toString.call(v) === '[object Date]'; }
+function currentMonthKey_() { return localToday_().slice(0, 7); }
+function shiftMonthKey_(key, delta) {
+  let y = Number(key.slice(0, 4)), m = Number(key.slice(5, 7)) + delta;
+  y += Math.floor((m - 1) / 12);
+  m = ((m - 1) % 12 + 12) % 12 + 1;
+  return y + '-' + ('0' + m).slice(-2);
+}
+function periodText_(v) { return isDateValue_(v) ? isoDay_(v).slice(0, 7) : String(v === undefined || v === null ? '' : v).slice(0, 7); }
+
+// One cell as it is written to a file: dates and times as the same text the app uses everywhere, other dates as ISO time stamps.
+function archiveCell_(h, v) {
+  if (v === undefined || v === null) return '';
+  if (isDateValue_(v)) {
+    if (h === 'service_date' || h === 'requested_date') return isoDay_(v);
+    if (h === 'start_time' || h === 'end_time') return timeText_(v);
+    return v.toISOString();
+  }
+  return v;
+}
+function archiveRowArray_(table, obj) { return SCHEMA[table].map(h => archiveCell_(h, obj[h])); }
+
+// A file's rows in the CURRENT column order of the tab (a file written before a column was added gets '' for it).
+function archiveRowsAsSchema_(table, file) {
+  const headers = SCHEMA[table];
+  if (file.headers && file.headers.join('|') === headers.join('|')) return file.rows;
+  const at = headers.map(h => (file.headers || []).indexOf(h));
+  return file.rows.map(r => at.map(i => (i < 0 || r[i] === undefined ? '' : r[i])));
+}
+function archiveRowObject_(table, arr) { const o = {}; SCHEMA[table].forEach((h, i) => { o[h] = arr[i]; }); return o; }
+function archiveRowKey_(table, arr) { return table === 'Services' ? String(arr[0]) : JSON.stringify(arr); }
+
+// What a batch of rows must look like after it is written: count, sums, and a digest of every row (compared after reading the file back).
+function archiveChecks_(table, rows) {
+  const headers = SCHEMA[table];
+  const a = headers.indexOf('acres_covered'), b = headers.indexOf('amount_charged');
+  let sa = 0, sb = 0;
+  if (a >= 0) rows.forEach(r => { sa += Number(r[a]) || 0; });
+  if (b >= 0) rows.forEach(r => { sb += Number(r[b]) || 0; });
+  const lines = rows.map(r => JSON.stringify(r)).sort().join('\n');
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, lines).map(x => ('0' + (x & 255).toString(16)).slice(-2)).join('');
+  return { count: rows.length, sa: round2_(sa), sb: round2_(sb), digest: digest };
+}
+function sameChecks_(x, y) { return x.count === y.count && x.sa === y.sa && x.sb === y.sb && x.digest === y.digest; }
+
+// ---------- the index ----------
+
+function archiveReady_() { return !!getConfig_('archive_folder_id'); }
+
+// Every line of the ArchiveIndex tab, with the extra JSON read.
+function archiveIndex_() {
+  const memo = archMemo_();
+  if (!memo.index) {
+    memo.index = readColumns_('ArchiveIndex', SCHEMA.ArchiveIndex).map(r => {
+      let extra = {};
+      try { extra = r.extra ? JSON.parse(r.extra) : {}; } catch (e) { extra = {}; }
+      return { _row: r._row, table: String(r.table), period: periodText_(r.period), file_id: String(r.file_id), rows: Number(r.rows) || 0, sum_a: Number(r.sum_a) || 0, sum_b: Number(r.sum_b) || 0, extra: extra };
+    });
+  }
+  return memo.index;
+}
+function archiveEntries_(table) { return archiveIndex_().filter(e => e.table === table).sort((a, b) => a.period.localeCompare(b.period)); }
+// True when at least one month of closed jobs is archived. While false, no reader touches Drive.
+function archiveOn_() { return archiveEntries_('Services').length > 0; }
+function archivedServiceCount_(user) {
+  const me = user && user.role === 'Pilot' ? String(user.email).toLowerCase() : '';
+  return archiveEntries_('Services').reduce((n, e) => n + (me ? Number((e.extra.pilots || {})[me]) || 0 : e.rows), 0);
+}
+function archivedServiceStamp_() { return archiveEntries_('Services').reduce((m, e) => (String(e.extra.stamp || '') > m ? String(e.extra.stamp) : m), ''); }
+
+function archiveUpsertIndex_(table, period, fileId, rows, checks, extra) {
+  const obj = { table: table, period: period, file_id: fileId, rows: rows, sum_a: checks.sa, sum_b: checks.sb, extra: JSON.stringify(extra || {}), archived_at: new Date().toISOString() };
+  const old = archiveEntries_(table).find(e => e.period === period);
+  if (old) writeRowObject_('ArchiveIndex', old._row, obj); else appendObjects_('ArchiveIndex', [obj]);
+  archMemo_().index = null;
+}
+
+// ---------- reading the files ----------
+
+function archiveReadRaw_(fileId) { return JSON.parse(DriveApp.getFileById(String(fileId)).getBlob().getDataAsString()); }
+
+// The rows of one archived month as arrays in the tab's column order (read once per request).
+function archiveFileRows_(table, entry) {
+  const memo = archMemo_();
+  if (!memo.files[entry.file_id]) memo.files[entry.file_id] = archiveRowsAsSchema_(table, archiveReadRaw_(entry.file_id));
+  return memo.files[entry.file_id];
+}
+
+// The archived closed jobs of the months a day range touches, as row objects (no _row; the caller filters by day and the rest).
+function archivedServiceRows_(fromDay, toDay) {
+  if (!archiveOn_()) return [];
+  const lo = fromDay ? String(fromDay).slice(0, 7) : '', hi = toDay ? String(toDay).slice(0, 7) : '9999-99';
+  const out = [];
+  archiveEntries_('Services').forEach(e => {
+    if (e.period < lo || e.period > hi || !e.rows) return;
+    archiveFileRows_('Services', e).forEach(a => { const o = archiveRowObject_('Services', a); o._archived = true; out.push(o); });
+  });
+  return out;
+}
+
+// Archived rows that are not also in the live sheet (after a crash the same job can be in both: the live one wins).
+function withoutLiveIds_(archived, liveRows) {
+  if (!archived.length) return archived;
+  const live = {};
+  liveRows.forEach(r => { live[String(r.service_id)] = true; });
+  return archived.filter(r => !live[String(r.service_id)]);
+}
+
+// ---------- the compact file ----------
+
+function archiveCompactRows_() {
+  const memo = archMemo_();
+  if (!memo.compact) {
+    const id = getConfig_('archive_compact_id');
+    memo.compact = id ? (archiveReadRaw_(id).rows || []) : [];
+  }
+  return memo.compact;
+}
+// All archived jobs of all time as short lines (see CP_*), read once per request. Empty while nothing is archived.
+function archivedCompact_() { return archiveOn_() ? archiveCompactRows_() : []; }
+
+function compactLine_(a) {
+  const o = archiveRowObject_('Services', a);
+  const rating = Number(o.satisfaction);
+  return [String(o.service_id), String(o.farmer_id), isoDay_(o.service_date), isoDay_(o.requested_date), String(o.status), Number(o.acres_covered) || 0,
+    rating >= 1 && rating <= 5 ? rating : 0, String(o.service_type || ''), String(o.pilot_email || '').toLowerCase(), String(o.pilot_name || ''), String(o.updated_at || '')];
+}
+// A compact line as the kind of object the live readers use (only the fields the compact file keeps).
+function compactObject_(c) {
+  return { service_id: c[CP_ID], farmer_id: c[CP_FARMER], service_date: c[CP_DAY], requested_date: c[CP_REQ], status: c[CP_STATUS], acres_covered: c[CP_ACRES], satisfaction: c[CP_RATING] || '',
+    service_type: c[CP_TYPE], pilot_email: c[CP_PILOT], pilot_name: c[CP_PILOT_NAME], updated_at: c[CP_UPD] };
+}
+
+// The live Services columns (named) PLUS the archived jobs of all time, for the screens that add up everything. Only fields the compact file keeps may be asked for.
+function readServiceColumnsAll_(names) {
+  const want = names.indexOf('service_id') === -1 ? ['service_id'].concat(names) : names;
+  const live = readServiceColumns_(want);
+  if (!archiveOn_()) return live;
+  const liveIds = {};
+  live.forEach(r => { liveIds[String(r.service_id)] = true; });
+  const out = live.slice();
+  archivedCompact_().forEach(c => {
+    if (liveIds[c[CP_ID]]) return;
+    const o = compactObject_(c), r = {};
+    want.forEach(n => { r[n] = o[n]; });
+    out.push(r);
+  });
+  return out;
+}
+
+// All service rows of one farmer, live and archived, newest not sorted (the caller sorts). Archived months are found through the compact file.
+function farmerServiceRows_(farmerId) {
+  const live = readRowsAt_('Services', serviceRowNumbersForFarmer_(farmerId));
+  if (!archiveOn_()) return live;
+  const months = {};
+  archivedCompact_().forEach(c => { if (c[CP_FARMER] === farmerId) months[(c[CP_DAY] || c[CP_REQ]).slice(0, 7)] = true; });
+  const arch = [];
+  archiveEntries_('Services').forEach(e => {
+    if (!months[e.period]) return;
+    archiveFileRows_('Services', e).forEach(a => { if (String(a[1]) === farmerId) { const o = archiveRowObject_('Services', a); o._archived = true; arch.push(o); } });
+  });
+  return live.concat(withoutLiveIds_(arch, live));
+}
+
+// One archived job by its id (read-only view with _archived), or null.
+function findArchivedService_(serviceId) {
+  if (!serviceId || !archiveOn_()) return null;
+  const c = archiveCompactRows_().find(x => x[CP_ID] === serviceId);
+  if (!c) return null;
+  const e = archiveEntries_('Services').find(x => x.period === (c[CP_DAY] || c[CP_REQ]).slice(0, 7));
+  if (!e) return null;
+  const a = archiveFileRows_('Services', e).find(r => String(r[0]) === serviceId);
+  if (!a) return null;
+  const o = archiveRowObject_('Services', a);
+  o._row = 0; o._archived = true;
+  return o;
+}
+
+// ---------- writing the files ----------
+
+function archiveFolder_() {
+  const id = getConfig_('archive_folder_id');
+  if (!id) throw new Error('The archive is not set up yet.');
+  return DriveApp.getFolderById(String(id));
+}
+
+// Writes a JSON file (a new one when there is no file yet) and returns its id. The content is read back and compared by the caller.
+function archiveWriteFile_(name, existingId, obj) {
+  const text = JSON.stringify(obj);
+  if (existingId) { DriveApp.getFileById(String(existingId)).setContent(text); return String(existingId); }
+  return archiveFolder_().createFile(name, text, MimeType.PLAIN_TEXT).getId();
+}
+
+// Writes exactly these rows as the month file (a new file when there is no id) and checks it by reading it back. Returns { fileId, rows, checks }.
+function archiveWriteExact_(table, period, fileName, existingId, rows) {
+  const want = archiveChecks_(table, rows);
+  const fileId = archiveWriteFile_(fileName, existingId, { v: 1, table: table, period: period, headers: SCHEMA[table], rows: rows, saved_at: new Date().toISOString() });
+  let got = null;
+  try { got = archiveChecks_(table, archiveRowsAsSchema_(table, archiveReadRaw_(fileId))); } catch (e) { got = null; }
+  if (!got || !sameChecks_(want, got)) throw new Error('The file for ' + table + ' ' + period + ' did not read back the same as it was written.');
+  delete archMemo_().files[fileId];
+  return { fileId: fileId, rows: rows, checks: want };
+}
+
+// Merges new rows into what a month file already holds (same key: the new row wins) and writes the result.
+function archiveWriteMonth_(table, period, fileName, existingId, existingRows, newRows) {
+  const byKey = {};
+  existingRows.forEach(r => { byKey[archiveRowKey_(table, r)] = r; });
+  newRows.forEach(r => { byKey[archiveRowKey_(table, r)] = r; });
+  const rows = Object.keys(byKey).sort().map(k => byKey[k]);
+  return archiveWriteExact_(table, period, fileName, existingId, rows);
+}
+
+// Adds / replaces / removes lines of the compact file (ids in `drop` are removed first), and checks it by reading it back.
+function archiveUpdateCompact_(addLines, dropIds) {
+  const id = getConfig_('archive_compact_id');
+  const old = id ? (archiveReadRaw_(id).rows || []) : [];
+  const gone = {};
+  dropIds.forEach(x => { gone[x] = true; });
+  addLines.forEach(l => { gone[l[CP_ID]] = true; });
+  const lines = old.filter(l => !gone[l[CP_ID]]).concat(addLines);
+  const text = { v: 1, built_at: new Date().toISOString(), rows: lines };
+  const fileId = archiveWriteFile_(ARCH_COMPACT_NAME, id, text);
+  if (!id) setConfig_('archive_compact_id', fileId, 'Drive file with a short line for every archived service');
+  let back = null;
+  try { back = archiveReadRaw_(fileId).rows || []; } catch (e) { back = null; }
+  if (!back || back.length !== lines.length || JSON.stringify(back) !== JSON.stringify(lines)) throw new Error('The compact archive file did not read back the same as it was written.');
+  archMemo_().compact = null;
+  return lines.length;
+}
+
+function servicesExtra_(rows) {
+  const pilots = {};
+  let stamp = '';
+  rows.forEach(a => {
+    const p = String(a[SCHEMA.Services.indexOf('pilot_email')] || '').toLowerCase();
+    pilots[p] = (pilots[p] || 0) + 1;
+    const u = String(a[SCHEMA.Services.indexOf('updated_at')] || '');
+    if (u > stamp) stamp = u;
+  });
+  return { pilots: pilots, stamp: stamp };
+}
+
+// Removes these rows (by position in the live sheet) from the bottom up, one block of neighbouring rows at a time.
+function deleteLiveRows_(table, rowNumbers) {
+  const rows = rowNumbers.slice().sort((a, b) => b - a);
+  let i = 0;
+  while (i < rows.length) {
+    let j = i;
+    while (j + 1 < rows.length && rows[j + 1] === rows[j] - 1) j++;
+    deleteDataRows_(table, rows[j], j - i + 1);
+    i = j + 1;
+  }
+}
+
+// ---------- the run ----------
+
+// The live Services rows that may move, grouped by month: { 'yyyy-mm': [sheet rows] }
+function archivableServiceMonths_() {
+  const cutoff = shiftMonthKey_(currentMonthKey_(), -ARCH_KEEP_SERVICE_MONTHS);
+  const out = {};
+  readColumns_('Services', ['service_id', 'status', 'requested_date', 'service_date', 'notes']).forEach(r => {
+    if (r.status !== 'Completed' && r.status !== 'Cancelled') return;
+    if (String(r.notes).indexOf(MOCK_SERVICE_NOTE) === 0) return;       // the made-up demo history stays where the demo switch can remove it
+    const day = serviceDay_(r);
+    if (!day || day.slice(0, 7) >= cutoff) return;
+    (out[day.slice(0, 7)] = out[day.slice(0, 7)] || []).push(r._row);
+  });
+  return out;
+}
+
+function archiveServicesStep_(report, started) {
+  const byMonth = archivableServiceMonths_();
+  const months = Object.keys(byMonth).sort().slice(0, ARCH_MAX_MONTHS_PER_RUN);
+  const done = [];      // { period, ids, rows }
+  const allLines = [];
+  months.forEach(mk => {
+    if (Date.now() - started > ARCH_TIME_BUDGET_MS) return;
+    try {
+      const newRows = readRowsAt_('Services', byMonth[mk]).map(o => archiveRowArray_('Services', o));
+      const entry = archiveEntries_('Services').find(e => e.period === mk);
+      const existing = entry ? archiveFileRows_('Services', entry) : [];
+      const w = archiveWriteMonth_('Services', mk, 'services_' + mk + '.json', entry ? entry.file_id : '', existing, newRows);
+      done.push({ period: mk, fileId: w.fileId, rows: w.rows, checks: w.checks, ids: newRows.map(r => String(r[0])) });
+      newRows.forEach(r => allLines.push(compactLine_(r)));
+    } catch (e) { report.errors.push('Services ' + mk + ': ' + e.message); }
+  });
+  if (!done.length) return;
+  // the compact file first, then the index, then (and only then) the live sheet
+  archiveUpdateCompact_(allLines, []);
+  done.forEach(d => archiveUpsertIndex_('Services', d.period, d.fileId, d.rows.length, d.checks, servicesExtra_(d.rows)));
+  const gone = {};
+  done.forEach(d => d.ids.forEach(id => { gone[id] = true; }));
+  const rowsToDelete = readColumns_('Services', ['service_id']).filter(r => gone[String(r.service_id)]).map(r => r._row);
+  deleteLiveRows_('Services', rowsToDelete);
+  done.forEach(d => report.services.push({ period: d.period, moved: d.ids.length, in_file: d.rows.length }));
+}
+
+function archiveAuditStep_(report, started) {
+  const cutoff = shiftMonthKey_(currentMonthKey_(), -ARCH_KEEP_AUDIT_MONTHS);
+  const byMonth = {};
+  readColumns_('AuditLog', ['timestamp']).forEach(r => {
+    const day = isoDay_(r.timestamp);
+    if (!day || day.slice(0, 7) >= cutoff) return;
+    (byMonth[day.slice(0, 7)] = byMonth[day.slice(0, 7)] || []).push(r._row);
+  });
+  const months = Object.keys(byMonth).sort().slice(0, ARCH_MAX_MONTHS_PER_RUN);
+  months.forEach(mk => {
+    if (Date.now() - started > ARCH_TIME_BUDGET_MS) return;
+    try {
+      const newRows = readRowsAt_('AuditLog', byMonth[mk]).map(o => archiveRowArray_('AuditLog', o));
+      const entry = archiveEntries_('AuditLog').find(e => e.period === mk);
+      const existing = entry ? archiveFileRows_('AuditLog', entry) : [];
+      const w = archiveWriteMonth_('AuditLog', mk, 'auditlog_' + mk + '.json', entry ? entry.file_id : '', existing, newRows);
+      archiveUpsertIndex_('AuditLog', mk, w.fileId, w.rows.length, w.checks, {});
+      deleteLiveRows_('AuditLog', byMonth[mk]);
+      report.audit.push({ period: mk, moved: newRows.length, in_file: w.rows.length });
+    } catch (e) { report.errors.push('AuditLog ' + mk + ': ' + e.message); }
+  });
+}
+
+// One run. manual = started by a person (no waiting time between runs).
+function archiveRun_(manual) {
+  const report = { ran: false, services: [], audit: [], errors: [] };
+  if (!archiveReady_()) { report.note = 'The archive is not set up yet (run setupArchive).'; return report; }
+  const last = Date.parse(String(getConfig_('archive_last_run') || ''));
+  if (!manual && isFinite(last) && Date.now() - last < ARCH_MIN_GAP_MS) { report.note = 'Ran recently.'; return report; }
+  const started = Date.now();
+  withLock_(() => {
+    archiveServicesStep_(report, started);
+    archiveAuditStep_(report, started);
+    setConfig_('archive_last_run', new Date().toISOString(), 'When the archive last ran');
+    report.ran = true;
+  });
+  const moved = report.services.concat(report.audit).reduce((n, x) => n + x.moved, 0);
+  if (moved || report.errors.length) audit_('archive', 'Archive', '', moved + ' records moved to Drive' + (report.errors.length ? '; problems: ' + report.errors.join(' | ').slice(0, 300) : ''));
+  return report;
+}
+
+
+// ---------- bringing a job back ----------
+
+// An archived job goes back to the live sheet (so it can be corrected). Returns the live row, or null if the job is not archived. Call inside the lock.
+function restoreServiceRow_(serviceId) {
+  const arch = findArchivedService_(serviceId);
+  if (!arch) return null;
+  const period = (isoDay_(arch.service_date) || isoDay_(arch.requested_date)).slice(0, 7);
+  const entry = archiveEntries_('Services').find(e => e.period === period);
+  const obj = {};
+  SCHEMA.Services.forEach(h => { obj[h] = arch[h]; });
+  ['created_at', 'updated_at'].forEach(h => { if (obj[h]) obj[h] = new Date(obj[h]); });
+  // live first: a crash after this leaves the job in both places (the live one wins), never in neither
+  const row = appendObjectsLocked_('Services', [obj]);
+  const left = archiveFileRows_('Services', entry).filter(r => String(r[0]) !== serviceId);
+  const w = archiveWriteExact_('Services', period, 'services_' + period + '.json', entry.file_id, left);
+  archiveUpdateCompact_([], [serviceId]);
+  archiveUpsertIndex_('Services', period, w.fileId, left.length, w.checks, servicesExtra_(left));
+  return readRowsAt_('Services', [row])[0];
+}
+
+// Puts a whole archived month back into the live sheet (an undo for one month). The month's file stays in Drive.
+function restoreMonth_(table, period) {
+  return withLock_(() => {
+    const entry = archiveEntries_(table).find(e => e.period === period);
+    if (!entry) throw new Error('Nothing is archived for ' + table + ' ' + period + '.');
+    const rows = archiveFileRows_(table, entry);
+    const objs = rows.map(a => {
+      const o = archiveRowObject_(table, a);
+      ['created_at', 'updated_at', 'timestamp'].forEach(h => { if (o[h]) o[h] = new Date(o[h]); });
+      return o;
+    });
+    if (table === 'Services') {
+      const liveIds = {};
+      readColumns_('Services', ['service_id']).forEach(r => { liveIds[String(r.service_id)] = true; });
+      const missing = objs.filter(o => !liveIds[String(o.service_id)]);
+      if (missing.length) appendObjectsLocked_('Services', missing);
+      archiveUpdateCompact_([], rows.map(a => String(a[0])));
+    } else if (objs.length) appendObjectsLocked_(table, objs);
+    archiveUpsertIndex_(table, period, entry.file_id, 0, archiveChecks_(table, []), {});
+    return objs.length;
+  });
+}
+
+// ---------- the editor tools (Admin / the owner only) ----------
+
+function archiveTimerMissing_() { return !ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'archiveTrigger'); }
+
+// Run ONCE from the script editor: creates the Drive folder, the index tab and the weekly timer. Asks for Drive permission the first time.
+function setupArchive() {
+  requireRole_(['Admin']);
+  resetDbMemo_();
+  const lines = [];
+  ensureSheet_(db_(), 'ArchiveIndex');
+  if (!getConfig_('archive_folder_id')) {
+    const folder = DriveApp.createFolder(ARCH_FOLDER_NAME);
+    setConfig_('archive_folder_id', folder.getId(), 'Drive folder that holds the archive files');
+    lines.push('Created the Drive folder "' + ARCH_FOLDER_NAME + '".');
+  } else lines.push('The Drive folder already exists.');
+  if (archiveTimerMissing_()) {
+    ScriptApp.newTrigger('archiveTrigger').timeBased().everyWeeks(1).onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(2).create();
+    lines.push('Set the weekly timer (Sunday, about 2 am).');
+  } else lines.push('The weekly timer already exists.');
+  Logger.log(lines.join('\n'));
+  return lines;
+}
+
+// Moves what is due right now. Safe to run again and again (each run takes up to a few months per table; run it until it says nothing moved).
+function archiveNow() {
+  requireRole_(['Admin']);
+  resetDbMemo_();
+  const r = archiveRun_(true);
+  Logger.log(JSON.stringify(r));
+  return r;
+}
+
+// Puts one archived month back into the live sheet, e.g. archiveRestore('Services', '2025-03'). The file stays in Drive.
+function archiveRestore(table, period) {
+  requireRole_(['Admin']);
+  resetDbMemo_();
+  if (ARCH_TABLES_.indexOf(String(table)) === -1) throw new Error('Unknown table.');
+  const n = restoreMonth_(String(table), String(period));
+  audit_('archive', 'Archive', '', n + ' records of ' + table + ' ' + period + ' put back');
+  return n;
+}
+
+// What the weekly timer runs. An anonymous visitor or a stranger is refused; the timer itself (or the owner) is allowed. At most one run every few hours.
+function archiveTrigger(e) {
+  const user = currentUser_();
+  const fromTimer = !!(e && e.triggerUid);
+  if (!(user && user.role === 'Admin') && !fromTimer) throw new Error('Not signed in.');
+  resetDbMemo_();
+  return archiveRun_(false);
+}
+
+// How the archive stands: the files, the rows in the live sheet, and whether anything is due.
+function archiveStatus() {
+  requireRole_(['Admin']);
+  resetDbMemo_();
+  const live = Math.max(sheet_('Services').getLastRow() - 1, 0);
+  return { ready: archiveReady_(), live_services: live, archived_services: archiveEntries_('Services').reduce((n, e) => n + e.rows, 0),
+    months_waiting: archiveReady_() ? Object.keys(archivableServiceMonths_()).length : null, last_run: getConfig_('archive_last_run') || '',
+    files: archiveIndex_().map(e => ({ table: e.table, period: e.period, rows: e.rows })) };
+}
+
+// ---- Auth.gs
+// Accounts, passwords, sessions and permissions.
+//
+// People sign in with an email and a password that an Admin set (they need no Google account). A successful sign-in gives a
+// random session token. The browser sends that token with every request through api(), which checks it, finds the user,
+// and only then runs the requested function. Every function that touches data starts with requireRole_(), which refuses
+// anyone who did not arrive through api(), so calling a function directly from a browser console achieves nothing.
+// The one exception is the owner of the script running it from the Apps Script editor (setup, seeding, password reset).
+
+var CURRENT_USER_ = null;   // set by api() for the duration of one request, never anywhere else
+var EDITOR_USER_ = undefined;   // the owner running from the editor, looked up once per run
+
+const SESSION_TTL_SECONDS = 21600;          // 6 hours, the longest the cache allows
+const SESSION_RECHECK_MS = 5 * 60 * 1000;   // roles and active flags are re-read from the sheet this often
+const MAX_FAILED_LOGINS = 5;
+const LOCK_MINUTES = 15;
+const PASSWORD_ITERATIONS = 2000;
+const MIN_PASSWORD_LENGTH = 8;
+const SIGN_IN_FAILED = 'Wrong email or password, or the account is temporarily locked.';
+
+// What the browser may ask for through api(). Everything else is unreachable from the page.
+const API_NAMES_ = [
+  'getFormDefinition', 'getDesignerData', 'saveQuestion', 'setQuestionActive', 'moveQuestion', 'saveOptions', 'updateOption', 'setOptionActive',
+  'getRegistrationData', 'saveFarmer', 'getFarmer', 'getFarmerView', 'findFarmers',
+  'getOriginMap', 'getFarmerOrigin', 'getDashboard',
+  'getFinderOptions', 'runFinder', 'exportFinder', 'listSegments', 'saveSegment', 'deleteSegment',
+  'getExportInfo', 'readTableChunk',
+  'getServiceOptions', 'findFarmersForService', 'getFarmerServices', 'getService', 'saveService', 'listRecentServices', 'listServices',
+  'getServiceSetup', 'addServiceListValue', 'setServiceListValueActive', 'getAreaOptions', 'getServiceReport', 'exportServices',
+  'previewAudience', 'listAudience', 'prepareMessage', 'logMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'addInteraction', 'removeFarmer', 'restoreFarmer', 'getHome', 'getEarthGeo', 'getEarthData', 'savePlace',
+  'syncStatus', 'syncedRead', 'getFarmerChunks', 'getServiceRows', 'getFarmerPack', 'getServicePack', 'getFormPack', 'getLocalPlan', 'getTableDelta', 'submitOp', 'saveFarmerGps',
+  'listUsers', 'createUser', 'updateUser', 'resetUserPassword', 'unlockUser', 'deleteUser', 'changeOwnPassword', 'changeOwnEmail',
+  'devGpsStatus', 'devEstimateGps', 'devClearEstimatedGps', 'devEnableMockServices', 'devDisableMockServices',
+  'devStatus', 'devEnableMockStep', 'devDisableMock', 'devRebuildIndex', 'getExtraScreen'
+];
+
+// ---------- who is making this request ----------
+
+// The signed-in user for this request, or null. The owner running from the editor counts as Admin.
+function currentUser_() {
+  if (CURRENT_USER_) return CURRENT_USER_;
+  if (EDITOR_USER_ !== undefined) return EDITOR_USER_;
+  const active = String(Session.getActiveUser().getEmail() || '').toLowerCase();
+  const owner = String(Session.getEffectiveUser().getEmail() || '').toLowerCase();
+  if (!active || active !== owner) return null;
+  let row = null;
+  try { row = findUserByEmail_(owner); } catch (e) { row = null; }
+  // Looked up once per run: the editor tools call this many times.
+  EDITOR_USER_ = row && row.active === 'Yes' ? publicUser_(row) : { user_id: '', email: owner, name: 'Owner', role: 'Admin', label: 'Owner', must_change: false };
+  return EDITOR_USER_;
+}
+
+function currentEmail_() {
+  const u = currentUser_();
+  return u ? String(u.email).toLowerCase() : '';
+}
+
+function requireRole_(allowedRoles) {
+  const user = currentUser_();
+  if (!user) throw new Error('Not signed in.');
+  if (allowedRoles.indexOf(user.role) === -1) throw new Error('Not authorised for role ' + user.role + '.');
+  return user;
+}
+
+function findUserByEmail_(email) {
+  const e = String(email || '').trim().toLowerCase();
+  return readAll_('Users').find(u => String(u.email).toLowerCase() === e) || null;
+}
+
+// What the browser is told about the signed-in person. The developer account (the owner) is an Admin that also gets the
+// developer tools; those extra fields are sent to nobody else, so other accounts never learn that such an account exists.
+function publicUser_(row) {
+  const u = { user_id: row.user_id, email: String(row.email).toLowerCase(), name: row.name, role: row.role, label: row.label, must_change: row.must_change_password === 'Yes' };
+  if (row.role === 'Admin' && isDeveloperEmail_(row.email)) { u.tools = true; u.roleLabel = 'Developer'; }
+  return u;
+}
+
+// The developer's own account row, hidden from everyone else.
+function isDeveloperRow_(row) { return !!row && isDeveloperEmail_(row.email); }
+function viewerIsDeveloper_() { return isDeveloperEmail_(currentEmail_()); }
+// A row the current person is not allowed to know about: behaves as if it did not exist.
+function hiddenRow_(row) { return isDeveloperRow_(row) && !viewerIsDeveloper_(); }
+
+// ---------- passwords ----------
+
+function bytesToHex_(bytes) { return bytes.map(b => ('0' + (b & 255).toString(16)).slice(-2)).join(''); }
+
+function hexToBytes_(hex) {
+  const out = [];
+  for (let i = 0; i < hex.length; i += 2) { const b = parseInt(hex.substr(i, 2), 16); out.push(b > 127 ? b - 256 : b); }
+  return out;
+}
+
+function randomHex_(byteCount) {
+  let out = '';
+  while (out.length < byteCount * 2) out += Utilities.getUuid().replace(/-/g, '');
+  return out.slice(0, byteCount * 2);
+}
+
+function sha256Hex_(text) { return bytesToHex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text)); }
+
+// PBKDF2 with HMAC-SHA256: slows down anyone trying passwords against a stolen copy of the sheet.
+function pbkdf2_(password, saltHex, iterations) {
+  const key = Utilities.newBlob(String(password)).getBytes();   // Apps Script wants the value and the key both as bytes
+  let u = Utilities.computeHmacSha256Signature(hexToBytes_(saltHex).concat([0, 0, 0, 1]), key);
+  const t = u.slice();
+  for (let i = 1; i < iterations; i++) {
+    u = Utilities.computeHmacSha256Signature(u, key);
+    for (let j = 0; j < t.length; j++) t[j] ^= u[j];
+  }
+  return bytesToHex_(t);
+}
+
+function makePasswordRecord_(password) {
+  const salt = randomHex_(16);
+  return { password_hash: 'pbk$' + PASSWORD_ITERATIONS + '$' + pbkdf2_(password, salt, PASSWORD_ITERATIONS), password_salt: salt };
+}
+
+function passwordMatches_(password, row) {
+  const parts = String(row.password_hash || '').split('$');
+  if (parts.length !== 3 || parts[0] !== 'pbk' || !row.password_salt) return false;
+  const attempt = pbkdf2_(password, String(row.password_salt), Number(parts[1]) || PASSWORD_ITERATIONS);
+  let diff = attempt.length ^ parts[2].length;
+  for (let i = 0; i < attempt.length; i++) diff |= attempt.charCodeAt(i) ^ (parts[2].charCodeAt(i) || 0);
+  return diff === 0;
+}
+
+function checkPasswordPolicy_(password, email) {
+  const p = String(password === undefined || password === null ? '' : password);
+  if (p.length < MIN_PASSWORD_LENGTH) throw new Error('The password must be at least ' + MIN_PASSWORD_LENGTH + ' characters.');
+  if (p.length > 100) throw new Error('The password is too long (100 characters at most).');
+  if (!/[A-Za-z]/.test(p) || !/\d/.test(p)) throw new Error('The password needs at least one letter and one number.');
+  if (email && p.toLowerCase() === String(email).toLowerCase()) throw new Error('The password cannot be the same as the email.');
+  return p;
+}
+
+// ---------- sessions ----------
+
+function newSession_(user) {
+  const token = randomHex_(32) + randomHex_(32);
+  const now = Date.now();
+  CacheService.getScriptCache().put('s:' + sha256Hex_(token), JSON.stringify({ email: user.email, user: user, issued: now, checked: now }), SESSION_TTL_SECONDS);
+  return token;
+}
+
+// Signing out everywhere for one account (after a role, status or password change).
+function revokeSessions_(email) {
+  CacheService.getScriptCache().put('r:' + String(email).toLowerCase(), String(Date.now()), SESSION_TTL_SECONDS);
+}
+
+// The session behind a token, or null. Roles and active flags are re-read from the sheet every few minutes.
+function sessionFromToken_(token) {
+  if (typeof token !== 'string' || token.length < 64) return null;
+  const cache = CacheService.getScriptCache();
+  const key = 's:' + sha256Hex_(token);
+  const raw = cache.get(key);
+  if (!raw) return null;
+  let s;
+  try { s = JSON.parse(raw); } catch (e) { cache.remove(key); return null; }
+  const revoked = Number(cache.get('r:' + s.email) || 0);
+  if (revoked && revoked >= s.issued) { cache.remove(key); return null; }
+  const now = Date.now();
+  if (now - s.checked > SESSION_RECHECK_MS) {
+    const row = findUserByEmail_(s.email);
+    if (!row || row.active !== 'Yes') { cache.remove(key); return null; }
+    s.user = publicUser_(row);
+    s.checked = now;
+    cache.put(key, JSON.stringify(s), SESSION_TTL_SECONDS);
+  }
+  return s;
+}
+
+// ---------- sign in and out (callable without a session) ----------
+
+function authLogin(email, password) {
+  const e = String(email || '').trim().toLowerCase();
+  const p = String(password === undefined || password === null ? '' : password);
+  if (!e || !p || e.length > 120 || p.length > 200) throw new Error(SIGN_IN_FAILED);
+  const row = findUserByEmail_(e);
+  const now = Date.now();
+  const usable = row && row.active === 'Yes' && row.password_hash;
+  const locked = usable && Number(row.locked_until) > now;
+  if (!usable || locked) {
+    pbkdf2_(p, '00112233445566778899aabbccddeeff', PASSWORD_ITERATIONS);   // same effort whether or not the account exists
+    if (locked) audit_('login_failed', 'Users', row.user_id, 'account locked: ' + e);
+    throw new Error(SIGN_IN_FAILED);
+  }
+  if (!passwordMatches_(p, row)) {
+    const failures = (Number(row.failed_attempts) || 0) + 1;
+    const lock = failures >= MAX_FAILED_LOGINS;
+    updateById_('Users', row.user_id, { failed_attempts: lock ? 0 : failures, locked_until: lock ? now + LOCK_MINUTES * 60000 : '' });
+    audit_('login_failed', 'Users', row.user_id, (lock ? 'locked for ' + LOCK_MINUTES + ' minutes: ' : 'wrong password: ') + e);
+    throw new Error(SIGN_IN_FAILED);
+  }
+  updateById_('Users', row.user_id, { failed_attempts: 0, locked_until: '', last_login: new Date() });
+  const user = publicUser_(row);
+  audit_('login', 'Users', row.user_id, e);
+  return { token: newSession_(user), user: user, mustChange: user.must_change };
+}
+
+function authStatus(token) {
+  const s = sessionFromToken_(token);
+  return s ? { signedIn: true, user: s.user, mustChange: s.user.must_change } : { signedIn: false };
+}
+
+function authLogout(token) {
+  if (typeof token === 'string' && token.length >= 64) CacheService.getScriptCache().remove('s:' + sha256Hex_(token));
+  return true;
+}
+
+// ---------- the one door for everything else ----------
+
+function api(token, fn, args) {
+  const s = sessionFromToken_(token);
+  if (!s) throw new Error('SESSION_EXPIRED: please sign in again.');
+  if (API_NAMES_.indexOf(fn) === -1 || typeof globalThis[fn] !== 'function') throw new Error('Unknown action.');
+  if (s.user.must_change && fn !== 'changeOwnPassword') {
+    // They may have chosen their new password since this session was stored, so look at the account itself.
+    const row = findUserByEmail_(s.user.email);
+    if (!row || row.active !== 'Yes' || row.must_change_password === 'Yes') throw new Error('MUST_CHANGE_PASSWORD: choose a new password first.');
+    s.user = publicUser_(row);
+    CacheService.getScriptCache().put('s:' + sha256Hex_(token), JSON.stringify(s), SESSION_TTL_SECONDS);
+  }
+  CURRENT_USER_ = s.user;
+  try {
+    return globalThis[fn].apply(null, Array.isArray(args) ? args : []);
+  } finally {
+    CURRENT_USER_ = null;
+  }
+}
+
+// ---------- changing your own password ----------
+
+// Checks the signed-in person's password for a sensitive change. Wrong tries count towards the same lock-out as signing in.
+function verifyOwnPassword_(row, password, message) {
+  if (row && Number(row.locked_until) > Date.now()) throw new Error('Too many wrong passwords. Try again in a few minutes.');
+  if (row && passwordMatches_(String(password || ''), row)) {
+    if (Number(row.failed_attempts)) updateById_('Users', row.user_id, { failed_attempts: 0, locked_until: '' });
+    return;
+  }
+  if (row) {
+    const failures = (Number(row.failed_attempts) || 0) + 1;
+    const lock = failures >= MAX_FAILED_LOGINS;
+    updateById_('Users', row.user_id, { failed_attempts: lock ? 0 : failures, locked_until: lock ? Date.now() + LOCK_MINUTES * 60000 : '' });
+    audit_('login_failed', 'Users', row.user_id, (lock ? 'locked for ' + LOCK_MINUTES + ' minutes: ' : 'wrong password on a change: ') + row.email);
+  }
+  throw new Error(message);
+}
+
+function changeOwnPassword(current, next) {
+  const user = requireRole_(ROLES);
+  const row = findUserByEmail_(user.email);
+  verifyOwnPassword_(row, current, 'The current password is not right.');
+  checkPasswordPolicy_(next, user.email);
+  if (String(next) === String(current)) throw new Error('Choose a password different from the current one.');
+  updateById_('Users', row.user_id, Object.assign(makePasswordRecord_(String(next)), { must_change_password: 'No' }, auditCols_(false)));
+  audit_('update', 'Users', row.user_id, 'password changed by the user');
+  return true;
+}
+
+// People change their own sign-in email here (they confirm with their password). Other devices are signed out; this
+// device gets a fresh session for the new address, so the person carries on without signing in again.
+function changeOwnEmail(password, newEmail) {
+  const user = requireRole_(ROLES);
+  // The developer's address is the Google account that owns the app, so it is not changed from inside the app.
+  if (isDeveloperEmail_(user.email)) throw new Error('Not authorised for role ' + user.role + '.');
+  const row = findUserByEmail_(user.email);
+  verifyOwnPassword_(row, password, 'The password is not right.');
+  const email = String(newEmail || '').trim().toLowerCase();
+  if (!validEmail_(email)) throw new Error('Enter a valid email address.');
+  if (email === String(row.email).toLowerCase()) throw new Error('That is already your email address.');
+  if (findUserByEmail_(email)) throw new Error('That email address cannot be used.');
+  updateById_('Users', row.user_id, Object.assign({ email: email }, auditCols_(false)));
+  revokeSessions_(row.email);
+  audit_('update', 'Users', row.user_id, 'email changed from ' + row.email + ' to ' + email);
+  const updated = findUserByEmail_(email);
+  const fresh = publicUser_(updated);
+  return { token: newSession_(fresh), user: fresh };
+}
+
+// ---------- account management (Admin) ----------
+
+function userRowToList_(r) {
+  const last = r.last_login;
+  return {
+    user_id: r.user_id, name: r.name, email: String(r.email).toLowerCase(), role: r.role, label: r.label, active: r.active,
+    must_change: r.must_change_password === 'Yes', has_password: !!r.password_hash, locked: Number(r.locked_until) > Date.now(),
+    last_login: last ? (Object.prototype.toString.call(last) === '[object Date]' ? last.toISOString() : String(last)) : '',
+    created_at: r.created_at, roleLabel: isDeveloperRow_(r) ? 'Developer' : undefined
+  };
+}
+
+function listUsers() {
+  requireRole_(['Admin']);
+  return plain_(readAll_('Users').filter(r => !hiddenRow_(r)).map(userRowToList_));
+}
+
+function validEmail_(email) { return /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/.test(email) && email.length <= 120; }
+
+function createUser(input) {
+  requireRole_(['Admin']);
+  const name = clean_(input.name).slice(0, 80);
+  const email = String(input.email || '').trim().toLowerCase();
+  if (!name) throw new Error('Enter the person\'s name.');
+  if (!validEmail_(email)) throw new Error('Enter a valid email address.');
+  const taken = findUserByEmail_(email);
+  if (taken) throw new Error(hiddenRow_(taken) ? 'That email address cannot be used.' : 'An account with that email already exists.');
+  if (ROLES.indexOf(input.role) === -1) throw new Error('Choose a role.');
+  const password = checkPasswordPolicy_(input.password, email);
+  const id = nextId_('U', 3);
+  appendObjects_('Users', [Object.assign({
+    user_id: id, email: email, name: name, role: input.role, label: clean_(input.label).slice(0, 60), active: 'Yes',
+    failed_attempts: 0, locked_until: '', last_login: '', must_change_password: input.must_change ? 'Yes' : 'No'
+  }, makePasswordRecord_(password), auditCols_(true))]);
+  audit_('create', 'Users', id, email + ' as ' + input.role);
+  return { user_id: id };
+}
+
+function activeAdminCount_(rows, exceptId) {
+  return rows.filter(u => u.active === 'Yes' && u.role === 'Admin' && u.user_id !== exceptId).length;
+}
+
+function updateUser(userId, input) {
+  const me = requireRole_(['Admin']);
+  const rows = readAll_('Users');
+  const row = rows.find(u => u.user_id === userId);
+  if (!row || hiddenRow_(row)) throw new Error('Account not found.');
+  const patch = {};
+  if (input.name !== undefined) { patch.name = clean_(input.name).slice(0, 80); if (!patch.name) throw new Error('The name cannot be empty.'); }
+  if (input.label !== undefined) patch.label = clean_(input.label).slice(0, 60);
+  if (input.email !== undefined && String(input.email).trim().toLowerCase() !== String(row.email).toLowerCase()) {
+    // Only the developer changes other people's sign-in emails.
+    if (!viewerIsDeveloper_()) throw new Error('Not authorised for role ' + me.role + '.');
+    if (isDeveloperRow_(row)) throw new Error('This account\'s email cannot be changed here.');
+    const email = String(input.email).trim().toLowerCase();
+    if (!validEmail_(email)) throw new Error('Enter a valid email address.');
+    if (findUserByEmail_(email)) throw new Error('An account with that email already exists.');
+    patch.email = email;
+  }
+  if (input.must_change !== undefined) patch.must_change_password = input.must_change ? 'Yes' : 'No';
+  if (input.role !== undefined && input.role !== row.role) {
+    if (ROLES.indexOf(input.role) === -1) throw new Error('Choose a role.');
+    if (userId === me.user_id) throw new Error('You cannot change your own role.');
+    if (row.role === 'Admin' && activeAdminCount_(rows, userId) === 0) throw new Error('There must be at least one active Admin.');
+    patch.role = input.role;
+  }
+  if (input.active !== undefined && (input.active ? 'Yes' : 'No') !== row.active) {
+    if (userId === me.user_id) throw new Error('You cannot deactivate your own account.');
+    if (!input.active && row.role === 'Admin' && activeAdminCount_(rows, userId) === 0) throw new Error('There must be at least one active Admin.');
+    patch.active = input.active ? 'Yes' : 'No';
+  }
+  if (!Object.keys(patch).length) return true;
+  updateById_('Users', userId, Object.assign(patch, auditCols_(false)));
+  if (patch.role !== undefined || patch.active !== undefined || patch.email !== undefined) revokeSessions_(row.email);
+  audit_('update', 'Users', userId, row.email + ': ' + Object.keys(patch).join(', ') + (patch.email ? ' (now ' + patch.email + ')' : ''));
+  return true;
+}
+
+function resetUserPassword(userId, password, mustChange) {
+  requireRole_(['Admin']);
+  const row = readAll_('Users').find(u => u.user_id === userId);
+  if (!row || hiddenRow_(row)) throw new Error('Account not found.');
+  const p = checkPasswordPolicy_(password, row.email);
+  updateById_('Users', userId, Object.assign(makePasswordRecord_(p), {
+    must_change_password: mustChange ? 'Yes' : 'No', failed_attempts: 0, locked_until: ''
+  }, auditCols_(false)));
+  revokeSessions_(row.email);
+  audit_('update', 'Users', userId, row.email + ': password reset by an admin');
+  return true;
+}
+
+// Permanently removes an account (the developer only; everyone else can only switch accounts off). The person must be named
+// again as a confirmation. Records they made keep the email they were saved with.
+function deleteUser(userId, confirmEmail) {
+  const me = requireDeveloper_();
+  const row = readAll_('Users').find(u => u.user_id === userId);
+  if (!row) throw new Error('Account not found.');
+  if (isDeveloperRow_(row) || userId === me.user_id) throw new Error('You cannot delete your own account.');
+  if (String(confirmEmail || '').trim().toLowerCase() !== String(row.email).toLowerCase()) throw new Error('Type the account\'s email address to confirm.');
+  revokeSessions_(row.email);
+  deleteRowById_('Users', userId);
+  audit_('delete', 'Users', userId, row.email + ' (' + row.role + ') deleted');
+  return true;
+}
+
+function unlockUser(userId) {
+  requireRole_(['Admin']);
+  const row = readAll_('Users').find(u => u.user_id === userId);
+  if (!row || hiddenRow_(row)) throw new Error('Account not found.');
+  updateById_('Users', userId, { failed_attempts: 0, locked_until: '' });
+  audit_('update', 'Users', userId, row.email + ': unlocked');
+  return true;
+}
+
+// ---------- editor only: first password, or a way back in if the Admin is locked out ----------
+
+// Run from the Apps Script editor. Sets a new random password for the owner's account and shows it once in the log.
+function resetOwnerPassword() {
+  requireRole_(['Admin']);
+  const owner = String(Session.getEffectiveUser().getEmail() || '').toLowerCase();
+  const row = findUserByEmail_(owner);
+  if (!row) throw new Error('The owner has no account yet. Run setupDatabase() first.');
+  const alphabet = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const hex = randomHex_(14);
+  let password = '';
+  for (let i = 0; i < 12; i++) password += alphabet.charAt(parseInt(hex.substr(i * 2, 2), 16) % alphabet.length);
+  password += '7a';
+  updateById_('Users', row.user_id, Object.assign(makePasswordRecord_(password), { must_change_password: 'Yes', failed_attempts: 0, locked_until: '', active: 'Yes' }, auditCols_(false)));
+  revokeSessions_(owner);
+  audit_('update', 'Users', row.user_id, 'owner password reset from the editor');
+  Logger.log('Sign in as ' + owner + ' with the temporary password: ' + password + '   (you will be asked to choose your own)');
+  return password;
+}
+
+// ---- Code.gs
+// Web app entry point. The page itself is public; everything behind it needs a signed-in session (see Auth.gs).
+
+function doGet() {
+  return HtmlService.createTemplateFromFile('Index').evaluate()
+    .setTitle('GoviLink')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    // The installable wrapper app (see the wrapper folder) shows this page inside its own full-screen frame.
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+// Lets Index.html pull in the other HTML files (styles and scripts).
+function include_(name) {
+  return HtmlService.createHtmlOutputFromFile(name).getContent();
+}
+
+// The same doors as the page's own calls, for the copy of the page that is hosted on GitHub Pages (see tools/build_static.js): that page cannot use
+// google.script.run, so it posts {fn, args} as text and reads JSON back. Only the sign-in functions and api() can be reached, exactly as from the
+// Apps Script page. The page sends no Google cookies (credentials are omitted), so the phone's own Google accounts can never get in the way.
+const POST_PUBLIC_ = ['authLogin', 'authStatus', 'authLogout'];
+function doPost(e) {
+  let out;
+  try {
+    const req = JSON.parse(String((e && e.postData && e.postData.contents) || ''));
+    const fn = String(req.fn || ''), args = Array.isArray(req.args) ? req.args : [];
+    if (fn === 'api') out = { ok: api.apply(null, args) };
+    else if (POST_PUBLIC_.indexOf(fn) !== -1) out = { ok: globalThis[fn].apply(null, args) };
+    else throw new Error('Unknown action.');
+  } catch (err) {
+    out = { err: String((err && err.message) || err) };
+  }
+  return ContentService.createTextOutput(JSON.stringify(out === undefined ? {} : out)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ---- DashboardData.gs
+// Numbers for the Dashboard screen, worked out from the search index (see FarmerIndex.gs) so it opens quickly.
+
+const DASH_DAYS = 30;
+
+function topList_(counts, limit) {
+  return Object.keys(counts).map(k => ({ name: k, farmers: counts[k] }))
+    .sort((a, b) => b.farmers - a.farmers || a.name.localeCompare(b.name)).slice(0, limit);
+}
+
+function getDashboard() {
+  requireRole_(['Admin', 'Manager']);
+  const entries = indexLoad_().entries;
+  const originQuestion = {};
+  readAll_('FormQuestions').forEach(q => { if (q.is_origin === 'Yes') originQuestion[q.question_id] = true; });
+
+  const today = new Date();
+  const dayKey = d => new Date(d.getTime() + 330 * 60000).toISOString().slice(0, 10);   // Sri Lanka days, like everywhere else
+  const days = [];
+  const perDay = {};
+  for (let i = DASH_DAYS - 1; i >= 0; i--) {
+    const d = new Date(today.getTime() - i * 86400000);
+    days.push(dayKey(d));
+    perDay[dayKey(d)] = 0;
+  }
+
+  let active = 0, inactive = 0, acres = 0, withOrigin = 0, withNic = 0, withGps = 0, withEmail = 0, consentYes = 0, consentNo = 0, consentUnknown = 0, mock = 0;
+  const byDistrict = {}, byCrop = {}, byType = {};
+  entries.forEach(e => {
+    const v = e.v;   // 0 id, 1 name, 2 nic, 6 farmer_type, 9 district, 12 consent, 14 status, 15 created day
+    if (e.m) mock++;
+    if (v[14] === 'Active') active++; else inactive++;
+    acres += entryAcres_(e);
+    if (v[2]) withNic++;
+    if (e.f.some(f => f[4])) withGps++;
+    if (e.a.some(a => a[2] && originQuestion[a[1]])) withOrigin++;
+    if (v[12] === 'Yes') consentYes++; else if (v[12] === 'No') consentNo++; else consentUnknown++;
+    if (v[9]) byDistrict[v[9]] = (byDistrict[v[9]] || 0) + 1;
+    if (v[6]) byType[v[6]] = (byType[v[6]] || 0) + 1;
+    const crops = {};
+    e.f.forEach(f => { crops[f[1]] = true; });
+    Object.keys(crops).forEach(c => { byCrop[c] = (byCrop[c] || 0) + 1; });
+    if (perDay[v[15]] !== undefined) perDay[v[15]]++;
+  });
+
+  const total = entries.length;
+  const recent = entries.slice().sort((a, b) => farmerNumber_(b.id) - farmerNumber_(a.id)).slice(0, 8)
+    .map(e => ({ farmer_id: e.id, full_name: e.v[1], district: e.v[9], ds_division: e.v[10], acres: entryAcres_(e), created: e.v[15], mock: e.m ? 1 : 0 }));
+  return plain_({
+    total: total, active: active, inactive: inactive, acres: Math.round(acres), mock: mock,
+    withOrigin: withOrigin, withNic: withNic, withGps: withGps, consent: { yes: consentYes, no: consentNo, unknown: consentUnknown },
+    byDistrict: topList_(byDistrict, 8), byCrop: topList_(byCrop, 8), byType: topList_(byType, 6),
+    days: days.map(d => ({ day: d, farmers: perDay[d] })), recent: recent
+  });
+}
+
+// ---- DataExport.gs
+// Full data export, for keeping a complete copy of the database or moving it to another system.
+// The tables are handed to the browser in slices (a whole 30,000 farmer file is far too big to return in one call),
+// and the browser assembles the CSV files. Admins and managers can export; every export is written to the audit log.
+// The Users table is Admin-only and never includes password data.
+
+// The tables that make up the database. Audit log, config and the empty product tables are left out.
+const EXPORT_TABLES = ['Farmers', 'Fields', 'FarmerAnswers', 'Services', 'Messages', 'Outreach', 'Places', 'FormQuestions', 'FormOptions', 'Lists', 'Segments', 'Users'];
+const EXPORT_ADMIN_ONLY = ['Users'];
+const EXPORT_HIDDEN_COLUMNS = { Users: ['password_hash', 'password_salt', 'failed_attempts', 'locked_until'] };
+const EXPORT_CHUNK = 5000;
+
+function exportableTables_(user) {
+  return EXPORT_TABLES.filter(t => user.role === 'Admin' || EXPORT_ADMIN_ONLY.indexOf(t) === -1);
+}
+
+// The columns that leave the system for a table (secret ones are dropped), as positions in the sheet.
+function exportColumns_(table) {
+  const hidden = EXPORT_HIDDEN_COLUMNS[table] || [];
+  const headers = SCHEMA[table];
+  const keep = [];
+  headers.forEach((h, i) => { if (hidden.indexOf(h) === -1) keep.push(i); });
+  return { keep: keep, headers: keep.map(i => headers[i]) };
+}
+
+// Staff emails written into a table that belong to the developer account are shown as "system" to everyone else.
+const STAFF_COLUMNS = ['created_by', 'updated_by', 'by', 'user', 'pilot_email'];
+
+function visibleRowCount_(name) {
+  const n = Math.max(sheet_(name).getLastRow() - 1, 0) + (name === 'Services' ? archiveEntries_('Services').reduce((s, e) => s + e.rows, 0) : 0);
+  return name === 'Users' ? readAll_('Users').filter(r => !hiddenRow_(r)).length : n;
+}
+
+function getExportInfo() {
+  const user = requireRole_(['Admin', 'Manager']);
+  return plain_({
+    tables: exportableTables_(user).map(name => ({ name: name, headers: exportColumns_(name).headers, rows: visibleRowCount_(name) })),
+    chunk: EXPORT_CHUNK
+  });
+}
+
+// One slice of a table: the rows exactly as stored, so nothing is lost or reformatted. Dates come out as ISO text.
+function readTableChunk(table, offset, limit) {
+  const user = requireRole_(['Admin', 'Manager']);
+  if (exportableTables_(user).indexOf(table) === -1) throw new Error('That table cannot be exported.');
+  const cols = exportColumns_(table);
+  const sh = sheet_(table);
+  const liveTotal = Math.max(sh.getLastRow() - 1, 0);
+  // the Services export is the live rows followed by the archived months (oldest first), so a full export holds every job
+  const months = table === 'Services' ? archiveEntries_('Services').filter(e => e.rows > 0) : [];
+  const total = liveTotal + months.reduce((s, e) => s + e.rows, 0);
+  offset = Math.max(0, Math.floor(Number(offset) || 0));
+  limit = Math.min(EXPORT_CHUNK, Math.max(1, Math.floor(Number(limit) || EXPORT_CHUNK)));
+  const count = Math.max(0, Math.min(limit, total - offset));
+  let raw = [];
+  if (count) {
+    const liveCount = Math.max(0, Math.min(count, liveTotal - offset));
+    if (liveCount) raw = sh.getRange(2 + offset, 1, liveCount, SCHEMA[table].length).getValues();
+    let skip = Math.max(0, offset - liveTotal), need = count - liveCount;
+    months.forEach(e => {
+      if (need <= 0) return;
+      if (skip >= e.rows) { skip -= e.rows; return; }
+      const part = archiveFileRows_('Services', e).slice(skip, skip + need);
+      raw = raw.concat(part); need -= part.length; skip = 0;
+    });
+  }
+  let rows = cols.keep.length === SCHEMA[table].length ? raw : raw.map(r => cols.keep.map(i => r[i]));
+  if (!viewerIsDeveloper_()) {
+    const dev = ownerEmail_();
+    if (table === 'Users') { const e = cols.headers.indexOf('email'); rows = rows.filter(r => String(r[e]).toLowerCase() !== dev); }
+    const masked = cols.headers.map((h, i) => (STAFF_COLUMNS.indexOf(h) !== -1 ? i : -1)).filter(i => i >= 0);
+    if (masked.length) rows = rows.map(r => r.map((v, i) => (masked.indexOf(i) !== -1 && String(v).toLowerCase() === dev ? 'system' : v)));
+  }
+  if (offset === 0) audit_('export', 'Backup', table, total + ' rows read for a full export');
+  return plain_({ table: table, headers: cols.headers, total: total, offset: offset, rows: rows });
+}
+
+// ---- Db.gs
+// Data layer. The UI and business logic only talk to the sheets through these functions.
+
+// The spreadsheet and its tabs are looked up once per request (every google.script.run call is a fresh run).
+var DB_MEMO_ = null;
+var SHEET_MEMO_ = {};
+
+function resetDbMemo_() { EDITOR_USER_ = undefined; DB_MEMO_ = null; SHEET_MEMO_ = {}; INDEX_MEMO_ = null; CONFIG_MEMO_ = null; INDEX_APPENDED_ = { Farmers: 0, Fields: 0, FarmerAnswers: 0 }; REV_TOUCHED_ = {}; ARCH_MEMO_ = null; }
+
+// The database spreadsheet this script reads and writes. Set when the script is NOT attached to its database (the move to the
+// epptechtaskforce account: the script lives in its own project and opens the database by id, with no property read per request). Leave '' for a
+// script attached to its spreadsheet.
+const DATABASE_SPREADSHEET_ID_ = '1tNU_4AU_VWtn1FtFPS2P_8Q7CrtTfQiliQHrKWcl_is';
+
+function db_() {
+  if (DB_MEMO_) return DB_MEMO_;
+  if (DATABASE_SPREADSHEET_ID_) { DB_MEMO_ = SpreadsheetApp.openById(DATABASE_SPREADSHEET_ID_); return DB_MEMO_; }
+  let ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
+    if (!id) throw new Error('No spreadsheet found. Run setupDatabase() from the bound spreadsheet first.');
+    ss = SpreadsheetApp.openById(id);
+  }
+  DB_MEMO_ = ss;
+  return ss;
+}
+
+function sheet_(name) {
+  if (SHEET_MEMO_[name]) return SHEET_MEMO_[name];
+  let sh = db_().getSheetByName(name);
+  // The archive index was added later: an older spreadsheet gets the tab here, once (checked again under the lock, so two requests cannot both make it).
+  if (!sh && (name === 'ArchiveIndex' || name === 'OpLog')) {
+    withLock_(() => { if (!db_().getSheetByName(name)) ensureSheet_(db_(), name); });
+    sh = db_().getSheetByName(name);
+  }
+  if (!sh) throw new Error('Missing tab "' + name + '". Run setupDatabase().');
+  // The Farmers tab gained GPS columns at its right end. A tab made before that gets them here, once, so nobody has to run anything
+  // by hand and the new code never reads columns that are not there. Checked again under the lock, so two requests cannot both add them.
+  if (name === 'Farmers' && sh.getMaxColumns() < SCHEMA.Farmers.length) {
+    withLock_(() => {
+      if (sh.getMaxColumns() >= SCHEMA.Farmers.length) return;
+      const headers = SCHEMA.Farmers;
+      sh.insertColumnsAfter(sh.getMaxColumns(), headers.length - sh.getMaxColumns());
+      sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold').setBackground('#e8f0e8');
+    });
+  }
+  SHEET_MEMO_[name] = sh;
+  return sh;
+}
+
+// All data rows of a tab as objects keyed by header. Skips fully blank rows.
+function readAll_(name) {
+  const sh = sheet_(name);
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  const values = sh.getRange(1, 1, last, SCHEMA[name].length).getValues();
+  const headers = values[0];
+  return values.slice(1)
+    .filter(row => row.some(cell => cell !== ''))
+    .map(row => {
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = row[i]; });
+      return obj;
+    });
+}
+
+// Like readAll_, but only the named columns (plus _row, the sheet row number). Neighbouring columns are read together, and columns that touch are read in one go, so a screen
+// that needs 12 of 26 columns makes a handful of reads and moves less than half of the cells (a column skipped costs less than one more read).
+function readColumns_(name, colNames) {
+  const sh = sheet_(name);
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  const headers = SCHEMA[name];
+  const idx = colNames.map(n => headers.indexOf(n)).filter(i => i !== -1).sort((a, b) => a - b).filter((v, i, a) => i === 0 || v !== a[i - 1]);
+  const spans = [];
+  idx.forEach(i => { const s = spans[spans.length - 1]; if (s && i - s.to <= 1) s.to = i; else spans.push({ from: i, to: i }); });
+  const blocks = spans.map(s => sh.getRange(2, s.from + 1, last - 1, s.to - s.from + 1).getValues());
+  const where = idx.map(i => { const k = spans.findIndex(s => i >= s.from && i <= s.to); return { name: headers[i], k: k, off: i - spans[k].from }; });
+  const out = [];
+  for (let r = 0; r < last - 1; r++) {
+    const o = { _row: r + 2 };
+    let any = false;
+    for (let w = 0; w < where.length; w++) { const c = where[w], v = blocks[c.k][r][c.off]; o[c.name] = v; if (v !== '') any = true; }
+    if (any) out.push(o);
+  }
+  return out;
+}
+
+// The given rows as full objects with _row, read with ONE read from the first to the last of them (cheaper than many small reads when they lie close together).
+function readRowsSpan_(name, rowNumbers) {
+  if (!rowNumbers.length) return [];
+  const rows = rowNumbers.slice().sort((a, b) => a - b);
+  const headers = SCHEMA[name];
+  const first = rows[0], span = rows[rows.length - 1] - first + 1;
+  const values = sheet_(name).getRange(first, 1, span, headers.length).getValues();
+  return rows.map(n => { const o = { _row: n }; headers.forEach((h, c) => { o[h] = values[n - first][c]; }); return o; });
+}
+
+// Only one request at a time may change the data. Without this, two people saving at the same moment could write
+// into the same spreadsheet row (one farmer lost) or both pass the duplicate check. Nested calls reuse the held lock.
+var LOCK_DEPTH_ = 0;
+function withLock_(fn) {
+  if (LOCK_DEPTH_ > 0) return fn();
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch (e) { throw new Error('The system is busy saving another entry. Please try again in a moment.'); }
+  // Whatever was read about the counters before the lock was won may be old (another request issued numbers while this one waited):
+  // the settings are read again inside the lock, so two requests can never be given the same number.
+  CONFIG_MEMO_ = null;
+  LOCK_DEPTH_++;
+  // The change stamps (see SyncData.gs) are written last, after the data, and while the lock is still held.
+  try { return fn(); } finally { LOCK_DEPTH_--; try { flushRevs_(); } finally { lock.releaseLock(); } }
+}
+
+function appendObjects_(name, objects) {
+  if (!objects.length) return;
+  return withLock_(() => appendObjectsLocked_(name, objects));
+}
+
+function appendObjectsLocked_(name, objects) {
+  const headers = SCHEMA[name];
+  const rows = objects.map(o => headers.map(h => (o[h] === undefined ? '' : o[h])));
+  const sh = sheet_(name);
+  touch_(name);
+  const first = sh.getLastRow() + 1;
+  // A tab starts with about 1000 rows; add more before writing past the end. Text columns (phone numbers, NICs, IDs) are
+  // formatted as text in every row up to the end of the tab (setup does that), and in new rows as they are added, so
+  // "+94771234567" or "0123" is never turned into a number.
+  const needed = first + rows.length - 1;
+  if (needed > sh.getMaxRows()) {
+    const before = sh.getMaxRows();
+    sh.insertRowsAfter(before, needed - before + 500);
+    const textRanges = [];
+    headers.forEach((h, i) => { if (isTextColumn_(h)) textRanges.push(colLetter_(i + 1) + (before + 1) + ':' + colLetter_(i + 1) + sh.getMaxRows()); });
+    if (textRanges.length) sh.getRangeList(textRanges).setNumberFormat('@');
+  }
+  sh.getRange(first, 1, rows.length, headers.length).setValues(rows);
+  if (INDEX_APPENDED_.hasOwnProperty(name)) INDEX_APPENDED_[name] += rows.length;
+  return first;
+}
+
+function colLetter_(n) {
+  let s = '';
+  while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
+// ---------- row-level access, for when the row number is already known (see FarmerIndex.gs) ----------
+
+// The given rows (any order) as objects keyed by header, each with its sheet row in _row. Neighbouring rows are read together.
+function readRowsAt_(name, rowNumbers) {
+  const rows = rowNumbers.slice().sort((a, b) => a - b);
+  const sh = sheet_(name);
+  const headers = SCHEMA[name];
+  const out = [];
+  let i = 0;
+  while (i < rows.length) {
+    let j = i;
+    while (j + 1 < rows.length && rows[j + 1] === rows[j] + 1) j++;
+    const values = sh.getRange(rows[i], 1, j - i + 1, headers.length).getValues();
+    values.forEach((v, k) => {
+      const o = { _row: rows[i] + k };
+      headers.forEach((h, c) => { o[h] = v[c]; });
+      out.push(o);
+    });
+    i = j + 1;
+  }
+  return out;
+}
+
+// Replaces one whole row with the values of obj (keys not in the schema are ignored).
+function writeRowObject_(name, row, obj) {
+  const headers = SCHEMA[name];
+  touch_(name);
+  sheet_(name).getRange(row, 1, 1, headers.length).setValues([headers.map(h => (obj[h] === undefined ? '' : obj[h]))]);
+}
+
+// Marks rows inactive and stamps who did it, in three writes however many rows there are.
+function softDeleteRows_(name, rowNumbers) {
+  if (!rowNumbers.length) return;
+  touch_(name);
+  const sh = sheet_(name);
+  const headers = SCHEMA[name];
+  const cells = col => sh.getRangeList(rowNumbers.map(r => colLetter_(headers.indexOf(col) + 1) + r));
+  cells('active').setValue('No');
+  const a = auditCols_(false);
+  cells('updated_at').setValue(a.updated_at);
+  cells('updated_by').setValue(a.updated_by);
+}
+
+// Deletes rows below the header. Google refuses to delete every non-frozen row, so one spare row is added first if needed.
+function deleteDataRows_(name, fromRow, count) {
+  if (count <= 0) return;
+  touch_(name);
+  const sh = sheet_(name);
+  if (fromRow + count - 1 >= sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 1);
+  sh.deleteRows(fromRow, count);
+}
+
+// Overwrites the given columns of the row whose first column equals id. Other columns are kept.
+function updateById_(name, id, patch) {
+  return withLock_(() => updateByIdLocked_(name, id, patch));
+}
+
+function updateByIdLocked_(name, id, patch) {
+  const sh = sheet_(name);
+  touch_(name);
+  const headers = SCHEMA[name];
+  const last = sh.getLastRow();
+  const ids = last < 2 ? [] : sh.getRange(2, 1, last - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) {
+      const range = sh.getRange(i + 2, 1, 1, headers.length);
+      const row = range.getValues()[0];
+      Object.keys(patch).forEach(k => {
+        const c = headers.indexOf(k);
+        if (c < 0) throw new Error('Unknown column ' + k + ' on ' + name);
+        row[c] = patch[k];
+      });
+      range.setValues([row]);
+      return;
+    }
+  }
+  throw new Error('Record ' + id + ' not found in ' + name + '.');
+}
+
+// Deletes the row whose first column equals id (the row is removed, later rows move up).
+function deleteRowById_(name, id) {
+  return withLock_(() => {
+    const sh = sheet_(name);
+    const last = sh.getLastRow();
+    const ids = last < 2 ? [] : sh.getRange(2, 1, last - 1, 1).getValues();
+    for (let i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]) === String(id)) { touch_(name); sh.deleteRow(i + 2); return true; }
+    }
+    throw new Error('Record ' + id + ' not found in ' + name + '.');
+  });
+}
+
+// Makes a value safe to return through google.script.run, which rejects Date objects.
+function plain_(v) {
+  if (v instanceof Date) return v.toISOString();
+  if (Array.isArray(v)) return v.map(plain_);
+  if (v && typeof v === 'object') {
+    const o = {};
+    Object.keys(v).forEach(k => { o[k] = plain_(v[k]); });
+    return o;
+  }
+  return v;
+}
+
+// Text typed by a user. Trims, collapses spaces, and strips leading = + - @ so Sheets
+// can never read the cell as a formula.
+function clean_(s) {
+  return String(s === undefined || s === null ? '' : s).replace(/\s+/g, ' ').replace(/^[=+\-@\s]+/, '').trim();
+}
+
+// Config is read once per request; each change is a single cell write.
+var CONFIG_MEMO_ = null;
+
+function configRows_() {
+  if (!CONFIG_MEMO_) {
+    const sh = sheet_('Config');
+    const last = sh.getLastRow();
+    const m = {};
+    if (last >= 2) sh.getRange(2, 1, last - 1, 2).getValues().forEach((r, i) => { if (r[0] !== '') m[r[0]] = { row: i + 2, value: r[1] }; });
+    CONFIG_MEMO_ = m;
+  }
+  return CONFIG_MEMO_;
+}
+
+function getConfig_(key) {
+  const e = configRows_()[key];
+  return e ? e.value : null;
+}
+
+function setConfig_(key, value, notes) {
+  const m = configRows_();
+  if (m[key]) {
+    sheet_('Config').getRange(m[key].row, 2).setValue(value);
+    m[key].value = value;
+    return;
+  }
+  const row = appendObjects_('Config', [{ key: key, value: value, notes: notes || '' }]);
+  m[key] = { row: row, value: value };
+}
+
+// Next sequential ID such as F000001. Counters live in Config so they travel with the spreadsheet.
+function nextId_(prefix, width) {
+  return withLock_(() => {
+    const key = 'counter_' + prefix;
+    const next = Number(getConfig_(key) || 0) + 1;
+    setConfig_(key, next, 'Last issued number for ' + prefix);
+    return prefix + String(next).padStart(width, '0');
+  });
+}
+
+// Reserves n consecutive IDs in one locked step, e.g. for a pasted list of 300 options.
+function nextIds_(prefix, width, n) {
+  return withLock_(() => {
+    const key = 'counter_' + prefix;
+    const start = Number(getConfig_(key) || 0);
+    setConfig_(key, start + n, 'Last issued number for ' + prefix);
+    const ids = [];
+    for (let i = 1; i <= n; i++) ids.push(prefix + String(start + i).padStart(width, '0'));
+    return ids;
+  });
+}
+
+function audit_(action, entity, entityId, details) {
+  appendObjects_('AuditLog', [{
+    timestamp: new Date(),
+    user: currentEmail_(),
+    action: action,
+    entity: entity,
+    entity_id: entityId || '',
+    details: details || ''
+  }]);
+}
+
+function auditCols_(isNew) {
+  const now = new Date();
+  const who = currentEmail_();
+  return isNew
+    ? { created_at: now, created_by: who, updated_at: now, updated_by: who }
+    : { updated_at: now, updated_by: who };
+}
+
+// ---- DevTools.gs
+// Developer tools: switch the mock farmer data on or off, and rebuild the search index.
+// Only the developer account (the owner of the script) may use these. They change or remove farmer data, so each
+// destructive action also needs a typed confirmation phrase, checked here on the server.
+
+var MOCK_TARGET = 30000;   // a var so tests can use a smaller run
+const CONFIRM_MOCK_ONLY = 'REMOVE MOCK';
+const CONFIRM_EVERYTHING = 'RESET EVERYTHING';
+
+function ownerEmail_() { return String(Session.getEffectiveUser().getEmail() || '').toLowerCase(); }
+
+function isDeveloperEmail_(email) { return !!email && String(email).toLowerCase() === ownerEmail_(); }
+
+function requireDeveloper_() {
+  const user = requireRole_(['Admin']);
+  if (!isDeveloperEmail_(user.email)) throw new Error('Not authorised for role ' + user.role + '.');
+  return user;
+}
+
+// How many farmers carry the MOCK DATA note, from the notes column alone.
+function countMockFarmers_() {
+  const sh = sheet_('Farmers');
+  const last = sh.getLastRow();
+  if (last < 2) return 0;
+  const col = SCHEMA.Farmers.indexOf('notes') + 1;
+  return sh.getRange(2, col, last - 1, 1).getValues().filter(r => isMockNote_(r[0])).length;
+}
+
+// The developer screen is sent to the browser only when asked for, and only to the developer, so its code is not in the
+// page that everyone else downloads.
+function getExtraScreen() {
+  requireDeveloper_();
+  return {
+    global: 'Developer',
+    script: HtmlService.createHtmlOutputFromFile('DevUI').getContent(),
+    tab: { label: 'Developer', icon: 'code', group: 'Developer', title: 'Developer tools', subtitle: 'Mock data and the search index' }
+  };
+}
+
+function devStatus() {
+  requireDeveloper_();
+  const entries = indexLoad_().entries;
+  const mock = entries.filter(e => e.m).length;
+  return plain_({
+    mockFarmers: mock, realFarmers: entries.length - mock, totalFarmers: entries.length, mockTarget: MOCK_TARGET,
+    enabled: mock > 0, index: readMeta_(), confirmMockOnly: CONFIRM_MOCK_ONLY, confirmEverything: CONFIRM_EVERYTHING, gps: gpsCounts_(),
+    svc: Object.assign(mockServiceCounts_(), { on: mockServicesOn_() })
+  });
+}
+
+// Adds mock farmers, one slice per call (a full 30,000 takes a few minutes). The screen calls this again until done is true.
+function devEnableMockStep() {
+  requireDeveloper_();
+  if (!readAll_('FormOptions').some(o => o.source === SEED_SOURCE)) seedOriginOptions();
+  const r = seedMockFarmers(MOCK_TARGET, 100000);
+  if (r.done) indexRebuild_();
+  return { done: r.done, total: r.total, target: MOCK_TARGET };
+}
+
+// Removes rows whose key column value is in dropKeys, keeping everything else in order. Returns how many rows went.
+// Blocks of neighbouring rows are deleted in place (mock farmers are normally one block); if the rows to remove are
+// scattered in many pieces, the kept rows are moved to the top instead.
+function removeRowsByKey_(name, keyCol, dropKeys) {
+  const sh = sheet_(name);
+  const last = sh.getLastRow();
+  if (last < 2) return 0;
+  const ncols = SCHEMA[name].length;
+  const keys = sh.getRange(2, keyCol, last - 1, 1).getValues();
+  const dropRuns = [];
+  let dropped = 0;
+  keys.forEach((k, i) => {
+    if (!dropKeys[String(k[0])]) return;
+    dropped++;
+    const row = i + 2;
+    const run = dropRuns[dropRuns.length - 1];
+    if (run && run.start + run.len === row) run.len++; else dropRuns.push({ start: row, len: 1 });
+  });
+  if (!dropped) return 0;
+  if (dropped === keys.length) { deleteDataRows_(name, 2, last - 1); return dropped; }
+  if (dropRuns.length <= 40) {
+    for (let i = dropRuns.length - 1; i >= 0; i--) deleteDataRows_(name, dropRuns[i].start, dropRuns[i].len);
+    return dropped;
+  }
+  const kept = sh.getRange(2, 1, last - 1, ncols).getValues().filter((r, i) => !dropKeys[String(keys[i][0])]);
+  sh.getRange(2, 1, kept.length, ncols).setValues(kept);
+  deleteDataRows_(name, 2 + kept.length, last - 1 - kept.length);
+  return dropped;
+}
+
+function clearFarmerTabs_() {
+  const counts = {};
+  ['Farmers', 'Fields', 'FarmerAnswers', 'Outreach'].forEach(name => {
+    const sh = sheet_(name);
+    const last = sh.getLastRow();
+    counts[name] = Math.max(last - 1, 0);
+    if (last >= 2) deleteDataRows_(name, 2, last - 1);
+  });
+  return counts;
+}
+
+function resetFarmerCounters_(why) {
+  ['F', 'FLD', 'A'].forEach(p => setConfig_('counter_' + p, 0, why));
+  setConfig_('mock_farmers_target', '', 'Size of the mock farmer run in progress');
+}
+
+// mode 'mock_only': removes the mock farmers (with their fields and answers) and leaves real farmers alone.
+// mode 'everything': removes every farmer, field, answer and outreach record, mock or real, and restarts the numbering.
+// The registration form (questions and options), lists, saved groups and accounts are kept in both cases.
+function devDisableMock(mode, confirmation) {
+  requireDeveloper_();
+  return withLock_(() => {
+    if (mode === 'everything') {
+      if (confirmation !== CONFIRM_EVERYTHING) throw new Error('Type ' + CONFIRM_EVERYTHING + ' to confirm.');
+      const counts = clearFarmerTabs_();
+      resetFarmerCounters_('Reset with the whole farmer database');
+      indexClear_();
+      audit_('delete', 'Farmers', '', 'developer reset the entire farmer database: ' + counts.Farmers + ' farmers, ' + counts.Fields + ' fields, ' + counts.FarmerAnswers + ' answers');
+      return { mode: mode, farmers: counts.Farmers, fields: counts.Fields, answers: counts.FarmerAnswers };
+    }
+    if (mode === 'mock_only') {
+      if (confirmation !== CONFIRM_MOCK_ONLY) throw new Error('Type ' + CONFIRM_MOCK_ONLY + ' to confirm.');
+      const result = removeMockFarmersLocked_();
+      audit_('delete', 'Farmers', '', 'developer removed mock farmers: ' + result.farmers + ' farmers, ' + result.fields + ' fields, ' + result.answers + ' answers');
+      return Object.assign({ mode: mode }, result);
+    }
+    throw new Error('Choose what to reset.');
+  });
+}
+
+function removeMockFarmersLocked_() {
+  const sh = sheet_('Farmers');
+  const last = sh.getLastRow();
+  const ids = {};
+  if (last >= 2) {
+    const idCol = SCHEMA.Farmers.indexOf('farmer_id') + 1;
+    const noteCol = SCHEMA.Farmers.indexOf('notes') + 1;
+    const idVals = sh.getRange(2, idCol, last - 1, 1).getValues();
+    const noteVals = sh.getRange(2, noteCol, last - 1, 1).getValues();
+    idVals.forEach((r, i) => { if (isMockNote_(noteVals[i][0])) ids[String(r[0])] = true; });
+  }
+  const farmers = removeRowsByKey_('Farmers', 1, ids);
+  const fields = removeRowsByKey_('Fields', 2, ids);
+  const answers = removeRowsByKey_('FarmerAnswers', 2, ids);
+  if (sheet_('Farmers').getLastRow() < 2) resetFarmerCounters_('Reset after mock farmers were removed');
+  else setConfig_('mock_farmers_target', '', 'Size of the mock farmer run in progress');
+  indexRebuild_();
+  return { farmers: farmers, fields: fields, answers: answers };
+}
+
+// Run from the Apps Script editor to remove the mock farmers (no confirmation phrase needed there).
+function removeMockFarmers() {
+  requireRole_(['Admin']);
+  return withLock_(() => {
+    const r = removeMockFarmersLocked_();
+    audit_('delete', 'Farmers', '', 'removed mock farmers: ' + r.farmers + ' farmers, ' + r.fields + ' fields, ' + r.answers + ' answers');
+    Logger.log('Removed farmers: ' + r.farmers + ', fields: ' + r.fields + ', answers: ' + r.answers);
+    return r;
+  });
+}
+
+function devRebuildIndex() {
+  requireDeveloper_();
+  return indexRebuild_();
+}
+
+// Run from the Apps Script editor after changing farmer data by hand in the sheet.
+function rebuildSearchIndex() {
+  requireRole_(['Admin']);
+  const r = indexRebuild_();
+  Logger.log('Search index rebuilt: ' + r.farmers + ' farmers');
+  return r;
+}
+
+// Run from the Apps Script editor: how many mock and real farmers and services there are (written to the execution log).
+function mockStatusFromEditor() {
+  requireDeveloper_();
+  const entries = indexLoad_().entries;
+  const r = { farmers: entries.length, mockFarmers: entries.filter(e => e.m).length, services: Math.max(sheet_('Services').getLastRow() - 1, 0) };
+  Logger.log('Mock status: ' + JSON.stringify(r));
+  return r;
+}
+
+// Run from the editor: how long each data function takes on the real data (each one as a fresh request). The answer is in the execution log.
+function timingFromEditor() {
+  requireDeveloper_();
+  const sv = sheet_('Services');
+  const someFarmer = sv.getLastRow() > 1 ? String(sv.getRange(2, 2).getValue()) : 'F000001';
+  const tests = [
+    ['syncStatus', () => syncStatus()],
+    ['getFarmerChunks(first 30)', () => getFarmerChunks({}, 30)],
+    ['getServiceRows(full)', () => getServiceRows('', true)],
+    ['getServiceRows(delta, nothing new)', () => getServiceRows(new Date().toISOString(), true)],
+    ['listRecentServices', () => listRecentServices()],
+    ['listServices({})', () => listServices({})],
+    ['getServiceReport({})', () => getServiceReport({})],
+    ['getEarthData()', () => getEarthData()],
+    ['getServiceOptions', () => getServiceOptions()],
+    ['getAreaOptions', () => getAreaOptions()],
+    ['getFinderOptions', () => getFinderOptions()],
+    ['getRegistrationData', () => getRegistrationData()],
+    ['getFarmerView', () => getFarmerView(someFarmer)],
+    ['getFarmerServices', () => getFarmerServices(someFarmer)],
+    ['getFarmerLogbook', () => getFarmerLogbook(someFarmer)],
+    ['previewAudience', () => previewAudience({})],
+    ['getExportInfo', () => getExportInfo()],
+    ['listMessages', () => listMessages()],
+    ['getOriginMap', () => getOriginMap()],
+    ['findFarmers("perera")', () => findFarmers('perera')],
+    ['getEarthGeo', () => getEarthGeo()]
+  ];
+  const out = [];
+  tests.forEach(t => {
+    resetDbMemo_();
+    const t0 = Date.now();
+    let note = '';
+    try { const r = t[1](); note = String(JSON.stringify(r)).length + ' chars'; } catch (e) { note = 'ERROR ' + e.message; }
+    out.push(t[0] + ': ' + (Date.now() - t0) + ' ms, ' + note);
+  });
+  out.forEach(l => Logger.log(l));
+  return out;
+}
+
+// ---- EarthData.gs
+// Data for the Earth screen (satellite map of Sri Lanka). The farmers have no map coordinates, so the map works with places:
+//   * a farmer's DIVISION (Divisional Secretariat) is matched to the boundary file (EarthGeo.gs); the map colours the divisions;
+//   * an ORIGIN box at the top of a route (a tank, a scheme) gets a pin, and the box below it (Govi committee) is shown through the
+//     divisions where its farmers live. Known tanks are placed from OpenStreetMap; the others are placed where their farmers live and
+//     can be dragged to the right spot by an Admin. Pins are kept in the Places tab.
+//   * getEarthData(period) returns a cube (see there) with the farmers and the services of a time period for every district / division /
+//     tank / committee combination, and the screen adds up whatever region the user picks.
+// Nothing here changes farmer data.
+
+const EARTH_ROLES = ['Admin', 'Manager'];
+const EARTH_BOUNDS = { south: 5.6, north: 10.1, west: 79.3, east: 82.1 };   // Sri Lanka, with a little sea around it
+// Satellite pictures and 3D terrain come from free services; they can be replaced in the Config tab (keys earth_tiles_url, earth_tiles_note).
+const EARTH_TILES_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const EARTH_TILES_NOTE = 'Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community';
+
+// How the divisions are spelled in the data compared with the boundary file.
+const DS_ALIAS_ = {
+  palugasyaya: 'palugaswewa', hingurakgoda: 'higurakgoda', hingurakgodaa: 'higurakgoda',
+  tissamaharama: 'thissamaharama', lunugamvehera: 'lunugamwehera', galenbindunuwewa: 'galenbidunuwewa'
+};
+
+// Places placed from OpenStreetMap (tank names as they are written in the farmer data). The rest are placed where their farmers live.
+// A seed is added to the Places tab when its tank exists in the form and has no pin yet; a pin that was moved by hand is never touched.
+const EARTH_SEED_ = [
+  { kind: 'origin', name: 'Kaudulla Tank', lat: 8.1519, lng: 80.9065, source: 'OpenStreetMap' },
+  { kind: 'origin', name: 'Kaudulla / Minneriya Tank', lat: 8.0878, lng: 80.8844, source: 'OpenStreetMap (between the two tanks)' },
+  { kind: 'origin', name: 'Minneriya / Kaudulla Scheme', lat: 8.0878, lng: 80.8844, source: 'OpenStreetMap (between the two tanks)' },
+  { kind: 'origin', name: 'Mahaweli / Minneriya Irrigation Scheme', lat: 8.0236, lng: 80.8620, source: 'OpenStreetMap' },
+  { kind: 'origin', name: 'Parakrama Samudraya', lat: 7.9146, lng: 80.9825, source: 'OpenStreetMap' },
+  { kind: 'origin', name: 'Parakrama Samudraya / Mahaweli B', lat: 7.9146, lng: 80.9825, source: 'OpenStreetMap (Parakrama Samudraya)' },
+  { kind: 'origin', name: 'Mahaweli System B / Parakrama Samudraya', lat: 7.9146, lng: 80.9825, source: 'OpenStreetMap (Parakrama Samudraya)' },
+  { kind: 'origin', name: 'Katiyawa Wewa', lat: 8.1096, lng: 80.4073, source: 'OpenStreetMap' },
+  { kind: 'origin', name: 'Rajanganaya Wewa', lat: 8.1292, lng: 80.2395, source: 'OpenStreetMap' },
+  { kind: 'origin', name: 'Tissa Wewa / Weerawila Tank', lat: 6.2870, lng: 81.2633, source: 'OpenStreetMap (between the two tanks)' },
+  { kind: 'origin', name: 'Weerawila Tank', lat: 6.2824, lng: 81.2420, source: 'OpenStreetMap' },
+  { kind: 'origin', name: 'Wijayapura / Tissa Wewa Scheme', lat: 6.2915, lng: 81.2845, source: 'OpenStreetMap (Tissa Wewa)' },
+  { kind: 'origin', name: 'Lunugamvehera Reservoir', lat: 6.3887, lng: 81.2052, source: 'OpenStreetMap' },
+  { kind: 'origin', name: 'Lunugamvehera Reservoir (Right/Left Bank)', lat: 6.3887, lng: 81.2052, source: 'OpenStreetMap' },
+  { kind: 'origin', name: 'Senanayake Samudraya (Gal Oya)', lat: 7.1859, lng: 81.4881, source: 'OpenStreetMap' },
+  { kind: 'origin', name: 'Hingurana Tank / Senanayake Samudraya', lat: 7.1859, lng: 81.4881, source: 'OpenStreetMap (Senanayake Samudraya)' },
+  { kind: 'origin', name: 'Uhana Tank / Senanayake Samudraya', lat: 7.1859, lng: 81.4881, source: 'OpenStreetMap (Senanayake Samudraya)' },
+  { kind: 'origin', name: 'Padaviya Tank', lat: 8.7990, lng: 80.7725, source: 'OpenStreetMap' },
+  { kind: 'origin', name: 'Nuwarawewa / Basawakkulama', lat: 8.3420, lng: 80.4096, source: 'OpenStreetMap (between the two tanks)' },
+  { kind: 'origin', name: 'Kekirawa / Kala Wewa', lat: 8.0107, lng: 80.5606, source: 'OpenStreetMap (Kala Wewa)' },
+  { kind: 'origin', name: 'Medirigiriya Scheme', lat: 8.1423, lng: 80.9713, source: 'OpenStreetMap (Medirigiriya town)' },
+  { kind: 'division', name: 'Eppawala', district: 'Anuradhapura', lat: 8.1461, lng: 80.4114, source: 'OpenStreetMap' },
+  { kind: 'division', name: 'Pemaduwa', district: 'Anuradhapura', lat: 8.4919, lng: 80.2009, source: 'OpenStreetMap' }
+];
+
+function requireEarthUser_() { return requireRole_(EARTH_ROLES); }
+
+function placeKey_(s) { return String(s || '').toLowerCase().replace(/[^a-z]/g, ''); }
+function divisionKey_(name, district) { return placeKey_(name) + '|' + placeKey_(district); }
+
+var EARTH_GEO_MEMO_ = null;
+function earthGeo_() {
+  if (!EARTH_GEO_MEMO_) {
+    const ds = JSON.parse(EARTH_GEO_DS);
+    const byName = {};
+    ds.features.forEach(f => { (byName[placeKey_(f.properties.n)] = byName[placeKey_(f.properties.n)] || []).push(f.properties); });
+    EARTH_GEO_MEMO_ = { ds: ds, byName: byName };
+  }
+  return EARTH_GEO_MEMO_;
+}
+
+// The boundary feature for a division name typed in the farmer record, or null. Prefers the one in the farmer's own district.
+function matchDivision_(name, district, geo) {
+  const k = placeKey_(name);
+  const list = geo.byName[k] || geo.byName[DS_ALIAS_[k]] || [];
+  if (!list.length) return null;
+  return list.find(p => placeKey_(p.d) === placeKey_(district)) || list[0];
+}
+
+function readPlaces_() { return readAll_('Places'); }
+
+// When the map is opened, the known tank and village places that have no pin yet are filled in (tanks are matched to the options by their label).
+// Returns true when something was added.
+function seedPlaces_(S, places) {
+  const have = {};
+  places.forEach(p => { have[p.kind + '|' + p.ref] = true; });
+  const rows = [];
+  EARTH_SEED_.forEach(s => {
+    if (s.kind === 'origin') {
+      const o = S.options.find(x => !x.parent_option_id && String(x.label).trim().toLowerCase() === s.name.toLowerCase());
+      if (o && !have['origin|' + o.option_id]) rows.push({ kind: 'origin', ref: o.option_id, name: s.name, lat: s.lat, lng: s.lng, source: s.source, notes: '' });
+    } else {
+      const ref = divisionKey_(s.name, s.district);
+      if (!have['division|' + ref]) rows.push({ kind: 'division', ref: ref, name: s.name, lat: s.lat, lng: s.lng, source: s.source, notes: '' });
+    }
+  });
+  if (!rows.length) return false;
+  return withLock_(() => {
+    const now = {};
+    readPlaces_().forEach(p => { now[p.kind + '|' + p.ref] = true; });
+    const todo = rows.filter(r => !now[r.kind + '|' + r.ref]);
+    if (!todo.length) return false;
+    const ids = nextIds_('PL', 6, todo.length);
+    appendObjects_('Places', todo.map((r, i) => Object.assign({ place_id: ids[i] }, r, auditCols_(true))));
+    return true;
+  });
+}
+
+function getEarthGeo() {
+  requireEarthUser_();
+  return { ds: EARTH_GEO_DS, districts: EARTH_GEO_DISTRICTS };
+}
+
+// A date range from the screen: { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }, either may be empty (= no limit).
+function earthPeriod_(p) {
+  const out = { from: '', to: '' };
+  if (p && typeof p === 'object') {
+    ['from', 'to'].forEach(k => {
+      const v = String(p[k] || '').trim();
+      if (!v) return;
+      if (!isIsoDate_(v)) throw new Error('The ' + (k === 'from' ? 'start' : 'end') + ' date is not a valid date.');
+      out[k] = v;
+    });
+  }
+  if (out.from && out.to && out.from > out.to) throw new Error('The start date is after the end date.');
+  return out;
+}
+
+// Everything the Earth screen needs, as a small "cube": one row for every combination of (district, division, tank, Govi committee)
+// that has farmers, with the farmers, their registered acres and the service figures of the chosen period (completed services only,
+// so land sprayed twice counts twice). The screen adds up any part of the cube itself, so choosing a region or a period is instant.
+//   rows[i] = [district, division, tank, committee, farmers, registeredAcres, farmersServed, missions, acresCovered, ratingSum, ratingCount]
+//   (the first four are positions in the lists districts / divisions / tanks / committees, -1 = none)
+//   trend[i] = [missions per month, acres per month] for the 12 months in `months` (this month last), or null; always the last 12 months,
+//   whatever the period is, so the screen can draw a small trend chart for any region
+function getEarthData(period) {
+  requireEarthUser_();
+  const range = earthPeriod_(period);
+  const S = originStructure_();
+  let places = readPlaces_();
+  if (seedPlaces_(S, places)) places = readPlaces_();
+  const geo = earthGeo_();
+  const allEntries = indexLoad_().entries;
+  const activeCount = allEntries.filter(e => e.v[14] === 'Active').length;
+  const placeOf = {};
+  places.forEach(p => { placeOf[p.kind + '|' + p.ref] = p; });
+
+  // the last 12 months (this month and the 11 before it), for the small trend chart; they do not depend on the chosen period
+  const months = [];
+  const today = localToday_();
+  let ty = Number(today.slice(0, 4)), tm = Number(today.slice(5, 7));
+  for (let k = 11; k >= 0; k--) {
+    let y = ty, m = tm - k;
+    while (m < 1) { m += 12; y--; }
+    months.push(y + '-' + String(m).padStart(2, '0'));
+  }
+  const monthAt = {};
+  months.forEach((m, i) => { monthAt[m] = i; });
+
+  // services of the period, added up per farmer (and, for the trend, per month of the last year)
+  const svc = {};
+  readServiceColumnsAll_(['farmer_id', 'status', 'service_date', 'acres_covered', 'satisfaction']).forEach(r => {
+    if (r.status !== 'Completed') return;
+    const day = isoDay_(r.service_date);
+    const acres = Number(r.acres_covered) || 0;
+    const mi = day ? monthAt[day.slice(0, 7)] : undefined;
+    if (mi !== undefined) {
+      const t = svc[r.farmer_id] = svc[r.farmer_id] || { m: 0, z: 0, r: 0, rn: 0 };
+      t.tm = t.tm || new Array(12).fill(0); t.tz = t.tz || new Array(12).fill(0);
+      t.tm[mi]++; t.tz[mi] += acres;
+    }
+    if ((range.from || range.to) && (!day || (range.from && day < range.from) || (range.to && day > range.to))) return;
+    const s = svc[r.farmer_id] = svc[r.farmer_id] || { m: 0, z: 0, r: 0, rn: 0 };
+    s.m++; s.z += acres;
+    const sat = Number(r.satisfaction);
+    if (sat >= 1 && sat <= 5) { s.r += sat; s.rn++; }
+  });
+
+  const routeOf = originRouter_(S);
+  const lanes = {};
+  S.origin.forEach(q => { lanes[q.question_id] = q.section; });
+
+  const districts = [], divisions = [], tanks = [], committees = [];
+  const districtAt = {}, divisionAt = {}, tankAt = {}, committeeAt = {};
+  const names = {};   // division position -> { spelling: count }
+  const cube = {};
+  const trendOf = {};   // cube key -> [missions per month, acres per month]
+
+  // The work of a farmer who was removed afterwards still counts as work done (like in the reports and on Home), so the map's missions and acres
+  // add up to the same totals; only farmers still registered are counted as farmers and for their registered acres.
+  const entries = allEntries.filter(e => e.v[14] === 'Active' || (svc[e.id] && (svc[e.id].m || svc[e.id].tm)));
+  entries.forEach(e => {
+    const live = e.v[14] === 'Active';
+    const dName = String(e.v[9] || '').trim() || '(not recorded)';
+    const dsName = String(e.v[10] || '').trim();
+    // district
+    const dk = placeKey_(dName);
+    if (districtAt[dk] === undefined) { districtAt[dk] = districts.length; districts.push({ key: dk, name: dName, _n: {} }); }
+    const di = districtAt[dk];
+    districts[di]._n[dName] = (districts[di]._n[dName] || 0) + 1;
+    // division: one entry per boundary polygon (spellings that match the same polygon share it), else one per typed name
+    const poly = dsName ? matchDivision_(dsName, dName, geo) : null;
+    const vk = poly ? 'P|' + placeKey_(poly.n) + '|' + placeKey_(poly.d) : 'D|' + divisionKey_(dsName || '(none)', dName);
+    if (divisionAt[vk] === undefined) {
+      divisionAt[vk] = divisions.length;
+      divisions.push({ key: vk, name: dsName || '(not recorded)', district: poly ? poly.d : dName, matched: poly ? poly.n : null, matched_district: poly ? poly.d : null, centre: poly ? poly.c : null, point: null, names: [] });
+      names[divisions.length - 1] = {};
+    }
+    const vi = divisionAt[vk];
+    names[vi][dsName] = (names[vi][dsName] || 0) + 1;
+    // route: the first origin question's top box (tank / scheme) and the box right below it (Govi committee), see originRouter_ in SyncData.gs
+    const route = routeOf(e);
+    let ti = -1, ci = -1;
+    if (route.root) {
+      const rootId = route.root.option_id;
+      if (tankAt[rootId] === undefined) { tankAt[rootId] = tanks.length; tanks.push({ id: rootId, name: route.root.label, lane: lanes[route.root.question_id] || '', place: null, estimated: false }); }
+      ti = tankAt[rootId];
+      if (route.kid) {
+        const kidId = route.kid.option_id;
+        if (committeeAt[kidId] === undefined) { committeeAt[kidId] = committees.length; committees.push({ id: kidId, name: route.kid.label, tank: ti }); }
+        ci = committeeAt[kidId];
+      }
+    }
+    const key = di + '|' + vi + '|' + ti + '|' + ci;
+    const c = cube[key] = cube[key] || [di, vi, ti, ci, 0, 0, 0, 0, 0, 0, 0];
+    if (live) { c[4]++; c[5] += entryAcres_(e); }
+    const s = svc[e.id];
+    if (s) {
+      if (s.m) { if (live) c[6]++; c[7] += s.m; c[8] += s.z; c[9] += s.r; c[10] += s.rn; }
+      if (s.tm) {
+        const tr = trendOf[key] = trendOf[key] || [new Array(12).fill(0), new Array(12).fill(0)];
+        for (let q = 0; q < 12; q++) { tr[0][q] += s.tm[q]; tr[1][q] += s.tz[q]; }
+      }
+    }
+  });
+
+  // names and places of the divisions
+  divisions.forEach((d, i) => {
+    const spell = Object.keys(names[i]).sort((a, b) => names[i][b] - names[i][a]);
+    d.name = spell[0] || d.name;
+    d.names = spell.filter(Boolean);
+    if (!d.centre) {
+      for (let k = 0; k < spell.length && !d.point; k++) {
+        const pt = placeOf['division|' + divisionKey_(spell[k], d.district)];
+        if (pt) d.point = [Number(pt.lng), Number(pt.lat)];
+      }
+    }
+  });
+  districts.forEach(d => { const spell = Object.keys(d._n).sort((a, b) => d._n[b] - d._n[a]); d.name = spell[0]; delete d._n; });
+
+  // pins: a known place, else a guess (the divisions of its farmers, weighted by how many)
+  const cubeKeys = Object.keys(cube);
+  const rows = cubeKeys.map(k => { const c = cube[k]; c[5] = round2_(c[5]); c[8] = round2_(c[8]); return c; });
+  const trend = cubeKeys.map(k => trendOf[k] ? [trendOf[k][0], trendOf[k][1].map(round2_)] : null);
+  tanks.forEach((t, ti) => {
+    const pl = placeOf['origin|' + t.id];
+    if (pl) { t.place = { lat: Number(pl.lat), lng: Number(pl.lng), source: pl.source, place_id: pl.place_id }; return; }
+    let wx = 0, wy = 0, w = 0;
+    rows.forEach(r => {
+      if (r[2] !== ti) return;
+      const d = divisions[r[1]], c = d.centre || d.point;
+      if (c) { wx += c[0] * r[4]; wy += c[1] * r[4]; w += r[4]; }
+    });
+    if (w) { t.place = { lat: Math.round(wy / w * 10000) / 10000, lng: Math.round(wx / w * 10000) / 10000, source: 'estimated from where its farmers live', place_id: '' }; t.estimated = true; }
+  });
+
+  const unmapped = {};
+  let unmappedFarmers = 0;
+  rows.forEach(r => { const d = divisions[r[1]]; if (!d.centre && !d.point) { unmapped[r[1]] = true; unmappedFarmers += r[4]; } });
+  const cfg = key => { const v = getConfig_(key); return v === null || v === '' ? null : String(v); };
+  return plain_({
+    districts: districts, divisions: divisions, tanks: tanks, committees: committees, rows: rows, months: months, trend: trend,
+    totals: { farmers: activeCount, unmapped_farmers: unmappedFarmers, unmapped_divisions: Object.keys(unmapped).map(i => divisions[i].name + ' (' + divisions[i].district + ')') },
+    period: range,
+    imagery: { url: cfg('earth_tiles_url') || EARTH_TILES_URL, note: cfg('earth_tiles_note') || EARTH_TILES_NOTE },
+    me: { can_move_pins: currentUser_().role === 'Admin' }
+  });
+}
+
+// An Admin drags a pin to its right place. kind: 'origin' (ref = the option id) or 'division' (ref = the division key from getEarthData).
+function savePlace(kind, ref, name, lat, lng) {
+  requireRole_(['Admin']);
+  if (kind !== 'origin' && kind !== 'division') throw new Error('Unknown kind of place.');
+  const la = Number(lat), lo = Number(lng);
+  if (!isFinite(la) || !isFinite(lo) || la < EARTH_BOUNDS.south || la > EARTH_BOUNDS.north || lo < EARTH_BOUNDS.west || lo > EARTH_BOUNDS.east) throw new Error('That spot is outside Sri Lanka.');
+  const key = String(ref || '').trim();
+  if (!key) throw new Error('Choose a place first.');
+  if (kind === 'origin' && !originStructure_().optionById[key]) throw new Error('Unknown origin box.');
+  const label = clean_(name).slice(0, 100);
+  return withLock_(() => {
+    const row = readPlaces_().find(p => p.kind === kind && String(p.ref) === key);
+    const vals = { lat: Math.round(la * 10000) / 10000, lng: Math.round(lo * 10000) / 10000, source: 'moved by hand' };
+    if (row) {
+      updateById_('Places', row.place_id, Object.assign(vals, auditCols_(false)));
+      audit_('update', 'Places', row.place_id, label + ' moved');
+      return { place_id: row.place_id };
+    }
+    const id = nextId_('PL', 6);
+    appendObjects_('Places', [Object.assign({ place_id: id, kind: kind, ref: key, name: label, notes: '' }, vals, auditCols_(true))]);
+    audit_('create', 'Places', id, label);
+    return { place_id: id };
+  });
+}
+
+// ---- EarthGeo.gs
+// Generated by tools/make_earth_geo.py: the boundaries of the Earth screen. Do not edit by hand.
+// Divisions: geoBoundaries gbOpen LKA ADM3 (Divisional Secretariat divisions, Survey Department of Sri Lanka, CC BY 3.0 IGO).
+// Districts: geoBoundaries gbOpen LKA ADM2 (ODbL). Simplified further and rounded to 4 decimals.
+const EARTH_GEO_DS = '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"n":"Addalaichenai","d":"Ampara","c":[81.8116,7.2637]},"geometry":{"type":"Polygon","coordinates":[[[81.8651,7.3002],[81.8615,7.3005],[81.8593,7.3041],[81.856,7.3025],[81.8535,7.3047],[81.8498,7.3032],[81.8502,7.2983],[81.8447,7.2974],[81.8319,7.2901],[81.8235,7.2906],[81.8191,7.2951],[81.812,7.2928],[81.7982,7.2935],[81.7925,7.2868],[81.783,7.2957],[81.7737,7.2973],[81.7794,7.2899],[81.7736,7.2829],[81.7748,7.2811],[81.7635,7.2741],[81.7616,7.2693],[81.7588,7.2715],[81.7568,7.27],[81.7566,7.2597],[81.755,7.2566],[81.7533,7.2582],[81.7507,7.2557],[81.7547,7.2346],[81.7531,7.2332],[81.7563,7.2301],[81.7523,7.2264],[81.7558,7.2212],[81.7658,7.2297],[81.7791,7.2279],[81.7851,7.2327],[81.785,7.2367],[81.7987,7.2422],[81.8188,7.2381],[81.8368,7.2396],[81.8371,7.2343],[81.842,7.2384],[81.8536,7.2336],[81.8613,7.2345],[81.8638,7.2693],[81.868,7.2749],[81.8648,7.28],[81.8666,7.2913],[81.8651,7.3002]]]}},{"type":"Feature","properties":{"n":"Akkaraipattu","d":"Ampara","c":[81.7938,7.2122]},"geometry":{"type":"MultiPolygon","coordinates":[[[[81.7426,7.1639],[81.7381,7.1623],[81.7484,7.1489],[81.7426,7.1639]]],[[[81.734,7.1939],[81.7131,7.2002],[81.7099,7.1961],[81.7159,7.1949],[81.7196,7.1913],[81.734,7.1939]]],[[[81.7558,7.2212],[81.747,7.2175],[81.7463,7.2139],[81.7494,7.21],[81.7466,7.2095],[81.7456,7.2045],[81.7426,7.2045],[81.7437,7.2001],[81.7415,7.196],[81.7488,7.1901],[81.7452,7.1901],[81.7444,7.1878],[81.7484,7.1875],[81.7495,7.1801],[81.7548,7.1728],[81.759,7.1761],[81.7678,7.1761],[81.7708,7.1736],[81.7808,7.1722],[81.781,7.1766],[81.7847,7.1809],[81.7789,7.186],[81.7794,7.1891],[81.7843,7.1932],[81.8048,7.1966],[81.8066,7.2002],[81.8196,7.1981],[81.8228,7.1999],[81.8277,7.2204],[81.8381,7.2217],[81.8416,7.2183],[81.8478,7.2187],[81.8581,7.2085],[81.8603,7.2092],[81.8613,7.2345],[81.8536,7.2336],[81.842,7.2384],[81.8371,7.2343],[81.8368,7.2396],[81.8188,7.2381],[81.7987,7.2422],[81.785,7.2367],[81.7851,7.2327],[81.7791,7.2279],[81.7658,7.2297],[81.7558,7.2212]]]]}},{"type":"Feature","properties":{"n":"Alayadivembu","d":"Ampara","c":[81.8037,7.1707]},"geometry":{"type":"Polygon","coordinates":[[[81.7484,7.1489],[81.7505,7.1386],[81.7525,7.1398],[81.757,7.1352],[81.7666,7.1312],[81.7703,7.1326],[81.7789,7.1279],[81.7848,7.1274],[81.7906,7.1326],[81.7942,7.1316],[81.7949,7.1346],[81.7976,7.1343],[81.801,7.1391],[81.808,7.1374],[81.8214,7.1416],[81.8236,7.1375],[81.8336,7.1365],[81.8254,7.1518],[81.8271,7.162],[81.8358,7.1695],[81.8505,7.1767],[81.8571,7.1855],[81.86,7.1855],[81.8603,7.2092],[81.8581,7.2085],[81.8478,7.2187],[81.8416,7.2183],[81.8381,7.2217],[81.8277,7.2204],[81.8228,7.1999],[81.8196,7.1981],[81.8066,7.2002],[81.8048,7.1966],[81.7843,7.1932],[81.7794,7.1891],[81.7789,7.186],[81.7847,7.1809],[81.781,7.1766],[81.7808,7.1722],[81.7708,7.1736],[81.7678,7.1761],[81.759,7.1761],[81.7389,7.1675],[81.7469,7.156],[81.7484,7.1489]]]}},{"type":"Feature","properties":{"n":"Ampara","d":"Ampara","c":[81.5952,7.2764]},"geometry":{"type":"Polygon","coordinates":[[[81.7144,7.3176],[81.7078,7.32],[81.7064,7.3143],[81.6904,7.31],[81.6764,7.3295],[81.6595,7.327],[81.6501,7.3232],[81.6316,7.3124],[81.6292,7.3054],[81.6208,7.3036],[81.6294,7.2895],[81.6253,7.2911],[81.623,7.2876],[81.621,7.2901],[81.617,7.2832],[81.6182,7.2751],[81.6106,7.2741],[81.6019,7.2761],[81.6018,7.284],[81.5943,7.2853],[81.5936,7.2877],[81.5664,7.288],[81.5547,7.3061],[81.5433,7.3019],[81.528,7.3172],[81.5192,7.3215],[81.4948,7.3195],[81.4791,7.3208],[81.4941,7.3044],[81.5086,7.2995],[81.5181,7.2876],[81.5167,7.2781],[81.5227,7.2694],[81.5218,7.2613],[81.5254,7.2528],[81.5204,7.2476],[81.5192,7.2427],[81.5316,7.2395],[81.5352,7.2326],[81.5395,7.2325],[81.549,7.2203],[81.5626,7.2176],[81.5691,7.2234],[81.5787,7.2236],[81.5986,7.2343],[81.6014,7.2336],[81.6046,7.2276],[81.6141,7.226],[81.6175,7.2297],[81.6198,7.2379],[81.6327,7.248],[81.6385,7.2616],[81.6449,7.266],[81.6469,7.2703],[81.6665,7.2749],[81.6723,7.2734],[81.6811,7.2788],[81.6939,7.2773],[81.6905,7.2849],[81.6992,7.2894],[81.7103,7.311],[81.7181,7.3133],[81.7144,7.3176]]]}},{"type":"Feature","properties":{"n":"Damana","d":"Ampara","c":[81.6291,7.1343]},"geometry":{"type":"Polygon","coordinates":[[[81.7426,7.1639],[81.7389,7.1675],[81.7548,7.1728],[81.7495,7.1801],[81.7484,7.1875],[81.7444,7.1878],[81.7452,7.1901],[81.7488,7.1901],[81.7485,7.1922],[81.7415,7.196],[81.7196,7.1913],[81.7159,7.1949],[81.7099,7.1961],[81.7101,7.1895],[81.7054,7.1929],[81.7007,7.1926],[81.6994,7.2055],[81.6922,7.2188],[81.6932,7.2203],[81.6899,7.2241],[81.6826,7.2256],[81.6836,7.2301],[81.6766,7.2283],[81.6773,7.2317],[81.6736,7.233],[81.6785,7.2403],[81.6781,7.2457],[81.6747,7.2536],[81.6707,7.255],[81.6668,7.2532],[81.6772,7.259],[81.6868,7.2553],[81.6938,7.2648],[81.6939,7.2773],[81.6811,7.2788],[81.6723,7.2734],[81.6665,7.2749],[81.6469,7.2703],[81.6449,7.266],[81.6385,7.2616],[81.6327,7.248],[81.6198,7.2379],[81.6175,7.2297],[81.6141,7.226],[81.6046,7.2276],[81.6014,7.2336],[81.5986,7.2343],[81.5787,7.2236],[81.5691,7.2234],[81.5626,7.2176],[81.554,7.2188],[81.5396,7.2137],[81.5213,7.1974],[81.5099,7.1812],[81.4995,7.1568],[81.4991,7.1496],[81.512,7.1362],[81.5095,7.1312],[81.5117,7.1249],[81.5098,7.1173],[81.5143,7.11],[81.5134,7.1026],[81.5166,7.0998],[81.5264,7.0938],[81.5578,7.0819],[81.5665,7.0802],[81.5709,7.0817],[81.578,7.0755],[81.5887,7.0751],[81.5904,7.0708],[81.5952,7.0692],[81.6006,7.0712],[81.6117,7.0672],[81.6171,7.0488],[81.6095,7.039],[81.6057,7.0284],[81.6126,7.0174],[81.613,7.0025],[81.62,6.9979],[81.6159,6.9808],[81.669,6.9726],[81.6875,6.9672],[81.6817,7.0628],[81.6971,7.072],[81.6932,7.0859],[81.7054,7.0888],[81.7095,7.1007],[81.7197,7.1116],[81.7185,7.1162],[81.7291,7.1302],[81.7383,7.137],[81.7505,7.1386],[81.7484,7.1489],[81.7381,7.1623],[81.7426,7.1639]]]}},{"type":"Feature","properties":{"n":"Dehiattakandiya","d":"Ampara","c":[81.0807,7.6203]},"geometry":{"type":"Polygon","coordinates":[[[81.2126,7.6422],[81.211,7.6409],[81.1928,7.6574],[81.1889,7.6579],[81.1911,7.6528],[81.1883,7.6507],[81.1827,7.6626],[81.1756,7.667],[81.1732,7.6618],[81.1737,7.659],[81.1774,7.658],[81.177,7.6531],[81.1754,7.6513],[81.1696,7.6522],[81.1699,7.6432],[81.1649,7.6437],[81.165,7.6466],[81.1622,7.6481],[81.156,7.6439],[81.1499,7.6445],[81.15,7.6426],[81.1452,7.6574],[81.1344,7.654],[81.115,7.6644],[81.1091,7.6608],[81.1059,7.6646],[81.102,7.6602],[81.0992,7.6627],[81.1024,7.6763],[81.0948,7.6791],[81.0948,7.6849],[81.0971,7.6893],[81.1077,7.6936],[81.1058,7.698],[81.1084,7.6988],[81.1086,7.7049],[81.1042,7.7215],[81.0976,7.7217],[81.095,7.7282],[81.0903,7.726],[81.0841,7.7282],[81.0736,7.7161],[81.0698,7.7161],[81.0628,7.7178],[81.0595,7.7277],[81.0491,7.7366],[81.0543,7.722],[81.0514,7.7218],[81.0475,7.7171],[81.0475,7.7123],[81.0436,7.7123],[81.0414,7.7058],[81.0364,7.7029],[81.0341,7.7104],[81.0367,7.7149],[81.0329,7.7184],[81.0288,7.7147],[81.0264,7.72],[81.0192,7.7117],[81.0162,7.7205],[81.0119,7.722],[81.0102,7.7276],[81.006,7.7297],[81.0016,7.7234],[80.991,7.7229],[80.9861,7.7252],[80.9904,7.6978],[80.986,7.6884],[80.9927,7.6747],[80.9947,7.6594],[80.9852,7.6464],[80.9775,7.6213],[80.9835,7.6173],[80.9839,7.6094],[80.9873,7.6099],[80.9883,7.6078],[81.004,7.6022],[81.0124,7.5937],[81.0108,7.589],[81.0127,7.5771],[81.0101,7.5645],[81.012,7.5624],[81.0124,7.551],[81.0169,7.5477],[81.0185,7.5404],[81.027,7.536],[81.026,7.5303],[81.0323,7.5248],[81.0334,7.5162],[81.0356,7.5146],[81.0344,7.5103],[81.0384,7.5041],[81.0412,7.5061],[81.0432,7.5038],[81.0517,7.5059],[81.0577,7.5105],[81.0759,7.5106],[81.1054,7.5392],[81.1311,7.5574],[81.1605,7.5673],[81.1694,7.5669],[81.1874,7.5725],[81.1919,7.5764],[81.1928,7.5825],[81.2031,7.5917],[81.2087,7.6065],[81.2036,7.621],[81.2069,7.6227],[81.2126,7.6422]]]}},{"type":"Feature","properties":{"n":"Irakkamam","d":"Ampara","c":[81.7224,7.2412]},"geometry":{"type":"Polygon","coordinates":[[[81.7737,7.2973],[81.7658,7.2942],[81.7623,7.2894],[81.7533,7.2893],[81.7495,7.2822],[81.7496,7.2761],[81.7414,7.2755],[81.7354,7.267],[81.7262,7.2729],[81.7209,7.2701],[81.7158,7.2765],[81.7025,7.2745],[81.6939,7.2773],[81.6938,7.2648],[81.6892,7.2566],[81.6826,7.2558],[81.6803,7.2591],[81.6772,7.259],[81.6668,7.2532],[81.6707,7.255],[81.6747,7.2536],[81.6785,7.2403],[81.6736,7.233],[81.6773,7.2317],[81.6766,7.2283],[81.6836,7.2301],[81.6826,7.2256],[81.6899,7.2241],[81.6932,7.2203],[81.6922,7.2188],[81.6994,7.2055],[81.7007,7.1926],[81.7054,7.1929],[81.7101,7.1895],[81.7099,7.1961],[81.7131,7.2002],[81.734,7.1939],[81.7415,7.196],[81.7437,7.2001],[81.7426,7.2045],[81.7456,7.2045],[81.7466,7.2095],[81.7494,7.21],[81.7463,7.2139],[81.747,7.2175],[81.7558,7.2212],[81.7523,7.2264],[81.7563,7.2301],[81.7531,7.2332],[81.7547,7.2346],[81.7507,7.2557],[81.7533,7.2582],[81.755,7.2566],[81.7566,7.2597],[81.7568,7.27],[81.7588,7.2715],[81.7616,7.2693],[81.7635,7.2741],[81.7748,7.2811],[81.7736,7.2829],[81.7794,7.2899],[81.7737,7.2973]]]}},{"type":"Feature","properties":{"n":"Kalmunai","d":"Ampara","c":[81.813,7.4223]},"geometry":{"type":"Polygon","coordinates":[[[81.7936,7.4395],[81.7865,7.4393],[81.7949,7.4095],[81.8083,7.4015],[81.8114,7.3941],[81.841,7.4005],[81.8362,7.4158],[81.8225,7.4334],[81.8161,7.4596],[81.8109,7.4605],[81.8059,7.4486],[81.8037,7.4487],[81.8033,7.4408],[81.7936,7.4395]]]}},{"type":"Feature","properties":{"n":"Karaitivu","d":"Ampara","c":[81.8323,7.373]},"geometry":{"type":"Polygon","coordinates":[[[81.8527,7.3645],[81.8441,7.3893],[81.8185,7.3828],[81.8158,7.3798],[81.8143,7.3723],[81.8159,7.3667],[81.8134,7.3615],[81.8288,7.3586],[81.8364,7.362],[81.8527,7.3645]]]}},{"type":"Feature","properties":{"n":"Lahugala","d":"Ampara","c":[81.698,6.7473]},"geometry":{"type":"Polygon","coordinates":[[[81.6159,6.9808],[81.6214,6.9722],[81.6298,6.9669],[81.636,6.9582],[81.6304,6.9425],[81.6257,6.9104],[81.6155,6.6911],[81.6126,6.6792],[81.6088,6.588],[81.6066,6.5798],[81.6135,6.5724],[81.619,6.5712],[81.6193,6.565],[81.6297,6.5541],[81.6367,6.5418],[81.6412,6.5414],[81.6489,6.545],[81.6552,6.54],[81.6606,6.5404],[81.6667,6.5335],[81.6726,6.5206],[81.6859,6.5137],[81.6971,6.5145],[81.7051,6.5103],[81.7145,6.5272],[81.7227,6.5356],[81.7219,6.5386],[81.7271,6.5476],[81.7263,6.5518],[81.7389,6.5698],[81.7371,6.5705],[81.7384,6.5738],[81.7613,6.5953],[81.7583,6.6077],[81.7696,6.6252],[81.7759,6.6464],[81.7694,6.6592],[81.7709,6.6704],[81.7848,6.6934],[81.7991,6.7088],[81.8018,6.7239],[81.7991,6.7287],[81.8084,6.7463],[81.8247,6.7637],[81.821,6.7695],[81.8223,6.779],[81.817,6.7865],[81.823,6.8095],[81.8181,6.811],[81.816,6.8156],[81.8037,6.8149],[81.7994,6.8194],[81.7915,6.8171],[81.7772,6.8225],[81.7718,6.8275],[81.77,6.833],[81.7585,6.8382],[81.7634,6.8824],[81.7626,6.8939],[81.753,6.919],[81.7503,6.9179],[81.7456,6.9232],[81.7451,6.9293],[81.7311,6.9585],[81.669,6.9726],[81.6159,6.9808]]]}},{"type":"Feature","properties":{"n":"Mahaoya","d":"Ampara","c":[81.3468,7.5611]},"geometry":{"type":"Polygon","coordinates":[[[81.2384,7.7392],[81.2322,7.7225],[81.2392,7.7149],[81.2362,7.7077],[81.2394,7.6936],[81.2358,7.689],[81.239,7.6812],[81.2359,7.6781],[81.2218,7.6732],[81.2178,7.6601],[81.2189,7.6525],[81.2098,7.6524],[81.2141,7.6449],[81.2069,7.6227],[81.2036,7.621],[81.2199,7.59],[81.2319,7.5887],[81.2498,7.5923],[81.2594,7.5855],[81.2633,7.5764],[81.2671,7.5747],[81.2687,7.5679],[81.2826,7.5536],[81.2999,7.5225],[81.2778,7.5111],[81.2969,7.4815],[81.302,7.4787],[81.3001,7.4713],[81.3021,7.4556],[81.3106,7.4546],[81.3202,7.4431],[81.3135,7.4287],[81.3044,7.4183],[81.3105,7.4148],[81.3013,7.4101],[81.2987,7.4025],[81.2862,7.4057],[81.289,7.4034],[81.2906,7.396],[81.294,7.3915],[81.2955,7.395],[81.3072,7.3956],[81.317,7.4015],[81.3254,7.3973],[81.3224,7.3899],[81.3185,7.3888],[81.3234,7.3811],[81.3318,7.3779],[81.3426,7.3664],[81.3528,7.3636],[81.3632,7.3569],[81.3723,7.3574],[81.3846,7.3693],[81.38,7.3744],[81.3784,7.3867],[81.3721,7.3953],[81.3728,7.409],[81.3848,7.4065],[81.4042,7.4156],[81.4076,7.4218],[81.4051,7.4314],[81.4176,7.4333],[81.4237,7.4407],[81.4362,7.4435],[81.4532,7.4586],[81.4757,7.4565],[81.4777,7.454],[81.4809,7.4568],[81.4838,7.4814],[81.4922,7.5016],[81.4926,7.5133],[81.4985,7.5179],[81.4877,7.5258],[81.4492,7.5422],[81.4303,7.5714],[81.4312,7.58],[81.4408,7.5996],[81.4387,7.6061],[81.4461,7.619],[81.4402,7.6324],[81.443,7.6412],[81.3865,7.6552],[81.3758,7.6589],[81.3682,7.6662],[81.3652,7.6658],[81.3514,7.6915],[81.3404,7.706],[81.3364,7.7059],[81.3309,7.7175],[81.3268,7.7198],[81.3282,7.7237],[81.3199,7.7343],[81.2615,7.7351],[81.2521,7.7299],[81.2491,7.7305],[81.2481,7.7351],[81.2384,7.7392]]]}},{"type":"Feature","properties":{"n":"Navithanveli","d":"Ampara","c":[81.7612,7.4193]},"geometry":{"type":"Polygon","coordinates":[[[81.7059,7.4349],[81.7088,7.4305],[81.7172,7.4305],[81.724,7.4169],[81.734,7.413],[81.7318,7.403],[81.7332,7.3975],[81.7361,7.3942],[81.7398,7.3947],[81.7428,7.3897],[81.7352,7.3857],[81.7297,7.3734],[81.7429,7.3802],[81.7426,7.3718],[81.7535,7.3649],[81.7549,7.3607],[81.7667,7.3683],[81.7921,7.3727],[81.7926,7.382],[81.7974,7.3832],[81.7978,7.3908],[81.8011,7.3927],[81.8061,7.3911],[81.811,7.3972],[81.8083,7.4015],[81.7949,7.4095],[81.7924,7.4165],[81.7844,7.4515],[81.7931,7.466],[81.7726,7.4838],[81.7514,7.4576],[81.7474,7.4547],[81.7239,7.4547],[81.7059,7.4349]]]}},{"type":"Feature","properties":{"n":"Nintavur","d":"Ampara","c":[81.8381,7.3263]},"geometry":{"type":"Polygon","coordinates":[[[81.8651,7.3002],[81.8632,7.328],[81.8527,7.3645],[81.8364,7.362],[81.8288,7.3586],[81.819,7.3604],[81.8185,7.3308],[81.8146,7.3276],[81.8164,7.3101],[81.8136,7.3095],[81.812,7.2928],[81.8191,7.2951],[81.8235,7.2906],[81.8319,7.2901],[81.8447,7.2974],[81.8502,7.2983],[81.8498,7.3032],[81.8535,7.3047],[81.856,7.3025],[81.8593,7.3041],[81.8615,7.3005],[81.8651,7.3002]]]}},{"type":"Feature","properties":{"n":"Padiyathalawa","d":"Ampara","c":[81.2592,7.427]},"geometry":{"type":"Polygon","coordinates":[[[81.358,7.3396],[81.3651,7.3432],[81.3609,7.351],[81.3632,7.3569],[81.3528,7.3636],[81.3426,7.3664],[81.3318,7.3779],[81.3234,7.3811],[81.3185,7.3888],[81.3224,7.3899],[81.3254,7.3973],[81.317,7.4015],[81.3072,7.3956],[81.2955,7.395],[81.294,7.3915],[81.2862,7.4057],[81.2987,7.4025],[81.3013,7.4101],[81.3105,7.4148],[81.3044,7.4183],[81.3135,7.4287],[81.3202,7.4431],[81.3106,7.4546],[81.3021,7.4556],[81.3001,7.4713],[81.302,7.4787],[81.2969,7.4815],[81.2778,7.5111],[81.2999,7.5225],[81.2894,7.5428],[81.2826,7.5536],[81.2687,7.5679],[81.2671,7.5747],[81.2633,7.5764],[81.2594,7.5855],[81.2498,7.5923],[81.2319,7.5887],[81.2199,7.59],[81.2141,7.598],[81.2134,7.6056],[81.2082,7.6109],[81.2087,7.6065],[81.2031,7.5917],[81.1928,7.5825],[81.1919,7.5764],[81.1874,7.5725],[81.2032,7.5573],[81.2019,7.5468],[81.2049,7.5379],[81.2054,7.5169],[81.197,7.4981],[81.1992,7.489],[81.1963,7.4846],[81.1983,7.477],[81.1972,7.4693],[81.1904,7.4651],[81.1898,7.462],[81.1932,7.4606],[81.192,7.457],[81.1875,7.453],[81.1883,7.4498],[81.1822,7.4465],[81.1811,7.4418],[81.1867,7.4382],[81.1902,7.4232],[81.1928,7.4218],[81.1918,7.4146],[81.1948,7.4039],[81.2003,7.3911],[81.2004,7.3855],[81.1928,7.3823],[81.1927,7.3758],[81.197,7.3739],[81.2013,7.368],[81.2081,7.3472],[81.2132,7.3464],[81.2134,7.3428],[81.2178,7.3401],[81.2181,7.3329],[81.2217,7.3313],[81.2282,7.3334],[81.2357,7.3426],[81.2442,7.3347],[81.2442,7.327],[81.2598,7.3133],[81.2695,7.2921],[81.2659,7.2843],[81.278,7.2622],[81.2753,7.2567],[81.285,7.2493],[81.2829,7.242],[81.2937,7.2485],[81.2997,7.2565],[81.3195,7.2649],[81.3152,7.2778],[81.3226,7.298],[81.318,7.3036],[81.3142,7.3164],[81.3178,7.3234],[81.3187,7.3379],[81.3227,7.3339],[81.3296,7.3336],[81.3449,7.3352],[81.358,7.3396]]]}},{"type":"Feature","properties":{"n":"Pottuvil","d":"Ampara","c":[81.7833,6.9503]},"geometry":{"type":"Polygon","coordinates":[[[81.6875,6.9672],[81.7311,6.9585],[81.7451,6.9293],[81.7456,6.9232],[81.7503,6.9179],[81.753,6.919],[81.7626,6.8939],[81.7634,6.8824],[81.7585,6.8382],[81.77,6.833],[81.7718,6.8275],[81.7772,6.8225],[81.7915,6.8171],[81.7994,6.8194],[81.8037,6.8149],[81.816,6.8156],[81.8181,6.811],[81.823,6.8095],[81.8206,6.8123],[81.8243,6.8224],[81.8385,6.8364],[81.8373,6.8397],[81.8307,6.8417],[81.831,6.8543],[81.8326,6.8588],[81.8444,6.8714],[81.8438,6.881],[81.8415,6.8843],[81.8466,6.8967],[81.8431,6.8992],[81.8421,6.9069],[81.8661,6.9733],[81.8636,6.9786],[81.8642,6.9853],[81.8772,7.0219],[81.8735,7.031],[81.8388,7.0241],[81.8361,7.0291],[81.8374,7.0356],[81.8337,7.0362],[81.8221,7.0316],[81.8234,7.0291],[81.8208,7.0262],[81.8208,7.0216],[81.8189,7.0206],[81.8173,7.024],[81.8126,7.0196],[81.8119,7.0101],[81.7786,7.0183],[81.7816,7.015],[81.7826,7.0057],[81.7303,7.0206],[81.719,7.0738],[81.6955,7.0761],[81.6971,7.072],[81.6817,7.0628],[81.6875,6.9672]]]}},{"type":"Feature","properties":{"n":"Sainthamaruthu","d":"Ampara","c":[81.831,7.3917]},"geometry":{"type":"Polygon","coordinates":[[[81.8202,7.3952],[81.8185,7.3828],[81.8441,7.3893],[81.841,7.4005],[81.8202,7.3952]]]}},{"type":"Feature","properties":{"n":"Sammanthurai","d":"Ampara","c":[81.7648,7.3268]},"geometry":{"type":"Polygon","coordinates":[[[81.812,7.2928],[81.8136,7.3095],[81.8164,7.3101],[81.8146,7.3276],[81.8185,7.3308],[81.819,7.3604],[81.8134,7.3615],[81.8159,7.3667],[81.8143,7.3723],[81.8202,7.3952],[81.8114,7.3941],[81.811,7.3972],[81.8061,7.3911],[81.8011,7.3927],[81.7978,7.3908],[81.7974,7.3832],[81.7926,7.382],[81.7921,7.3727],[81.7667,7.3683],[81.7562,7.3603],[81.7535,7.3649],[81.7426,7.3718],[81.7429,7.3802],[81.7297,7.3734],[81.7292,7.3625],[81.7374,7.3534],[81.7384,7.3489],[81.7349,7.3478],[81.7344,7.3417],[81.7248,7.339],[81.7242,7.3312],[81.7149,7.3278],[81.7182,7.3236],[81.7171,7.3201],[81.7131,7.3198],[81.7181,7.3133],[81.7103,7.311],[81.6992,7.2894],[81.6905,7.2849],[81.6939,7.2773],[81.7025,7.2745],[81.7158,7.2765],[81.7209,7.2701],[81.7262,7.2729],[81.7354,7.267],[81.7414,7.2755],[81.7496,7.2761],[81.7495,7.2822],[81.7533,7.2893],[81.7623,7.2894],[81.7658,7.2942],[81.7737,7.2973],[81.783,7.2957],[81.7925,7.2868],[81.7982,7.2935],[81.812,7.2928]]]}},{"type":"Feature","properties":{"n":"Tirukkovil","d":"Ampara","c":[81.7922,7.0817]},"geometry":{"type":"Polygon","coordinates":[[[81.7505,7.1386],[81.7383,7.137],[81.7373,7.1346],[81.7317,7.1327],[81.7185,7.1162],[81.7197,7.1116],[81.7095,7.1007],[81.7054,7.0888],[81.6932,7.0859],[81.6955,7.0761],[81.719,7.0738],[81.7303,7.0206],[81.7826,7.0057],[81.7816,7.015],[81.7786,7.0183],[81.8119,7.0101],[81.8126,7.0196],[81.8173,7.024],[81.8189,7.0206],[81.8208,7.0216],[81.8208,7.0262],[81.8234,7.0291],[81.8221,7.0316],[81.8337,7.0362],[81.8374,7.0356],[81.8361,7.0291],[81.8388,7.0241],[81.8735,7.031],[81.8682,7.0434],[81.8651,7.0658],[81.8563,7.1],[81.8557,7.1326],[81.8588,7.1501],[81.86,7.1855],[81.8571,7.1855],[81.8505,7.1767],[81.8358,7.1695],[81.8271,7.162],[81.8254,7.1518],[81.8336,7.1365],[81.8236,7.1375],[81.8214,7.1416],[81.808,7.1374],[81.801,7.1391],[81.7976,7.1343],[81.7949,7.1346],[81.7942,7.1316],[81.7906,7.1326],[81.7848,7.1274],[81.7727,7.13],[81.7703,7.1326],[81.7666,7.1312],[81.757,7.1352],[81.7525,7.1398],[81.7505,7.1386]]]}},{"type":"Feature","properties":{"n":"Uhana","d":"Ampara","c":[81.5909,7.3999]},"geometry":{"type":"Polygon","coordinates":[[[81.5453,7.5075],[81.5145,7.5081],[81.4926,7.5133],[81.4922,7.5016],[81.4838,7.4814],[81.4809,7.4568],[81.4611,7.431],[81.4602,7.4276],[81.4761,7.4216],[81.4724,7.413],[81.4706,7.3932],[81.4774,7.3801],[81.4893,7.3354],[81.4768,7.3246],[81.4791,7.3208],[81.4948,7.3195],[81.5192,7.3215],[81.528,7.3172],[81.5433,7.3019],[81.5547,7.3061],[81.5664,7.288],[81.5936,7.2877],[81.5943,7.2853],[81.6018,7.284],[81.6019,7.2761],[81.6106,7.2741],[81.6182,7.2751],[81.617,7.2832],[81.621,7.2901],[81.623,7.2876],[81.6253,7.2911],[81.6294,7.2895],[81.6208,7.3036],[81.6292,7.3054],[81.6316,7.3124],[81.6501,7.3232],[81.6595,7.327],[81.6764,7.3295],[81.6904,7.31],[81.7064,7.3143],[81.7078,7.32],[81.7144,7.3176],[81.7131,7.3198],[81.7171,7.3201],[81.7182,7.3236],[81.7149,7.3278],[81.7242,7.3312],[81.7248,7.339],[81.7344,7.3417],[81.7349,7.3478],[81.7384,7.3489],[81.7374,7.3534],[81.7292,7.3625],[81.7297,7.3734],[81.7352,7.3857],[81.7428,7.3897],[81.7398,7.3947],[81.7361,7.3942],[81.7332,7.3975],[81.7318,7.403],[81.734,7.413],[81.724,7.4169],[81.7172,7.4305],[81.7088,7.4305],[81.7059,7.4349],[81.6946,7.4235],[81.6721,7.4137],[81.67,7.4044],[81.6621,7.3991],[81.6621,7.4124],[81.6598,7.4183],[81.661,7.4526],[81.6552,7.4541],[81.6594,7.4703],[81.6528,7.4795],[81.6534,7.4902],[81.6459,7.5034],[81.6486,7.5091],[81.6463,7.5125],[81.6479,7.5171],[81.6449,7.5189],[81.6485,7.5229],[81.6439,7.5225],[81.6164,7.5074],[81.5453,7.5075]]]}},{"type":"Feature","properties":{"n":"Galenbidunuwewa","d":"Anuradhapura","c":[80.7068,8.2678]},"geometry":{"type":"Polygon","coordinates":[[[80.8054,8.3289],[80.7958,8.331],[80.7861,8.3264],[80.7772,8.329],[80.7701,8.3279],[80.7706,8.3411],[80.7681,8.3424],[80.767,8.3484],[80.7618,8.3467],[80.7551,8.3502],[80.7515,8.3495],[80.7489,8.3446],[80.753,8.341],[80.7508,8.3333],[80.7464,8.3374],[80.746,8.341],[80.7484,8.3436],[80.741,8.347],[80.7364,8.3437],[80.7351,8.3468],[80.7132,8.3529],[80.7081,8.3485],[80.7047,8.3396],[80.689,8.3266],[80.6862,8.3267],[80.6828,8.3374],[80.6762,8.34],[80.6677,8.3507],[80.6635,8.3513],[80.659,8.3459],[80.6583,8.3367],[80.656,8.3348],[80.653,8.3221],[80.6388,8.3251],[80.6338,8.3122],[80.6279,8.3076],[80.6266,8.303],[80.6357,8.2982],[80.6398,8.286],[80.6432,8.2852],[80.644,8.2691],[80.6329,8.2666],[80.6255,8.2504],[80.6112,8.2461],[80.6055,8.2483],[80.6025,8.246],[80.598,8.247],[80.5996,8.2402],[80.5981,8.2298],[80.6088,8.2226],[80.6131,8.2125],[80.6132,8.206],[80.6105,8.2042],[80.6087,8.1955],[80.6147,8.1908],[80.6203,8.194],[80.6271,8.1907],[80.63,8.1858],[80.6398,8.1831],[80.6416,8.1729],[80.6361,8.1642],[80.6534,8.1642],[80.6545,8.1769],[80.6596,8.1807],[80.6605,8.1902],[80.6735,8.1951],[80.6754,8.2063],[80.6794,8.2114],[80.6914,8.2096],[80.7015,8.2024],[80.7067,8.1938],[80.7184,8.1937],[80.722,8.1901],[80.7284,8.1922],[80.7297,8.1897],[80.7328,8.1982],[80.7365,8.1934],[80.7421,8.1989],[80.7374,8.204],[80.7319,8.2059],[80.7342,8.2059],[80.7343,8.2112],[80.7406,8.2116],[80.7391,8.2163],[80.7465,8.2129],[80.7466,8.2161],[80.7506,8.2182],[80.7506,8.2221],[80.7594,8.2224],[80.7623,8.2257],[80.769,8.2245],[80.7726,8.2304],[80.7875,8.2301],[80.7932,8.2475],[80.7931,8.2535],[80.802,8.2699],[80.8038,8.2786],[80.8208,8.2788],[80.819,8.2964],[80.8163,8.3011],[80.8137,8.3018],[80.812,8.2954],[80.8067,8.2918],[80.8016,8.2919],[80.8029,8.2989],[80.8071,8.3045],[80.804,8.3136],[80.8072,8.3286],[80.8054,8.3289]]]}},{"type":"Feature","properties":{"n":"Galnewa","d":"Anuradhapura","c":[80.4477,8.0192]},"geometry":{"type":"Polygon","coordinates":[[[80.4156,7.9495],[80.4204,7.9508],[80.4328,7.9458],[80.4364,7.951],[80.4465,7.9544],[80.4484,7.9513],[80.4513,7.9524],[80.454,7.9465],[80.4583,7.9453],[80.4594,7.9484],[80.472,7.9508],[80.4921,7.948],[80.4913,7.9596],[80.4957,7.9745],[80.4949,7.9822],[80.5019,7.9893],[80.5068,7.9902],[80.5097,8.0024],[80.5119,8.0008],[80.5148,8.0052],[80.5139,8.0106],[80.5058,8.0285],[80.4942,8.0349],[80.4859,8.052],[80.4796,8.0524],[80.4709,8.0604],[80.4636,8.0624],[80.4591,8.0737],[80.4476,8.0793],[80.4107,8.0859],[80.4084,8.0882],[80.4061,8.0883],[80.4048,8.0841],[80.3988,8.0828],[80.3962,8.0866],[80.3815,8.0895],[80.3833,8.0848],[80.3815,8.0826],[80.3774,8.0828],[80.3741,8.0859],[80.3738,8.0752],[80.3662,8.074],[80.3639,8.077],[80.3584,8.0705],[80.3597,8.0668],[80.3631,8.0672],[80.3653,8.0648],[80.3677,8.0572],[80.3798,8.0558],[80.3837,8.0507],[80.3908,8.048],[80.3937,8.0533],[80.4036,8.0558],[80.4177,8.0429],[80.4166,8.0154],[80.4133,8.0061],[80.4221,7.9862],[80.4208,7.9758],[80.424,7.9636],[80.423,7.9598],[80.4172,7.9553],[80.4156,7.9495]]]}},{"type":"Feature","properties":{"n":"Horowpathana","d":"Anuradhapura","c":[80.8501,8.5135]},"geometry":{"type":"Polygon","coordinates":[[[80.8208,8.2788],[80.898,8.2797],[80.9016,8.3008],[80.9096,8.3253],[80.9207,8.3332],[80.9285,8.3454],[80.9392,8.342],[80.9347,8.3487],[80.9276,8.3508],[80.9248,8.3663],[80.9307,8.3794],[80.9264,8.3877],[80.9367,8.4066],[80.9418,8.4096],[80.9497,8.4307],[80.9605,8.4489],[80.9663,8.457],[80.9744,8.4609],[80.972,8.466],[80.9735,8.4686],[80.9826,8.4664],[80.9909,8.4731],[80.9914,8.4833],[80.9892,8.4852],[80.9633,8.4872],[80.9649,8.4896],[80.9633,8.4989],[80.947,8.5079],[80.9449,8.5163],[80.9479,8.5357],[80.9448,8.5559],[80.917,8.5821],[80.9117,8.5903],[80.9119,8.6097],[80.8921,8.6218],[80.8953,8.6291],[80.895,8.6334],[80.8893,8.6376],[80.8911,8.6457],[80.8946,8.6493],[80.8992,8.6642],[80.9083,8.6674],[80.9104,8.6849],[80.9023,8.6973],[80.8966,8.7119],[80.8914,8.7165],[80.8891,8.7236],[80.8918,8.7328],[80.8905,8.7419],[80.8809,8.7456],[80.8783,8.7506],[80.8695,8.7516],[80.8595,8.7605],[80.8353,8.7472],[80.8302,8.7383],[80.8236,8.7391],[80.8234,8.726],[80.8027,8.7167],[80.8024,8.7094],[80.8059,8.7008],[80.79,8.6926],[80.7838,8.6853],[80.7855,8.6415],[80.7685,8.6194],[80.7521,8.6134],[80.7444,8.6079],[80.7313,8.5863],[80.7106,8.5717],[80.7194,8.5677],[80.7198,8.5593],[80.7185,8.5554],[80.7111,8.5512],[80.7064,8.5426],[80.7046,8.5321],[80.7147,8.5186],[80.7333,8.5183],[80.7426,8.5144],[80.7385,8.5067],[80.7388,8.5012],[80.7332,8.4915],[80.7345,8.486],[80.7428,8.4811],[80.7481,8.4815],[80.7489,8.4781],[80.7547,8.4801],[80.7681,8.4778],[80.7764,8.4729],[80.7802,8.4781],[80.7854,8.4752],[80.7911,8.4772],[80.7898,8.4795],[80.7958,8.482],[80.7978,8.4876],[80.801,8.4825],[80.8042,8.4576],[80.797,8.4545],[80.796,8.4509],[80.7989,8.4436],[80.8025,8.4453],[80.8045,8.4429],[80.8029,8.4263],[80.7952,8.4217],[80.7837,8.4097],[80.7906,8.4087],[80.8001,8.3932],[80.81,8.3907],[80.8132,8.3782],[80.823,8.3727],[80.8194,8.3616],[80.8071,8.3487],[80.809,8.3366],[80.8054,8.3289],[80.8072,8.3286],[80.804,8.3136],[80.8071,8.3045],[80.8029,8.2989],[80.8016,8.2919],[80.8067,8.2918],[80.812,8.2954],[80.8137,8.3018],[80.8163,8.3011],[80.819,8.2964],[80.8208,8.2788]]]}},{"type":"Feature","properties":{"n":"Ipalogama","d":"Anuradhapura","c":[80.5063,8.0847]},"geometry":{"type":"Polygon","coordinates":[[[80.5148,8.0052],[80.5172,7.9983],[80.5241,7.9935],[80.5304,7.9912],[80.5394,7.9951],[80.5363,8.0024],[80.5375,8.0132],[80.5349,8.0323],[80.5385,8.0321],[80.5434,8.0257],[80.5444,8.0285],[80.548,8.0268],[80.5478,8.0315],[80.5418,8.039],[80.5387,8.0495],[80.5325,8.0557],[80.5312,8.0646],[80.5411,8.0706],[80.5422,8.0679],[80.5503,8.0688],[80.5665,8.0636],[80.5704,8.0641],[80.5748,8.0684],[80.5767,8.0666],[80.5807,8.0679],[80.574,8.0833],[80.5739,8.0922],[80.5698,8.1001],[80.5664,8.0996],[80.5648,8.1043],[80.5613,8.1059],[80.5607,8.1209],[80.5527,8.1214],[80.5477,8.1303],[80.5328,8.1247],[80.5305,8.1258],[80.5267,8.1475],[80.52,8.1489],[80.5155,8.1525],[80.5053,8.1482],[80.4976,8.1481],[80.4961,8.1396],[80.4846,8.1385],[80.481,8.141],[80.4756,8.1407],[80.465,8.1354],[80.4621,8.1307],[80.4584,8.1299],[80.4586,8.1257],[80.4616,8.1228],[80.4661,8.1235],[80.4701,8.1161],[80.4643,8.1189],[80.4576,8.1097],[80.4409,8.1068],[80.4356,8.1089],[80.432,8.1055],[80.4324,8.0986],[80.4276,8.0994],[80.4239,8.0953],[80.4181,8.0989],[80.4138,8.0974],[80.4084,8.0882],[80.4107,8.0859],[80.4476,8.0793],[80.4591,8.0737],[80.4636,8.0624],[80.4709,8.0604],[80.4796,8.0524],[80.4859,8.052],[80.4942,8.0349],[80.5058,8.0285],[80.5148,8.0052]]]}},{"type":"Feature","properties":{"n":"Kahatagasdigiliya","d":"Anuradhapura","c":[80.7099,8.4233]},"geometry":{"type":"Polygon","coordinates":[[[80.8054,8.3289],[80.809,8.3366],[80.8071,8.3487],[80.8194,8.3616],[80.823,8.3727],[80.8132,8.3782],[80.81,8.3907],[80.8001,8.3932],[80.7906,8.4087],[80.7837,8.4097],[80.7952,8.4217],[80.8029,8.4263],[80.8045,8.4429],[80.8025,8.4453],[80.7989,8.4436],[80.796,8.4509],[80.797,8.4545],[80.8042,8.4576],[80.8029,8.4765],[80.7978,8.4876],[80.7958,8.482],[80.7898,8.4795],[80.7911,8.4772],[80.7854,8.4752],[80.7802,8.4781],[80.7764,8.4729],[80.7681,8.4778],[80.7547,8.4801],[80.7489,8.4781],[80.7481,8.4815],[80.7428,8.4811],[80.7345,8.486],[80.7332,8.4915],[80.7388,8.5012],[80.7385,8.5067],[80.7426,8.5144],[80.7333,8.5183],[80.7147,8.5186],[80.7046,8.5321],[80.7064,8.5426],[80.7111,8.5512],[80.7185,8.5554],[80.7194,8.5677],[80.7106,8.5717],[80.704,8.564],[80.6869,8.5582],[80.6748,8.5498],[80.6581,8.5532],[80.6592,8.5404],[80.6662,8.5266],[80.6576,8.5184],[80.6589,8.5093],[80.6544,8.506],[80.6531,8.5],[80.6599,8.4929],[80.674,8.4883],[80.6768,8.4748],[80.6744,8.4711],[80.6694,8.4712],[80.6644,8.4679],[80.6578,8.4587],[80.6516,8.4568],[80.6491,8.452],[80.6374,8.4503],[80.6299,8.4545],[80.6193,8.4534],[80.6159,8.447],[80.62,8.439],[80.6198,8.4342],[80.5997,8.4229],[80.6016,8.416],[80.5949,8.3995],[80.6022,8.3974],[80.6022,8.3809],[80.6113,8.3854],[80.6173,8.3847],[80.6206,8.389],[80.6291,8.3867],[80.6263,8.3803],[80.6288,8.377],[80.6286,8.3677],[80.6254,8.365],[80.6133,8.3663],[80.6117,8.3642],[80.6114,8.3586],[80.6178,8.3468],[80.6153,8.3444],[80.6149,8.3391],[80.6222,8.3416],[80.6405,8.3396],[80.6549,8.3303],[80.6583,8.3367],[80.659,8.3459],[80.6635,8.3513],[80.6677,8.3507],[80.6762,8.34],[80.6828,8.3374],[80.6862,8.3267],[80.689,8.3266],[80.7047,8.3396],[80.7081,8.3485],[80.7132,8.3529],[80.7351,8.3468],[80.7364,8.3437],[80.741,8.347],[80.7484,8.3436],[80.746,8.341],[80.7464,8.3374],[80.7508,8.3333],[80.753,8.341],[80.7489,8.3446],[80.7515,8.3495],[80.7551,8.3502],[80.7618,8.3467],[80.767,8.3484],[80.7681,8.3424],[80.7706,8.3411],[80.7701,8.3279],[80.7772,8.329],[80.7861,8.3264],[80.7958,8.331],[80.8054,8.3289]]]}},{"type":"Feature","properties":{"n":"Kebithigollewa","d":"Anuradhapura","c":[80.7062,8.7159]},"geometry":{"type":"Polygon","coordinates":[[[80.9115,8.8269],[80.9014,8.8248],[80.8914,8.8266],[80.8866,8.8235],[80.8741,8.8259],[80.864,8.8194],[80.8636,8.8165],[80.8569,8.8114],[80.8445,8.8101],[80.8346,8.8057],[80.8248,8.7923],[80.8128,8.7923],[80.8039,8.7887],[80.805,8.8014],[80.7885,8.8021],[80.7947,8.7888],[80.7881,8.7867],[80.7878,8.7705],[80.7782,8.7556],[80.7797,8.7683],[80.7761,8.7834],[80.7771,8.792],[80.7739,8.7922],[80.7678,8.7849],[80.7674,8.7955],[80.7638,8.7919],[80.7605,8.7928],[80.7539,8.7847],[80.7525,8.7911],[80.7489,8.7868],[80.7462,8.787],[80.7472,8.7936],[80.7457,8.7935],[80.7431,8.783],[80.7373,8.7771],[80.7361,8.7715],[80.7338,8.7712],[80.726,8.7783],[80.7288,8.7801],[80.7281,8.7832],[80.7314,8.7845],[80.7298,8.7884],[80.7331,8.7913],[80.7308,8.7952],[80.7298,8.7931],[80.7281,8.7944],[80.7271,8.8019],[80.7214,8.801],[80.7208,8.8051],[80.7142,8.8047],[80.7192,8.8073],[80.7234,8.8064],[80.7276,8.811],[80.7116,8.8196],[80.7086,8.8288],[80.6987,8.8303],[80.6861,8.8396],[80.6855,8.8441],[80.6791,8.8511],[80.6798,8.8554],[80.6694,8.8704],[80.6661,8.8718],[80.6432,8.868],[80.5942,8.8697],[80.5889,8.8511],[80.5903,8.8464],[80.6033,8.841],[80.6233,8.8384],[80.6282,8.8329],[80.6327,8.8174],[80.6508,8.7975],[80.6454,8.787],[80.6321,8.7809],[80.621,8.7671],[80.6148,8.7517],[80.5999,8.7455],[80.588,8.7234],[80.5695,8.7173],[80.5668,8.7],[80.5725,8.6993],[80.5809,8.6922],[80.5972,8.6472],[80.6106,8.6396],[80.6175,8.6259],[80.6294,8.6265],[80.6413,8.6224],[80.6402,8.6177],[80.6341,8.6139],[80.6232,8.5944],[80.6242,8.5878],[80.6395,8.5872],[80.6441,8.5806],[80.6474,8.5648],[80.6517,8.5575],[80.6581,8.5532],[80.6748,8.5498],[80.6869,8.5582],[80.704,8.564],[80.7106,8.5717],[80.7313,8.5863],[80.7444,8.6079],[80.7521,8.6134],[80.7685,8.6194],[80.7855,8.6415],[80.7838,8.6853],[80.79,8.6926],[80.8059,8.7008],[80.8024,8.7094],[80.8027,8.7167],[80.8234,8.726],[80.8236,8.7391],[80.8302,8.7383],[80.8353,8.7472],[80.8495,8.7564],[80.8541,8.756],[80.8595,8.7605],[80.8695,8.7516],[80.8783,8.7506],[80.8781,8.766],[80.8805,8.7714],[80.8816,8.7874],[80.8863,8.794],[80.8892,8.7944],[80.8949,8.8091],[80.9101,8.8226],[80.9115,8.8269]]]}},{"type":"Feature","properties":{"n":"Kekirawa","d":"Anuradhapura","c":[80.622,8.0593]},"geometry":{"type":"Polygon","coordinates":[[[80.6574,7.9585],[80.6597,7.9645],[80.6547,7.9901],[80.6608,7.9929],[80.6648,7.9889],[80.6668,7.9931],[80.6605,8.0023],[80.6645,8.0375],[80.6604,8.0524],[80.6492,8.0642],[80.6631,8.0685],[80.6649,8.0714],[80.6629,8.0848],[80.6725,8.093],[80.6725,8.0987],[80.6638,8.1093],[80.6716,8.1107],[80.6898,8.1082],[80.7027,8.121],[80.7277,8.1314],[80.7277,8.1513],[80.7332,8.1616],[80.7343,8.1698],[80.7324,8.1728],[80.728,8.1703],[80.7263,8.1767],[80.7214,8.1732],[80.7169,8.1802],[80.7151,8.1925],[80.7067,8.1938],[80.7015,8.2024],[80.6914,8.2096],[80.6794,8.2114],[80.6754,8.2063],[80.6735,8.1951],[80.6624,8.1924],[80.6596,8.1807],[80.6545,8.1769],[80.653,8.1607],[80.6603,8.1548],[80.6548,8.1352],[80.6465,8.136],[80.6384,8.1416],[80.6411,8.1389],[80.6392,8.1207],[80.627,8.1106],[80.6209,8.1113],[80.6124,8.1221],[80.6111,8.1278],[80.6088,8.1254],[80.5999,8.1283],[80.5995,8.1308],[80.5955,8.1311],[80.592,8.1368],[80.5857,8.1407],[80.5877,8.1556],[80.5844,8.1588],[80.5854,8.1641],[80.5821,8.166],[80.5845,8.1729],[80.5833,8.1757],[80.5772,8.1744],[80.5777,8.1707],[80.5732,8.1719],[80.5687,8.1699],[80.5631,8.1649],[80.563,8.1581],[80.5478,8.151],[80.5454,8.142],[80.5486,8.1347],[80.5477,8.1303],[80.5527,8.1214],[80.5607,8.1209],[80.5613,8.1059],[80.5648,8.1043],[80.5664,8.0996],[80.5698,8.1001],[80.5739,8.0922],[80.574,8.0833],[80.5807,8.0679],[80.5767,8.0666],[80.5748,8.0684],[80.5704,8.0641],[80.5665,8.0636],[80.5503,8.0688],[80.5422,8.0679],[80.5411,8.0706],[80.5312,8.0646],[80.5325,8.0557],[80.5387,8.0495],[80.5418,8.039],[80.5478,8.0315],[80.548,8.0268],[80.5444,8.0285],[80.5434,8.0257],[80.5385,8.0321],[80.5349,8.0323],[80.5375,8.0132],[80.5363,8.0024],[80.5459,7.9874],[80.5495,7.9899],[80.5513,7.9886],[80.5502,7.9826],[80.5529,7.9796],[80.5467,7.9779],[80.5479,7.9748],[80.5557,7.9723],[80.553,7.9679],[80.5421,7.9681],[80.5568,7.9571],[80.5589,7.9528],[80.561,7.9539],[80.5633,7.9463],[80.5786,7.9512],[80.582,7.9491],[80.5827,7.958],[80.5863,7.958],[80.5853,7.9468],[80.5903,7.9356],[80.5928,7.9333],[80.5969,7.9358],[80.5948,7.9298],[80.6092,7.9401],[80.6157,7.9203],[80.6206,7.9162],[80.6255,7.9158],[80.6256,7.9098],[80.6302,7.9],[80.6519,7.9135],[80.6506,7.9435],[80.6544,7.9476],[80.6556,7.9591],[80.6574,7.9585]]]}},{"type":"Feature","properties":{"n":"Mahawilachchiya","d":"Anuradhapura","c":[80.1782,8.5388]},"geometry":{"type":"Polygon","coordinates":[[[80.1433,8.6572],[80.1128,8.6494],[80.1083,8.6519],[80.1031,8.6507],[80.0983,8.6543],[80.0921,8.6528],[80.0835,8.657],[80.0773,8.6542],[80.0678,8.6612],[80.0605,8.6618],[80.059,8.6657],[80.0419,8.6744],[80.0539,8.6392],[80.0506,8.5219],[80.0533,8.5223],[80.0564,8.5168],[80.0646,8.515],[80.0664,8.5097],[80.0733,8.5089],[80.0759,8.5023],[80.0817,8.4967],[80.0857,8.4969],[80.0914,8.4933],[80.0972,8.4955],[80.0985,8.4924],[80.1029,8.491],[80.1248,8.4946],[80.127,8.4378],[80.1431,8.4409],[80.1484,8.4385],[80.1538,8.4412],[80.1552,8.4399],[80.1555,8.4228],[80.1644,8.4118],[80.1652,8.4022],[80.1708,8.3889],[80.1867,8.3911],[80.2121,8.3827],[80.2131,8.3868],[80.2194,8.3871],[80.2273,8.4037],[80.2281,8.4121],[80.2318,8.4137],[80.243,8.4104],[80.2567,8.3946],[80.2607,8.3844],[80.2747,8.3902],[80.2789,8.395],[80.2814,8.4048],[80.2925,8.4098],[80.2757,8.4251],[80.28,8.4299],[80.2838,8.4299],[80.2881,8.4387],[80.2853,8.4488],[80.2787,8.4511],[80.2741,8.457],[80.2841,8.4684],[80.2859,8.4747],[80.2942,8.4843],[80.2964,8.4953],[80.3037,8.5035],[80.3008,8.5093],[80.2884,8.5164],[80.2879,8.5197],[80.2817,8.5234],[80.2838,8.5285],[80.2796,8.5398],[80.2825,8.5466],[80.2808,8.5497],[80.2832,8.5501],[80.2857,8.5591],[80.2822,8.5678],[80.2842,8.5709],[80.2826,8.5795],[80.2773,8.5832],[80.2793,8.5896],[80.2756,8.5899],[80.2718,8.5992],[80.2724,8.6098],[80.2563,8.6179],[80.251,8.614],[80.2477,8.6149],[80.2431,8.6183],[80.2435,8.6212],[80.2385,8.6284],[80.2339,8.629],[80.2366,8.637],[80.231,8.6527],[80.2363,8.664],[80.2334,8.6671],[80.2353,8.6697],[80.2331,8.6802],[80.1433,8.6572]]]}},{"type":"Feature","properties":{"n":"Medawachchiya","d":"Anuradhapura","c":[80.4943,8.5883]},"geometry":{"type":"Polygon","coordinates":[[[80.5668,8.7],[80.557,8.6993],[80.5509,8.6957],[80.5451,8.682],[80.5412,8.6785],[80.5286,8.6744],[80.518,8.6587],[80.5116,8.6601],[80.504,8.6579],[80.4952,8.6656],[80.4842,8.6685],[80.4836,8.6713],[80.4777,8.6739],[80.4688,8.6827],[80.4481,8.693],[80.4254,8.673],[80.4223,8.6737],[80.42,8.6622],[80.4072,8.6589],[80.3972,8.6337],[80.3779,8.6206],[80.3761,8.6103],[80.3809,8.6012],[80.3756,8.5961],[80.379,8.5882],[80.3768,8.5803],[80.3683,8.5743],[80.3622,8.5727],[80.3582,8.5755],[80.3506,8.5722],[80.3444,8.5661],[80.338,8.5542],[80.3379,8.547],[80.3405,8.5472],[80.3462,8.5417],[80.353,8.5406],[80.359,8.5335],[80.3611,8.5346],[80.3609,8.5302],[80.3774,8.523],[80.3792,8.5198],[80.3939,8.5213],[80.4006,8.5149],[80.4065,8.514],[80.4133,8.5093],[80.4319,8.5063],[80.4408,8.4954],[80.4487,8.4944],[80.4564,8.4902],[80.4716,8.4972],[80.4747,8.5051],[80.4866,8.505],[80.498,8.5112],[80.517,8.5094],[80.5261,8.5003],[80.5335,8.4995],[80.54,8.4903],[80.5451,8.4938],[80.5644,8.493],[80.5732,8.5002],[80.5767,8.4978],[80.5848,8.498],[80.5866,8.5032],[80.5948,8.5087],[80.5966,8.5144],[80.5922,8.5315],[80.5936,8.5495],[80.6242,8.5878],[80.6232,8.5944],[80.6341,8.6139],[80.6402,8.6177],[80.6413,8.6224],[80.6294,8.6265],[80.6175,8.6259],[80.6106,8.6396],[80.5972,8.6472],[80.5809,8.6922],[80.5725,8.6993],[80.5668,8.7]]]}},{"type":"Feature","properties":{"n":"Mihinthale","d":"Anuradhapura","c":[80.5429,8.3487]},"geometry":{"type":"Polygon","coordinates":[[[80.6549,8.3303],[80.6405,8.3396],[80.6222,8.3416],[80.6149,8.3391],[80.6153,8.3444],[80.6178,8.3468],[80.6114,8.3586],[80.6117,8.3642],[80.6133,8.3663],[80.6254,8.365],[80.6286,8.3677],[80.6288,8.377],[80.6263,8.3803],[80.6291,8.3867],[80.626,8.3887],[80.6206,8.389],[80.6173,8.3847],[80.6113,8.3854],[80.6022,8.3809],[80.6022,8.3974],[80.5949,8.3995],[80.5875,8.3964],[80.5757,8.3992],[80.5675,8.3938],[80.5559,8.3951],[80.5484,8.4035],[80.5463,8.4032],[80.5451,8.3969],[80.5428,8.4061],[80.5414,8.3969],[80.5366,8.3952],[80.5276,8.4049],[80.5211,8.4229],[80.5187,8.4221],[80.519,8.4197],[80.5085,8.4177],[80.5083,8.4213],[80.5066,8.4201],[80.5017,8.4269],[80.4943,8.4252],[80.4897,8.433],[80.4841,8.4297],[80.4819,8.4206],[80.4834,8.4149],[80.4725,8.4123],[80.4717,8.403],[80.4573,8.4011],[80.461,8.3909],[80.4546,8.3737],[80.4517,8.3739],[80.4521,8.3714],[80.4477,8.3682],[80.4493,8.3638],[80.4472,8.3618],[80.442,8.3667],[80.4391,8.3664],[80.4291,8.3594],[80.4316,8.3499],[80.4374,8.3498],[80.4388,8.3518],[80.4424,8.3459],[80.4422,8.3369],[80.4353,8.3408],[80.431,8.3398],[80.4332,8.3362],[80.4497,8.3376],[80.4543,8.335],[80.4644,8.3391],[80.4661,8.3428],[80.47,8.3391],[80.4786,8.3421],[80.4802,8.3385],[80.493,8.3398],[80.4944,8.3334],[80.499,8.3325],[80.4985,8.2873],[80.5081,8.2878],[80.5187,8.2787],[80.5187,8.2821],[80.5264,8.2911],[80.5421,8.2845],[80.5482,8.2777],[80.5654,8.2755],[80.5739,8.2699],[80.574,8.2886],[80.5846,8.2939],[80.5876,8.2866],[80.6098,8.2822],[80.6204,8.2916],[80.619,8.3069],[80.6266,8.303],[80.6279,8.3076],[80.6338,8.3122],[80.6388,8.3251],[80.653,8.3221],[80.6549,8.3303]]]}},{"type":"Feature","properties":{"n":"Nachchaduwa","d":"Anuradhapura","c":[80.4196,8.2531]},"geometry":{"type":"Polygon","coordinates":[[[80.3723,8.3159],[80.3684,8.3177],[80.3665,8.3131],[80.3593,8.315],[80.3534,8.3125],[80.3493,8.3157],[80.333,8.3031],[80.3355,8.2977],[80.3532,8.2975],[80.3525,8.2926],[80.3565,8.2913],[80.3595,8.2828],[80.3522,8.2804],[80.3543,8.2726],[80.3566,8.2722],[80.3571,8.2646],[80.367,8.2604],[80.3659,8.2572],[80.3711,8.2536],[80.3807,8.2613],[80.393,8.2604],[80.3953,8.2584],[80.3908,8.2552],[80.3877,8.244],[80.3753,8.2332],[80.3857,8.2306],[80.3864,8.2282],[80.3802,8.2217],[80.3866,8.2176],[80.3967,8.2204],[80.4043,8.2079],[80.4059,8.1869],[80.3984,8.1764],[80.4001,8.1676],[80.4036,8.1679],[80.4,8.1705],[80.4028,8.1777],[80.4136,8.1882],[80.4158,8.1981],[80.4227,8.2023],[80.4277,8.2092],[80.429,8.2021],[80.4329,8.2009],[80.4335,8.2107],[80.4437,8.2169],[80.4462,8.2263],[80.4511,8.2243],[80.4693,8.2043],[80.4882,8.2258],[80.4907,8.2252],[80.4859,8.2354],[80.4879,8.2429],[80.4893,8.2392],[80.4946,8.2396],[80.4968,8.2351],[80.4998,8.2421],[80.5056,8.2392],[80.5074,8.2331],[80.5125,8.2332],[80.5103,8.2377],[80.5172,8.2397],[80.5135,8.2477],[80.5089,8.2473],[80.5079,8.2528],[80.5047,8.2528],[80.504,8.2494],[80.4993,8.2508],[80.4968,8.2591],[80.494,8.2543],[80.4903,8.2558],[80.4862,8.2516],[80.4848,8.2556],[80.4901,8.2588],[80.4896,8.2656],[80.4924,8.2699],[80.4899,8.2716],[80.4842,8.269],[80.4807,8.2718],[80.4657,8.2633],[80.4543,8.2639],[80.4525,8.2617],[80.4475,8.2629],[80.4465,8.266],[80.4346,8.2672],[80.4338,8.272],[80.4309,8.2739],[80.4249,8.2707],[80.4198,8.2726],[80.4143,8.2862],[80.4123,8.2849],[80.4042,8.2905],[80.4005,8.2902],[80.3947,8.2991],[80.3921,8.2988],[80.392,8.3091],[80.3887,8.3139],[80.3794,8.3108],[80.3723,8.3159]]]}},{"type":"Feature","properties":{"n":"Nochchiyagama","d":"Anuradhapura","c":[80.1224,8.3323]},"geometry":{"type":"Polygon","coordinates":[[[80.0765,8.2231],[80.0831,8.2327],[80.0887,8.2323],[80.0904,8.2285],[80.0955,8.2295],[80.1024,8.2268],[80.1068,8.2309],[80.1231,8.2361],[80.1208,8.2304],[80.112,8.2263],[80.1203,8.2231],[80.1184,8.2212],[80.1242,8.2197],[80.1302,8.2242],[80.1269,8.2268],[80.128,8.2289],[80.1372,8.2334],[80.1348,8.2371],[80.1284,8.2373],[80.1397,8.2485],[80.1403,8.2372],[80.1425,8.2385],[80.1679,8.2278],[80.1683,8.2212],[80.1738,8.2184],[80.1709,8.2134],[80.1753,8.2101],[80.1697,8.2061],[80.1805,8.1926],[80.1886,8.197],[80.1936,8.2058],[80.2008,8.2065],[80.2035,8.2051],[80.2034,8.1966],[80.2085,8.1959],[80.2112,8.1929],[80.2141,8.1941],[80.2131,8.1904],[80.2163,8.1848],[80.2194,8.1903],[80.2227,8.1888],[80.2186,8.1798],[80.2208,8.1782],[80.2243,8.1802],[80.2277,8.1778],[80.2338,8.1826],[80.2356,8.1783],[80.2419,8.1812],[80.243,8.1776],[80.2501,8.1767],[80.2621,8.181],[80.2663,8.188],[80.2644,8.1931],[80.2681,8.1955],[80.268,8.1983],[80.3027,8.2107],[80.31,8.2207],[80.3045,8.2137],[80.2945,8.2188],[80.2958,8.2255],[80.2884,8.2208],[80.2858,8.2219],[80.2869,8.2317],[80.2812,8.2377],[80.2831,8.2436],[80.287,8.2461],[80.2834,8.2525],[80.2799,8.254],[80.2798,8.2641],[80.285,8.2758],[80.286,8.2852],[80.2882,8.2829],[80.2926,8.2834],[80.2916,8.2892],[80.2936,8.2913],[80.2852,8.2909],[80.2865,8.2949],[80.2815,8.3064],[80.279,8.3302],[80.2721,8.333],[80.2701,8.3516],[80.2675,8.3572],[80.273,8.3618],[80.2737,8.3664],[80.2696,8.3656],[80.2706,8.3752],[80.2684,8.3832],[80.2642,8.3861],[80.2607,8.3844],[80.2567,8.3946],[80.243,8.4104],[80.2318,8.4137],[80.2281,8.4121],[80.2273,8.4037],[80.2194,8.3871],[80.2131,8.3868],[80.2121,8.3827],[80.1867,8.3911],[80.1708,8.3889],[80.1652,8.4022],[80.1644,8.4118],[80.1555,8.4228],[80.1552,8.4399],[80.1538,8.4412],[80.1484,8.4385],[80.1431,8.4409],[80.127,8.4378],[80.1248,8.4946],[80.1197,8.495],[80.1137,8.4914],[80.1029,8.491],[80.0985,8.4924],[80.0972,8.4955],[80.0914,8.4933],[80.0857,8.4969],[80.0817,8.4967],[80.0759,8.5023],[80.0733,8.5089],[80.0664,8.5097],[80.0646,8.515],[80.0564,8.5168],[80.0559,8.5201],[80.0506,8.5219],[80.0498,8.5249],[80.0309,8.5262],[80.0411,8.4988],[80.0302,8.4661],[80.0131,8.4399],[80.0047,8.4369],[80.0038,8.4335],[79.9979,8.4329],[79.9941,8.4265],[79.9868,8.4217],[79.986,8.4188],[79.9892,8.4156],[79.9837,8.4119],[79.9792,8.3993],[79.9618,8.3995],[79.9533,8.3947],[79.9497,8.3696],[79.9727,8.3381],[79.9739,8.3251],[79.9793,8.3081],[79.9774,8.3043],[79.9829,8.2859],[79.9805,8.2775],[79.9943,8.2535],[79.9979,8.2275],[80.0055,8.2287],[80.0215,8.2245],[80.0353,8.2363],[80.061,8.2189],[80.0765,8.2231]]]}},{"type":"Feature","properties":{"n":"Nuwaragam Palatha Central","d":"Anuradhapura","c":[80.3497,8.415]},"geometry":{"type":"Polygon","coordinates":[[[80.2642,8.3861],[80.2684,8.3832],[80.2706,8.3752],[80.2696,8.3656],[80.2737,8.3664],[80.273,8.3618],[80.2675,8.3572],[80.2701,8.3516],[80.2721,8.333],[80.279,8.3302],[80.2815,8.3064],[80.2865,8.2949],[80.2852,8.2909],[80.2936,8.2913],[80.2985,8.2956],[80.3053,8.2911],[80.3135,8.292],[80.3178,8.2871],[80.3244,8.2858],[80.3266,8.2801],[80.3346,8.2817],[80.3366,8.2755],[80.34,8.2755],[80.3595,8.2828],[80.3565,8.2913],[80.3525,8.2926],[80.3532,8.2975],[80.3355,8.2977],[80.333,8.3031],[80.3361,8.3067],[80.3431,8.3092],[80.3493,8.3157],[80.3562,8.3175],[80.3609,8.3266],[80.3662,8.3252],[80.3692,8.3353],[80.3733,8.3337],[80.3747,8.3199],[80.3723,8.3159],[80.3794,8.3108],[80.3887,8.3139],[80.3892,8.3222],[80.3965,8.3287],[80.3959,8.3337],[80.4014,8.3434],[80.4054,8.343],[80.407,8.3517],[80.4199,8.3564],[80.4296,8.3537],[80.4291,8.3594],[80.4391,8.3664],[80.442,8.3667],[80.4472,8.3618],[80.4493,8.3638],[80.4477,8.3682],[80.4521,8.3714],[80.4517,8.3739],[80.4546,8.3737],[80.461,8.3909],[80.4604,8.3956],[80.4567,8.3992],[80.459,8.4039],[80.455,8.4064],[80.4575,8.4082],[80.4543,8.4128],[80.4542,8.4266],[80.4509,8.4295],[80.4485,8.4411],[80.4289,8.4502],[80.4216,8.45],[80.4145,8.4461],[80.4081,8.4472],[80.4047,8.4518],[80.4025,8.4646],[80.3968,8.4656],[80.3964,8.4694],[80.4002,8.476],[80.3977,8.4941],[80.3911,8.5056],[80.3911,8.5093],[80.3941,8.511],[80.3939,8.5213],[80.3792,8.5198],[80.3774,8.523],[80.3609,8.5302],[80.3611,8.5346],[80.359,8.5335],[80.353,8.5406],[80.3462,8.5417],[80.3405,8.5472],[80.3351,8.5456],[80.3315,8.5474],[80.3303,8.5459],[80.3261,8.5492],[80.3247,8.5473],[80.32,8.5494],[80.3151,8.5478],[80.3096,8.5512],[80.3091,8.5555],[80.3027,8.5585],[80.2962,8.558],[80.2921,8.5609],[80.2857,8.5591],[80.2832,8.5501],[80.2808,8.5497],[80.2825,8.5466],[80.2796,8.5398],[80.2838,8.5285],[80.2817,8.5234],[80.2879,8.5197],[80.2884,8.5164],[80.3008,8.5093],[80.3037,8.5035],[80.2964,8.4953],[80.2942,8.4843],[80.2859,8.4747],[80.2841,8.4684],[80.2741,8.457],[80.2787,8.4511],[80.2853,8.4488],[80.2881,8.4387],[80.2838,8.4299],[80.28,8.4299],[80.2757,8.4251],[80.2925,8.4098],[80.2814,8.4048],[80.2789,8.395],[80.2747,8.3902],[80.2642,8.3861]]]}},{"type":"Feature","properties":{"n":"Nuwaragam Palatha East","d":"Anuradhapura","c":[80.4463,8.3083]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.3723,8.3159],[80.3747,8.3199],[80.3733,8.3337],[80.3692,8.3353],[80.3662,8.3252],[80.3609,8.3266],[80.3562,8.3175],[80.3493,8.3157],[80.3534,8.3125],[80.3593,8.315],[80.3665,8.3131],[80.3684,8.3177],[80.3723,8.3159]]],[[[80.4296,8.3537],[80.4199,8.3564],[80.407,8.3517],[80.4054,8.343],[80.4014,8.3434],[80.3959,8.3337],[80.3965,8.3287],[80.3892,8.3222],[80.3921,8.2988],[80.3947,8.2991],[80.4005,8.2902],[80.4042,8.2905],[80.4123,8.2849],[80.4143,8.2862],[80.4198,8.2726],[80.4249,8.2707],[80.4309,8.2739],[80.4338,8.272],[80.4346,8.2672],[80.4465,8.266],[80.4475,8.2629],[80.4657,8.2633],[80.4736,8.2664],[80.4761,8.2702],[80.4858,8.2725],[80.4984,8.2843],[80.499,8.3325],[80.4944,8.3334],[80.493,8.3398],[80.4802,8.3385],[80.4786,8.3421],[80.47,8.3391],[80.4661,8.3428],[80.4644,8.3391],[80.4543,8.335],[80.4497,8.3376],[80.4332,8.3362],[80.431,8.3398],[80.4353,8.3408],[80.4422,8.3369],[80.4424,8.3459],[80.4388,8.3518],[80.4337,8.3491],[80.4296,8.3537]]]]}},{"type":"Feature","properties":{"n":"Padaviya","d":"Anuradhapura","c":[80.7842,8.8506]},"geometry":{"type":"Polygon","coordinates":[[[80.9106,8.8324],[80.897,8.8467],[80.883,8.8693],[80.8769,8.8717],[80.8718,8.8784],[80.8378,8.8972],[80.8278,8.8997],[80.822,8.9078],[80.8169,8.909],[80.8097,8.9162],[80.7842,8.9214],[80.7758,8.9149],[80.7531,8.9056],[80.7231,8.8979],[80.7115,8.8993],[80.6879,8.8879],[80.6809,8.8803],[80.6661,8.8718],[80.6753,8.8637],[80.6754,8.8599],[80.6798,8.8554],[80.6791,8.8511],[80.6855,8.8441],[80.6861,8.8396],[80.6987,8.8303],[80.7086,8.8288],[80.7116,8.8196],[80.7276,8.811],[80.7234,8.8064],[80.7192,8.8073],[80.7142,8.8047],[80.7208,8.8051],[80.7214,8.801],[80.7271,8.8019],[80.7281,8.7944],[80.7298,8.7931],[80.7308,8.7952],[80.7331,8.7913],[80.7298,8.7884],[80.7314,8.7845],[80.7281,8.7832],[80.7288,8.7801],[80.726,8.7783],[80.7338,8.7712],[80.7361,8.7715],[80.7373,8.7771],[80.7431,8.783],[80.7457,8.7935],[80.7472,8.7936],[80.7462,8.787],[80.7489,8.7868],[80.7525,8.7911],[80.7539,8.7847],[80.7605,8.7928],[80.7638,8.7919],[80.7674,8.7955],[80.7678,8.7849],[80.7739,8.7922],[80.7771,8.792],[80.7761,8.7834],[80.7797,8.7683],[80.7782,8.7556],[80.7878,8.7705],[80.7881,8.7867],[80.7947,8.7888],[80.7885,8.8021],[80.805,8.8014],[80.8039,8.7887],[80.8128,8.7923],[80.8248,8.7923],[80.8346,8.8057],[80.8445,8.8101],[80.8569,8.8114],[80.8636,8.8165],[80.864,8.8194],[80.8741,8.8259],[80.8866,8.8235],[80.8914,8.8266],[80.9014,8.8248],[80.9115,8.8269],[80.9106,8.8324]]]}},{"type":"Feature","properties":{"n":"Palagala","d":"Anuradhapura","c":[80.5354,7.9052]},"geometry":{"type":"Polygon","coordinates":[[[80.6302,7.9],[80.6256,7.9098],[80.6255,7.9158],[80.6206,7.9162],[80.6157,7.9203],[80.6092,7.9401],[80.5948,7.9298],[80.5975,7.9347],[80.5928,7.9333],[80.5903,7.9356],[80.5853,7.9468],[80.5863,7.958],[80.5827,7.958],[80.582,7.9491],[80.5786,7.9512],[80.5633,7.9463],[80.561,7.9539],[80.5589,7.9528],[80.5568,7.9571],[80.5421,7.9681],[80.553,7.9679],[80.5557,7.9723],[80.5479,7.9748],[80.5467,7.9779],[80.5529,7.9796],[80.5502,7.9826],[80.5513,7.9886],[80.5495,7.9899],[80.5459,7.9874],[80.5421,7.9909],[80.5436,7.9937],[80.5394,7.9951],[80.5304,7.9912],[80.5241,7.9935],[80.5172,7.9983],[80.5148,8.0052],[80.5119,8.0008],[80.5097,8.0024],[80.5068,7.9902],[80.5019,7.9893],[80.4949,7.9822],[80.4957,7.9745],[80.4913,7.9596],[80.4921,7.948],[80.472,7.9508],[80.4594,7.9484],[80.4583,7.9453],[80.4625,7.9092],[80.4673,7.9001],[80.4727,7.8964],[80.4778,7.8807],[80.4729,7.8566],[80.4668,7.8498],[80.4765,7.8419],[80.4777,7.8311],[80.4814,7.8291],[80.4818,7.8232],[80.4894,7.8192],[80.4992,7.8166],[80.5001,7.8268],[80.524,7.8268],[80.5617,7.8484],[80.5723,7.8688],[80.5887,7.8671],[80.5924,7.8573],[80.5983,7.8552],[80.6059,7.8611],[80.612,7.8603],[80.6139,7.8668],[80.6196,7.8677],[80.6216,7.8702],[80.6211,7.8836],[80.6362,7.8881],[80.636,7.8939],[80.6328,7.8946],[80.6302,7.9]]]}},{"type":"Feature","properties":{"n":"Palugaswewa","d":"Anuradhapura","c":[80.7181,8.0812]},"geometry":{"type":"Polygon","coordinates":[[[80.7536,8.0112],[80.7528,8.0151],[80.7619,8.0189],[80.759,8.0204],[80.7602,8.0287],[80.7553,8.0365],[80.7558,8.0431],[80.7686,8.0583],[80.7683,8.0677],[80.7578,8.0672],[80.755,8.0698],[80.7561,8.1335],[80.7609,8.1447],[80.7582,8.1507],[80.7844,8.2042],[80.7875,8.2301],[80.7726,8.2304],[80.769,8.2245],[80.7623,8.2257],[80.7594,8.2224],[80.7506,8.2221],[80.7506,8.2182],[80.7466,8.2161],[80.7465,8.2129],[80.7391,8.2163],[80.7406,8.2116],[80.7343,8.2112],[80.7342,8.2059],[80.7319,8.2059],[80.7374,8.204],[80.7421,8.1989],[80.741,8.1967],[80.7365,8.1934],[80.7328,8.1982],[80.7297,8.1897],[80.7284,8.1922],[80.722,8.1901],[80.7184,8.1937],[80.7151,8.1925],[80.7169,8.1802],[80.7214,8.1732],[80.7263,8.1767],[80.728,8.1703],[80.7324,8.1728],[80.7343,8.1698],[80.7332,8.1616],[80.7277,8.1513],[80.7277,8.1314],[80.7027,8.121],[80.6898,8.1082],[80.6716,8.1107],[80.6638,8.1093],[80.6725,8.0987],[80.6725,8.093],[80.6629,8.0848],[80.6649,8.0714],[80.6631,8.0685],[80.6492,8.0642],[80.6604,8.0524],[80.6645,8.0375],[80.6605,8.0023],[80.6668,7.9931],[80.6648,7.9889],[80.6608,7.9929],[80.6547,7.9901],[80.6597,7.9645],[80.6574,7.9585],[80.6652,7.9612],[80.6798,7.9553],[80.7033,7.9903],[80.7099,7.9899],[80.7232,7.9995],[80.7425,8.0045],[80.7536,8.0112]]]}},{"type":"Feature","properties":{"n":"Rajanganaya","d":"Anuradhapura","c":[80.1775,8.1852]},"geometry":{"type":"Polygon","coordinates":[[[80.2751,8.1163],[80.2791,8.1195],[80.2663,8.1185],[80.2699,8.1248],[80.2638,8.1256],[80.2552,8.134],[80.271,8.1356],[80.272,8.1399],[80.2681,8.1393],[80.2707,8.156],[80.2628,8.1731],[80.2506,8.1747],[80.2501,8.1767],[80.243,8.1776],[80.2419,8.1812],[80.2356,8.1783],[80.2338,8.1826],[80.2277,8.1778],[80.2243,8.1802],[80.2208,8.1782],[80.2186,8.1798],[80.2227,8.1888],[80.2194,8.1903],[80.2163,8.1848],[80.2131,8.1904],[80.2141,8.1941],[80.2112,8.1929],[80.2085,8.1959],[80.2034,8.1966],[80.2035,8.2051],[80.2008,8.2065],[80.1936,8.2058],[80.1886,8.197],[80.1805,8.1926],[80.1697,8.2061],[80.1753,8.2101],[80.1709,8.2134],[80.1738,8.2184],[80.1683,8.2212],[80.1679,8.2278],[80.1425,8.2385],[80.1403,8.2372],[80.1397,8.2485],[80.1284,8.2373],[80.1348,8.2371],[80.1372,8.2334],[80.128,8.2289],[80.1269,8.2268],[80.1302,8.2242],[80.1242,8.2197],[80.1184,8.2212],[80.1203,8.2231],[80.112,8.2263],[80.1208,8.2304],[80.1231,8.2361],[80.1068,8.2309],[80.1024,8.2268],[80.0955,8.2295],[80.0904,8.2285],[80.0887,8.2323],[80.0831,8.2327],[80.0777,8.2265],[80.0765,8.2231],[80.0842,8.2106],[80.0941,8.2086],[80.0981,8.1977],[80.1076,8.1938],[80.1074,8.1886],[80.1172,8.1848],[80.1197,8.1807],[80.1485,8.1748],[80.1579,8.1658],[80.165,8.1631],[80.1817,8.1618],[80.1853,8.1509],[80.2037,8.1532],[80.2107,8.144],[80.2322,8.1394],[80.2505,8.1325],[80.264,8.1155],[80.2751,8.1163]]]}},{"type":"Feature","properties":{"n":"Rambewa","d":"Anuradhapura","c":[80.5484,8.4751]},"geometry":{"type":"Polygon","coordinates":[[[80.6581,8.5532],[80.6517,8.5575],[80.6474,8.5648],[80.6441,8.5806],[80.6395,8.5872],[80.6242,8.5878],[80.5936,8.5495],[80.5922,8.5315],[80.5966,8.5144],[80.5948,8.5087],[80.5866,8.5032],[80.5848,8.498],[80.5767,8.4978],[80.5732,8.5002],[80.5644,8.493],[80.5451,8.4938],[80.54,8.4903],[80.5335,8.4995],[80.5261,8.5003],[80.517,8.5094],[80.498,8.5112],[80.4866,8.505],[80.4747,8.5051],[80.4716,8.4972],[80.4564,8.4902],[80.4487,8.4944],[80.4408,8.4954],[80.4319,8.5063],[80.4133,8.5093],[80.4065,8.514],[80.4006,8.5149],[80.3939,8.5213],[80.3941,8.511],[80.3911,8.5093],[80.3911,8.5056],[80.3977,8.4941],[80.4002,8.476],[80.3964,8.4694],[80.3968,8.4656],[80.4025,8.4646],[80.4047,8.4518],[80.4081,8.4472],[80.4145,8.4461],[80.4216,8.45],[80.4289,8.4502],[80.4485,8.4411],[80.4509,8.4295],[80.4542,8.4266],[80.4543,8.4128],[80.4575,8.4082],[80.455,8.4064],[80.459,8.4039],[80.4573,8.4011],[80.4717,8.403],[80.4725,8.4123],[80.4834,8.4149],[80.4819,8.4206],[80.4841,8.4297],[80.4897,8.433],[80.4943,8.4252],[80.5017,8.4269],[80.5066,8.4201],[80.5083,8.4213],[80.5085,8.4177],[80.519,8.4197],[80.5187,8.4221],[80.5211,8.4229],[80.5276,8.4049],[80.5366,8.3952],[80.5414,8.3969],[80.5428,8.4061],[80.5451,8.3969],[80.5463,8.4032],[80.5484,8.4035],[80.5559,8.3951],[80.5675,8.3938],[80.5757,8.3992],[80.5875,8.3964],[80.5949,8.3995],[80.6016,8.416],[80.5997,8.4229],[80.6198,8.4342],[80.62,8.439],[80.6159,8.447],[80.6193,8.4534],[80.6299,8.4545],[80.6374,8.4503],[80.6491,8.452],[80.6516,8.4568],[80.6578,8.4587],[80.6644,8.4679],[80.6694,8.4712],[80.6744,8.4711],[80.6768,8.4748],[80.674,8.4883],[80.6599,8.4929],[80.6531,8.5],[80.6544,8.506],[80.6589,8.5093],[80.6576,8.5184],[80.6662,8.5266],[80.6592,8.5404],[80.6581,8.5532]]]}},{"type":"Feature","properties":{"n":"Thalawa","d":"Anuradhapura","c":[80.3785,8.1834]},"geometry":{"type":"Polygon","coordinates":[[[80.4084,8.0882],[80.4138,8.0974],[80.4181,8.0989],[80.4239,8.0953],[80.4276,8.0994],[80.4324,8.0986],[80.432,8.1055],[80.4356,8.1089],[80.4409,8.1068],[80.4576,8.1097],[80.4643,8.1189],[80.4701,8.1161],[80.4661,8.1235],[80.4616,8.1228],[80.4586,8.1257],[80.4584,8.1299],[80.4621,8.1307],[80.465,8.1354],[80.4756,8.1407],[80.4893,8.1392],[80.4825,8.1447],[80.4678,8.1442],[80.4562,8.1395],[80.4576,8.144],[80.4532,8.1485],[80.4566,8.157],[80.4548,8.1582],[80.4655,8.1594],[80.466,8.1688],[80.463,8.1685],[80.4583,8.1792],[80.4586,8.1838],[80.4652,8.1945],[80.47,8.1978],[80.4672,8.201],[80.4612,8.1968],[80.4591,8.1999],[80.452,8.199],[80.4502,8.2014],[80.4476,8.1965],[80.4441,8.1952],[80.4452,8.2053],[80.4335,8.2107],[80.4329,8.2009],[80.429,8.2021],[80.4277,8.2092],[80.4227,8.2023],[80.4158,8.1981],[80.4136,8.1882],[80.4028,8.1777],[80.4,8.1705],[80.4036,8.1679],[80.4001,8.1676],[80.3984,8.1764],[80.4059,8.1869],[80.4043,8.2079],[80.3967,8.2204],[80.3866,8.2176],[80.3802,8.2217],[80.3864,8.2282],[80.3857,8.2306],[80.3753,8.2332],[80.3877,8.244],[80.3908,8.2552],[80.3953,8.2584],[80.393,8.2604],[80.3807,8.2613],[80.3711,8.2536],[80.3659,8.2572],[80.367,8.2604],[80.3571,8.2646],[80.3566,8.2722],[80.3543,8.2726],[80.3522,8.2804],[80.3366,8.2755],[80.3346,8.2817],[80.3266,8.2801],[80.3244,8.2858],[80.3178,8.2871],[80.3135,8.292],[80.3084,8.2904],[80.2985,8.2956],[80.2956,8.2947],[80.2916,8.2892],[80.2926,8.2834],[80.2882,8.2829],[80.286,8.2852],[80.285,8.2758],[80.2798,8.2641],[80.2799,8.254],[80.2834,8.2525],[80.287,8.2461],[80.2831,8.2436],[80.2812,8.2377],[80.2869,8.2317],[80.2858,8.2219],[80.2884,8.2208],[80.2958,8.2255],[80.2945,8.2188],[80.3045,8.2137],[80.313,8.2247],[80.3189,8.2247],[80.3204,8.2272],[80.3332,8.2226],[80.3412,8.2249],[80.3467,8.2222],[80.3434,8.2165],[80.3446,8.2101],[80.3473,8.2091],[80.3428,8.2025],[80.3444,8.1985],[80.3492,8.1962],[80.3488,8.1932],[80.3525,8.1923],[80.3499,8.1908],[80.3534,8.1868],[80.3528,8.1825],[80.3582,8.178],[80.3561,8.1702],[80.354,8.1705],[80.3551,8.1681],[80.3459,8.1637],[80.3469,8.1562],[80.343,8.162],[80.3329,8.1557],[80.338,8.1531],[80.3428,8.1415],[80.3374,8.127],[80.3323,8.1222],[80.3382,8.1209],[80.343,8.1139],[80.3478,8.1132],[80.3519,8.106],[80.3655,8.1003],[80.3763,8.0915],[80.3962,8.0866],[80.3988,8.0828],[80.4048,8.0841],[80.4061,8.0883],[80.4084,8.0882]]]}},{"type":"Feature","properties":{"n":"Thambuththegama","d":"Anuradhapura","c":[80.3144,8.1555]},"geometry":{"type":"Polygon","coordinates":[[[80.3597,8.0668],[80.3584,8.0705],[80.3639,8.077],[80.3662,8.074],[80.3738,8.0752],[80.3741,8.0859],[80.3774,8.0828],[80.3833,8.0848],[80.3815,8.0895],[80.3675,8.097],[80.3655,8.1003],[80.3584,8.102],[80.3559,8.1059],[80.3519,8.106],[80.3478,8.1132],[80.343,8.1139],[80.3352,8.1227],[80.3323,8.1222],[80.3374,8.127],[80.3428,8.1415],[80.338,8.1531],[80.3329,8.1557],[80.343,8.162],[80.3469,8.1562],[80.3459,8.1637],[80.3551,8.1681],[80.354,8.1705],[80.3561,8.1702],[80.3582,8.178],[80.3528,8.1825],[80.3534,8.1868],[80.3499,8.1908],[80.3525,8.1923],[80.3488,8.1932],[80.3492,8.1962],[80.3444,8.1985],[80.3428,8.2025],[80.3473,8.2091],[80.3446,8.2101],[80.3434,8.2165],[80.3467,8.2222],[80.3412,8.2249],[80.3332,8.2226],[80.3204,8.2272],[80.3189,8.2247],[80.313,8.2247],[80.3027,8.2107],[80.268,8.1983],[80.2681,8.1955],[80.2644,8.1931],[80.2663,8.188],[80.2621,8.181],[80.2491,8.1757],[80.2565,8.1726],[80.2628,8.1731],[80.2707,8.156],[80.2675,8.1429],[80.2681,8.1393],[80.272,8.1399],[80.271,8.1356],[80.2552,8.134],[80.2638,8.1256],[80.2699,8.1248],[80.2663,8.1185],[80.2791,8.1195],[80.2751,8.1163],[80.2794,8.1155],[80.285,8.1187],[80.2873,8.1161],[80.2897,8.1187],[80.2964,8.1154],[80.3072,8.1181],[80.3112,8.1135],[80.3152,8.1136],[80.3213,8.1034],[80.3219,8.098],[80.3272,8.0957],[80.3314,8.0892],[80.3375,8.0889],[80.3377,8.0847],[80.3433,8.0803],[80.3472,8.0807],[80.3597,8.0668]]]}},{"type":"Feature","properties":{"n":"Thirappane","d":"Anuradhapura","c":[80.5548,8.2063]},"geometry":{"type":"Polygon","coordinates":[[[80.6266,8.303],[80.619,8.3069],[80.6204,8.2916],[80.6098,8.2822],[80.5876,8.2866],[80.5846,8.2939],[80.574,8.2886],[80.5739,8.2699],[80.5654,8.2755],[80.5482,8.2777],[80.5421,8.2845],[80.5264,8.2911],[80.5187,8.2821],[80.5187,8.2787],[80.5081,8.2878],[80.4985,8.2873],[80.4984,8.2843],[80.4822,8.2709],[80.4842,8.269],[80.4899,8.2716],[80.4924,8.2699],[80.4896,8.2656],[80.4901,8.2588],[80.4848,8.2556],[80.4876,8.2513],[80.4903,8.2558],[80.494,8.2543],[80.4968,8.2591],[80.4993,8.2508],[80.504,8.2494],[80.5047,8.2528],[80.5079,8.2528],[80.5089,8.2473],[80.5135,8.2477],[80.5163,8.2446],[80.5172,8.2397],[80.5103,8.2377],[80.5125,8.2332],[80.5074,8.2331],[80.5056,8.2392],[80.4998,8.2421],[80.4968,8.2351],[80.4946,8.2396],[80.4893,8.2392],[80.4879,8.2429],[80.4859,8.2354],[80.4907,8.2252],[80.4882,8.2258],[80.4693,8.2043],[80.4511,8.2243],[80.4462,8.2263],[80.4437,8.2169],[80.4335,8.2107],[80.4452,8.2053],[80.4441,8.1952],[80.4476,8.1965],[80.4502,8.2014],[80.452,8.199],[80.4591,8.1999],[80.4612,8.1968],[80.4672,8.201],[80.47,8.1978],[80.4652,8.1945],[80.4586,8.1838],[80.4583,8.1792],[80.463,8.1685],[80.466,8.1688],[80.4661,8.1618],[80.4655,8.1594],[80.4548,8.1582],[80.4566,8.157],[80.4532,8.1485],[80.4576,8.144],[80.4562,8.1395],[80.4678,8.1442],[80.4825,8.1447],[80.4915,8.1384],[80.4961,8.1396],[80.4976,8.1481],[80.5053,8.1482],[80.5155,8.1525],[80.52,8.1489],[80.5267,8.1475],[80.5305,8.1258],[80.5328,8.1247],[80.5477,8.1303],[80.5486,8.1347],[80.5454,8.142],[80.5478,8.151],[80.563,8.1581],[80.5631,8.1649],[80.5687,8.1699],[80.5732,8.1719],[80.5777,8.1707],[80.5772,8.1744],[80.5833,8.1757],[80.5845,8.1729],[80.5821,8.166],[80.5854,8.1641],[80.5844,8.1588],[80.5877,8.1556],[80.5857,8.1407],[80.5889,8.1372],[80.605,8.126],[80.6088,8.1254],[80.6111,8.1278],[80.6124,8.1221],[80.6209,8.1113],[80.627,8.1106],[80.638,8.1181],[80.6411,8.1389],[80.6384,8.1416],[80.6465,8.136],[80.6548,8.1352],[80.6603,8.1548],[80.653,8.1607],[80.6534,8.1642],[80.6361,8.1642],[80.6416,8.1729],[80.6398,8.1831],[80.63,8.1858],[80.6271,8.1907],[80.6203,8.194],[80.6147,8.1908],[80.6087,8.1955],[80.6105,8.2042],[80.6132,8.206],[80.6131,8.2125],[80.6088,8.2226],[80.5981,8.2298],[80.5996,8.2402],[80.598,8.247],[80.6025,8.246],[80.6055,8.2483],[80.6112,8.2461],[80.6255,8.2504],[80.6329,8.2666],[80.644,8.2691],[80.6432,8.2852],[80.6398,8.286],[80.6357,8.2982],[80.6266,8.303]]]}},{"type":"Feature","properties":{"n":"Badulla","d":"Badulla","c":[81.087,6.9862]},"geometry":{"type":"Polygon","coordinates":[[[81.0996,7.0166],[81.0898,7.0134],[81.0841,7.0183],[81.0791,7.0122],[81.0727,7.0162],[81.0614,7.017],[81.0621,7.0126],[81.051,7.0123],[81.0406,6.9963],[81.0373,6.9821],[81.0458,6.9798],[81.0506,6.985],[81.0562,6.9744],[81.0594,6.9736],[81.0686,6.9596],[81.07,6.9613],[81.0676,6.9685],[81.07,6.9729],[81.078,6.9732],[81.0827,6.9684],[81.0868,6.9576],[81.0936,6.9561],[81.1047,6.945],[81.1107,6.9446],[81.1245,6.9635],[81.1273,6.9743],[81.1208,6.9818],[81.121,6.9869],[81.1259,6.991],[81.1143,7.0069],[81.0996,7.0166]]]}},{"type":"Feature","properties":{"n":"Bandarawela","d":"Badulla","c":[81.0044,6.8294]},"geometry":{"type":"Polygon","coordinates":[[[81.0033,6.8743],[80.9901,6.8705],[80.9826,6.8651],[80.9694,6.8735],[80.9655,6.8715],[80.9572,6.877],[80.9509,6.876],[80.9498,6.8728],[80.9532,6.8684],[80.9485,6.8625],[80.9494,6.8577],[80.9462,6.8446],[80.952,6.834],[80.9581,6.8339],[80.9642,6.827],[80.9697,6.8313],[80.9704,6.8384],[80.9754,6.8394],[80.976,6.8418],[80.9826,6.8421],[80.9846,6.8473],[80.9893,6.8462],[80.9786,6.8373],[80.9813,6.8297],[80.9801,6.8251],[80.9783,6.8226],[80.9743,6.8235],[80.9735,6.8125],[80.9708,6.8095],[80.9718,6.8057],[80.9751,6.8038],[80.9737,6.7993],[80.9778,6.7982],[80.9819,6.7898],[80.9985,6.7967],[81.0055,6.7926],[81.0153,6.8045],[81.02,6.7933],[81.0228,6.7961],[81.0275,6.7895],[81.0317,6.7878],[81.036,6.7903],[81.0426,6.7902],[81.0532,6.8051],[81.064,6.8128],[81.0761,6.8137],[81.073,6.8189],[81.0643,6.8245],[81.0547,6.8386],[81.0499,6.8375],[81.0362,6.8455],[81.0311,6.8434],[81.0252,6.8454],[81.0183,6.8376],[81.0139,6.8372],[81.0138,6.8395],[81.01,6.8401],[81.0004,6.8353],[81.0004,6.8388],[81.0064,6.8482],[81.0033,6.8743]]]}},{"type":"Feature","properties":{"n":"Ella","d":"Badulla","c":[81.0642,6.8676]},"geometry":{"type":"Polygon","coordinates":[[[81.1243,6.8789],[81.114,6.8798],[81.1111,6.8763],[81.1075,6.8837],[81.1077,6.9103],[81.0958,6.9114],[81.0901,6.907],[81.086,6.9123],[81.0825,6.9128],[81.0797,6.9105],[81.077,6.9145],[81.076,6.9121],[81.0724,6.9133],[81.0559,6.91],[81.0494,6.9132],[81.0445,6.9055],[81.0375,6.9117],[81.0334,6.91],[81.0258,6.9113],[81.0236,6.9061],[81.0195,6.9071],[81.02,6.9036],[81.0106,6.9045],[81.0067,6.9008],[81.0077,6.8988],[81.0042,6.8975],[81.0047,6.894],[80.9967,6.8924],[80.9952,6.887],[81.0031,6.8778],[81.0061,6.8596],[81.0064,6.8482],[81.0004,6.8388],[81.0004,6.8353],[81.01,6.8401],[81.0138,6.8395],[81.0139,6.8372],[81.0183,6.8376],[81.0252,6.8454],[81.0311,6.8434],[81.0362,6.8455],[81.0499,6.8375],[81.0547,6.8386],[81.0681,6.8208],[81.073,6.8189],[81.0761,6.8137],[81.0791,6.8135],[81.0839,6.8069],[81.0875,6.8075],[81.0969,6.8114],[81.0925,6.8237],[81.0949,6.8278],[81.1036,6.8301],[81.1136,6.8274],[81.1281,6.8324],[81.1354,6.838],[81.1301,6.8477],[81.1232,6.8512],[81.1089,6.8644],[81.1125,6.8725],[81.1243,6.8789]]]}},{"type":"Feature","properties":{"n":"Haldummulla","d":"Badulla","c":[80.9628,6.701]},"geometry":{"type":"Polygon","coordinates":[[[80.9249,6.6885],[80.9278,6.6917],[80.937,6.6927],[80.9397,6.6873],[80.9387,6.6768],[80.9496,6.6712],[80.9515,6.6554],[80.9576,6.6513],[80.9658,6.6531],[80.9742,6.6421],[80.977,6.6354],[80.9742,6.6209],[80.976,6.616],[80.9885,6.6201],[80.9974,6.6141],[80.9932,6.6033],[80.9962,6.5932],[80.9935,6.5766],[81.0215,6.5422],[81.0251,6.5591],[81.0232,6.5617],[81.0253,6.5661],[81.0237,6.5703],[81.0297,6.5781],[81.033,6.579],[81.0337,6.5833],[81.0405,6.5885],[81.0417,6.5855],[81.0513,6.5826],[81.0607,6.5761],[81.0575,6.5938],[81.0636,6.6037],[81.0749,6.6118],[81.0848,6.607],[81.0824,6.6159],[81.0654,6.6314],[81.0594,6.6464],[81.062,6.6833],[81.0707,6.6888],[81.0776,6.6971],[81.0792,6.7033],[81.0765,6.7043],[81.0769,6.7171],[81.083,6.7281],[81.07,6.7377],[81.06,6.7376],[81.0555,6.7346],[81.0509,6.7389],[81.0562,6.7507],[81.0636,6.7592],[81.059,6.7802],[81.064,6.8128],[81.0532,6.8051],[81.0426,6.7902],[81.036,6.7903],[81.0317,6.7878],[81.0275,6.7895],[81.0228,6.7781],[81.0156,6.7708],[81.0039,6.7724],[80.993,6.7686],[80.9857,6.7608],[80.9669,6.7493],[80.964,6.7512],[80.9583,6.7492],[80.9585,6.7549],[80.9446,6.753],[80.9465,6.7586],[80.9519,6.7604],[80.9512,6.7631],[80.9154,6.7724],[80.9079,6.7774],[80.8871,6.7793],[80.8726,6.7868],[80.8672,6.7778],[80.8604,6.7788],[80.8502,6.7872],[80.8546,6.7923],[80.8503,6.7939],[80.8492,6.8041],[80.8435,6.8037],[80.8353,6.8115],[80.8355,6.8092],[80.8308,6.8053],[80.8319,6.7996],[80.8254,6.7931],[80.8146,6.7941],[80.8066,6.7914],[80.8091,6.7836],[80.8064,6.7744],[80.8121,6.7541],[80.8255,6.7594],[80.8347,6.7436],[80.8526,6.7451],[80.8562,6.7411],[80.8541,6.7332],[80.8484,6.7307],[80.8518,6.7219],[80.8508,6.7188],[80.8417,6.7169],[80.8122,6.7036],[80.8135,6.6954],[80.8238,6.6897],[80.8279,6.6684],[80.846,6.6657],[80.8479,6.6607],[80.8548,6.6568],[80.8612,6.6653],[80.8642,6.6618],[80.8819,6.6627],[80.8903,6.6745],[80.9059,6.6773],[80.9074,6.6839],[80.9135,6.6883],[80.9121,6.692],[80.9154,6.6953],[80.9177,6.6914],[80.9249,6.6885]]]}},{"type":"Feature","properties":{"n":"Hali-Ela","d":"Badulla","c":[81.0182,6.9449]},"geometry":{"type":"Polygon","coordinates":[[[81.0442,7.0006],[81.0353,6.9976],[81.0323,6.9983],[81.0332,7.0006],[81.0225,6.9984],[81.0195,7.0015],[81.0189,7.0088],[81.0117,7.0109],[81.0131,7.0158],[81.004,7.0228],[81.0039,7.0276],[80.9909,7.025],[80.9877,7.0199],[80.9704,7.02],[80.9673,7.0299],[80.968,7.0499],[80.9642,7.054],[80.959,7.0415],[80.9612,7.0355],[80.9598,7.0219],[80.9632,7.0183],[80.9664,7.0072],[80.9755,7.0072],[80.9788,7.0028],[80.9777,7.0002],[80.9842,6.996],[80.9856,6.9884],[80.9824,6.9862],[80.9819,6.9803],[80.9867,6.977],[80.9846,6.9738],[80.9806,6.9758],[80.9787,6.974],[80.9778,6.9759],[80.9726,6.9696],[80.9744,6.9658],[80.9649,6.9634],[80.9567,6.9468],[80.9571,6.9426],[80.948,6.9274],[80.9567,6.9237],[80.9524,6.9155],[80.9536,6.9132],[80.9569,6.914],[80.9574,6.9067],[80.9526,6.8967],[80.9555,6.8958],[80.9558,6.888],[80.9517,6.8833],[80.9509,6.876],[80.9572,6.877],[80.9655,6.8715],[80.9694,6.8735],[80.9826,6.8651],[80.9901,6.8705],[81.0033,6.8743],[81.0031,6.8778],[80.9952,6.887],[80.9967,6.8924],[81.0047,6.894],[81.0042,6.8975],[81.0077,6.8988],[81.0067,6.9008],[81.0106,6.9045],[81.02,6.9036],[81.0195,6.9071],[81.0236,6.9061],[81.0258,6.9113],[81.0334,6.91],[81.0375,6.9117],[81.0418,6.9062],[81.0456,6.9056],[81.0494,6.9132],[81.0559,6.91],[81.0724,6.9133],[81.076,6.9121],[81.077,6.9145],[81.0797,6.9105],[81.0825,6.9128],[81.086,6.9123],[81.0901,6.907],[81.0958,6.9114],[81.1131,6.9119],[81.1222,6.9225],[81.1206,6.9269],[81.1125,6.9331],[81.1131,6.9399],[81.1107,6.9446],[81.1047,6.945],[81.0936,6.9561],[81.0868,6.9576],[81.0827,6.9684],[81.078,6.9732],[81.07,6.9729],[81.0676,6.9685],[81.07,6.9613],[81.0686,6.9596],[81.0594,6.9736],[81.0562,6.9744],[81.0506,6.985],[81.0458,6.9798],[81.0373,6.9821],[81.0406,6.9963],[81.0442,7.0006]]]}},{"type":"Feature","properties":{"n":"Haputale","d":"Badulla","c":[80.9602,6.7916]},"geometry":{"type":"Polygon","coordinates":[[[80.9462,6.8446],[80.946,6.8399],[80.9337,6.8218],[80.9224,6.8119],[80.9208,6.8057],[80.9148,6.8058],[80.9109,6.8012],[80.9138,6.7995],[80.9133,6.7975],[80.9054,6.7963],[80.9004,6.7905],[80.9095,6.7858],[80.911,6.7815],[80.9079,6.7816],[80.9079,6.7774],[80.9154,6.7724],[80.9512,6.7631],[80.9519,6.7604],[80.9465,6.7586],[80.9446,6.753],[80.9585,6.7549],[80.9583,6.7492],[80.964,6.7512],[80.9669,6.7493],[80.9857,6.7608],[80.993,6.7686],[81.0039,6.7724],[81.0156,6.7708],[81.0228,6.7781],[81.0275,6.7895],[81.0228,6.7961],[81.02,6.7933],[81.0153,6.8045],[81.0055,6.7926],[80.9985,6.7967],[80.9819,6.7898],[80.9778,6.7982],[80.9737,6.7993],[80.9751,6.8038],[80.9718,6.8057],[80.9708,6.8095],[80.9735,6.8125],[80.9743,6.8235],[80.9783,6.8226],[80.9801,6.8251],[80.9813,6.8297],[80.9786,6.8373],[80.9893,6.8462],[80.9846,6.8473],[80.9826,6.8421],[80.976,6.8418],[80.9754,6.8394],[80.9704,6.8384],[80.9697,6.8313],[80.9642,6.827],[80.9581,6.8339],[80.952,6.834],[80.9462,6.8446]]]}},{"type":"Feature","properties":{"n":"Kandeketiya","d":"Badulla","c":[80.9914,7.1283]},"geometry":{"type":"Polygon","coordinates":[[[81.0039,7.0276],[81.0059,7.0295],[81.0072,7.0458],[81.0009,7.0476],[80.9972,7.0604],[81.0069,7.0675],[81.0077,7.0748],[81.0102,7.0743],[81.009,7.0799],[81.016,7.082],[81.0178,7.0883],[81.0213,7.0864],[81.028,7.0885],[81.0326,7.0874],[81.0299,7.1235],[81.0378,7.1341],[81.0336,7.1412],[81.0387,7.1766],[81.037,7.1789],[81.0319,7.179],[81.0272,7.1843],[81.0282,7.1904],[81.0224,7.2002],[81.0256,7.2057],[81.0243,7.2106],[81.0108,7.2182],[81.0094,7.2218],[81.0052,7.2156],[80.9982,7.2132],[80.9792,7.2128],[80.9782,7.2075],[80.9702,7.1968],[80.9644,7.1982],[80.9595,7.196],[80.9536,7.1992],[80.9457,7.1999],[80.9421,7.1989],[80.9411,7.1954],[80.9482,7.1851],[80.9475,7.1782],[80.9525,7.1769],[80.9607,7.1583],[80.9582,7.1474],[80.9607,7.1422],[80.9503,7.1452],[80.9477,7.1389],[80.95,7.1352],[80.949,7.1294],[80.9537,7.1298],[80.9642,7.1219],[80.9627,7.1184],[80.9557,7.1146],[80.9553,7.1066],[80.9495,7.1011],[80.9527,7.0964],[80.9508,7.0896],[80.9629,7.0787],[80.9552,7.0746],[80.954,7.0713],[80.9555,7.0628],[80.9648,7.0615],[80.9642,7.054],[80.968,7.0499],[80.9673,7.0299],[80.9704,7.02],[80.9877,7.0199],[80.9909,7.025],[81.0039,7.0276]]]}},{"type":"Feature","properties":{"n":"Lunugala","d":"Badulla","c":[81.1857,7.0378]},"geometry":{"type":"Polygon","coordinates":[[[81.2317,6.9645],[81.229,6.9897],[81.2349,6.991],[81.2383,7.0044],[81.2423,7.0093],[81.2431,7.0221],[81.2412,7.047],[81.2263,7.0837],[81.2151,7.0801],[81.2106,7.0961],[81.2063,7.0921],[81.2038,7.0956],[81.197,7.0929],[81.1887,7.0944],[81.1846,7.0853],[81.1793,7.084],[81.1733,7.0858],[81.1663,7.0827],[81.1594,7.1025],[81.1489,7.1057],[81.1307,7.0871],[81.1195,7.0917],[81.1089,7.0895],[81.1045,7.0857],[81.1028,7.087],[81.1014,7.0839],[81.1117,7.0675],[81.1201,7.0623],[81.1196,7.0472],[81.1231,7.0389],[81.1284,7.035],[81.144,7.0381],[81.1509,7.0328],[81.1501,7.0303],[81.1544,7.0253],[81.1543,7.018],[81.1591,7.0134],[81.1585,7.0079],[81.1553,7.0052],[81.1634,7.0036],[81.1636,7.0061],[81.1652,7.0049],[81.1686,7.0082],[81.167,7.0108],[81.1709,7.0144],[81.1779,7.0111],[81.1777,7.007],[81.1725,7.0021],[81.1798,6.9962],[81.1794,6.9826],[81.188,6.9734],[81.182,6.9731],[81.1783,6.9767],[81.1809,6.9571],[81.1847,6.9655],[81.188,6.9621],[81.1918,6.9627],[81.193,6.9575],[81.2007,6.9559],[81.2075,6.9581],[81.2174,6.9555],[81.2201,6.9643],[81.2249,6.9605],[81.2314,6.9619],[81.2317,6.9645]]]}},{"type":"Feature","properties":{"n":"Mahiyanganaya","d":"Badulla","c":[81.0812,7.4369]},"geometry":{"type":"Polygon","coordinates":[[[80.9775,7.6213],[80.9777,7.6122],[80.9738,7.5977],[80.9755,7.5867],[80.9695,7.5688],[80.9687,7.5326],[80.9719,7.4881],[80.9692,7.4609],[80.972,7.45],[80.9719,7.4275],[80.9669,7.4133],[80.9747,7.4065],[80.9795,7.3959],[80.9739,7.3649],[80.9854,7.3353],[80.9864,7.3199],[80.9999,7.2897],[81.0144,7.2345],[81.0094,7.2218],[81.0142,7.2158],[81.0184,7.2158],[81.0303,7.2213],[81.0309,7.2312],[81.0401,7.2362],[81.0514,7.2528],[81.0531,7.26],[81.0514,7.27],[81.0555,7.2741],[81.0592,7.2837],[81.0548,7.2871],[81.049,7.2868],[81.0474,7.2954],[81.0405,7.2984],[81.0444,7.3041],[81.0383,7.3056],[81.0289,7.3152],[81.0238,7.3323],[81.0264,7.33],[81.0283,7.3362],[81.0349,7.3434],[81.0313,7.3593],[81.0335,7.365],[81.036,7.3658],[81.036,7.3687],[81.0334,7.3697],[81.0415,7.4038],[81.0451,7.4056],[81.0463,7.4106],[81.0519,7.413],[81.0577,7.4088],[81.057,7.4014],[81.059,7.4022],[81.0677,7.3876],[81.0682,7.382],[81.0612,7.3821],[81.0563,7.3753],[81.0563,7.3727],[81.0615,7.3722],[81.0612,7.3682],[81.0637,7.3712],[81.0894,7.3813],[81.1015,7.3741],[81.1185,7.3702],[81.129,7.3583],[81.1452,7.3763],[81.1509,7.3795],[81.1636,7.3775],[81.1631,7.3745],[81.1674,7.3703],[81.1756,7.3719],[81.1786,7.3614],[81.1837,7.3567],[81.1877,7.3447],[81.1833,7.3326],[81.1736,7.3205],[81.1785,7.2991],[81.1762,7.296],[81.1742,7.2803],[81.1797,7.2719],[81.1976,7.2791],[81.1994,7.2841],[81.206,7.2889],[81.207,7.2964],[81.2045,7.3037],[81.2141,7.3098],[81.2215,7.3095],[81.2203,7.3122],[81.2245,7.3158],[81.2209,7.3261],[81.2217,7.3313],[81.2181,7.3329],[81.2178,7.3401],[81.2134,7.3428],[81.2132,7.3464],[81.2081,7.3472],[81.2013,7.368],[81.197,7.3739],[81.1927,7.3758],[81.1928,7.3823],[81.2004,7.3855],[81.2003,7.3911],[81.1948,7.4039],[81.1918,7.4146],[81.1928,7.4218],[81.1902,7.4232],[81.1867,7.4382],[81.1811,7.4418],[81.1822,7.4465],[81.1883,7.4498],[81.1875,7.453],[81.192,7.457],[81.1932,7.4606],[81.1898,7.462],[81.1904,7.4651],[81.1972,7.4693],[81.1983,7.477],[81.1963,7.4846],[81.1992,7.489],[81.197,7.4981],[81.2054,7.5169],[81.2049,7.5379],[81.2019,7.5468],[81.2032,7.5573],[81.1874,7.5725],[81.1694,7.5669],[81.1605,7.5673],[81.1311,7.5574],[81.1197,7.5505],[81.0759,7.5106],[81.0577,7.5105],[81.0517,7.5059],[81.0432,7.5038],[81.0412,7.5061],[81.0384,7.5041],[81.0344,7.5103],[81.0356,7.5146],[81.0334,7.5162],[81.0323,7.5248],[81.026,7.5303],[81.027,7.536],[81.0185,7.5404],[81.0169,7.5477],[81.0124,7.551],[81.012,7.5624],[81.0101,7.5645],[81.0127,7.5771],[81.0108,7.589],[81.0124,7.5937],[81.004,7.6022],[80.9883,7.6078],[80.9873,7.6099],[80.9839,7.6094],[80.9835,7.6173],[80.9775,7.6213]]]}},{"type":"Feature","properties":{"n":"Meegahakiula","d":"Badulla","c":[81.0804,7.1255]},"geometry":{"type":"Polygon","coordinates":[[[81.1197,7.1597],[81.1115,7.1553],[81.1083,7.1507],[81.0916,7.1572],[81.0864,7.1527],[81.0775,7.1504],[81.0714,7.1554],[81.0688,7.162],[81.0632,7.1646],[81.0628,7.1716],[81.0552,7.1724],[81.0549,7.1812],[81.0528,7.1851],[81.048,7.1845],[81.0386,7.2052],[81.0259,7.2153],[81.0142,7.2158],[81.0243,7.2106],[81.0256,7.2057],[81.0224,7.2002],[81.0282,7.1904],[81.0272,7.1843],[81.0319,7.179],[81.037,7.1789],[81.0387,7.1766],[81.0336,7.1412],[81.0378,7.1341],[81.0299,7.1235],[81.0325,7.0846],[81.0392,7.0836],[81.0412,7.0873],[81.0465,7.0893],[81.0498,7.0835],[81.0495,7.0766],[81.0549,7.0825],[81.0577,7.0824],[81.0602,7.087],[81.0648,7.0859],[81.0702,7.0781],[81.0806,7.078],[81.0857,7.0674],[81.0904,7.0649],[81.0909,7.0725],[81.0996,7.076],[81.1046,7.0752],[81.1046,7.0803],[81.1014,7.0839],[81.1028,7.087],[81.1045,7.0857],[81.1089,7.0895],[81.1195,7.0917],[81.1307,7.0871],[81.1489,7.1057],[81.1594,7.1025],[81.1571,7.1124],[81.1488,7.1205],[81.1454,7.1275],[81.1405,7.1302],[81.1383,7.1357],[81.1309,7.1368],[81.1247,7.142],[81.1217,7.1517],[81.1188,7.1536],[81.1197,7.1597]]]}},{"type":"Feature","properties":{"n":"Passara","d":"Badulla","c":[81.1457,6.9644]},"geometry":{"type":"Polygon","coordinates":[[[81.2174,6.9555],[81.2075,6.9581],[81.2007,6.9559],[81.193,6.9575],[81.1918,6.9627],[81.188,6.9621],[81.1847,6.9655],[81.1809,6.9571],[81.1783,6.9767],[81.182,6.9731],[81.188,6.9734],[81.1794,6.9826],[81.1798,6.9962],[81.1725,7.0021],[81.1777,7.007],[81.1779,7.0111],[81.1709,7.0144],[81.167,7.0108],[81.1686,7.0082],[81.1652,7.0049],[81.1636,7.0061],[81.1634,7.0036],[81.1553,7.0052],[81.1585,7.0079],[81.1591,7.0134],[81.1543,7.018],[81.1544,7.0253],[81.1501,7.0303],[81.1509,7.0328],[81.144,7.0381],[81.1284,7.035],[81.1231,7.0389],[81.1196,7.0472],[81.1201,7.0623],[81.1117,7.0675],[81.1052,7.0768],[81.0909,7.0725],[81.0904,7.0649],[81.0938,7.0607],[81.0919,7.0556],[81.1028,7.0341],[81.1029,7.0293],[81.0989,7.0214],[81.0996,7.0166],[81.1143,7.0069],[81.1259,6.991],[81.121,6.9869],[81.1208,6.9818],[81.1273,6.9743],[81.1245,6.9635],[81.1107,6.9446],[81.1131,6.9399],[81.1125,6.9331],[81.1206,6.9269],[81.1222,6.9225],[81.1062,6.9069],[81.1085,6.8953],[81.1075,6.8837],[81.1111,6.8763],[81.114,6.8798],[81.1243,6.8789],[81.1382,6.8823],[81.151,6.8893],[81.155,6.8887],[81.1606,6.8978],[81.1651,6.9008],[81.1752,6.9022],[81.1765,6.919],[81.1796,6.9277],[81.1851,6.9205],[81.2016,6.9202],[81.2047,6.9221],[81.2056,6.9253],[81.1989,6.9305],[81.2052,6.9388],[81.2253,6.9451],[81.218,6.951],[81.2174,6.9555]]]}},{"type":"Feature","properties":{"n":"Rideemaliyadda","d":"Badulla","c":[81.1266,7.2739]},"geometry":{"type":"Polygon","coordinates":[[[81.2688,7.2776],[81.2659,7.2843],[81.2695,7.2921],[81.2654,7.3046],[81.2598,7.3133],[81.2442,7.327],[81.2442,7.3347],[81.2357,7.3426],[81.2282,7.3334],[81.2217,7.3313],[81.2209,7.3261],[81.2245,7.3158],[81.2203,7.3122],[81.2215,7.3095],[81.2141,7.3098],[81.2045,7.3037],[81.207,7.2964],[81.206,7.2889],[81.1994,7.2841],[81.1976,7.2791],[81.1797,7.2719],[81.1742,7.2803],[81.1762,7.296],[81.1785,7.2991],[81.1736,7.3205],[81.1833,7.3326],[81.1877,7.3447],[81.1837,7.3567],[81.1786,7.3614],[81.1756,7.3719],[81.1674,7.3703],[81.1631,7.3745],[81.1636,7.3775],[81.1509,7.3795],[81.1452,7.3763],[81.129,7.3583],[81.1185,7.3702],[81.1015,7.3741],[81.0894,7.3813],[81.0637,7.3712],[81.0612,7.3682],[81.0615,7.3722],[81.0563,7.3727],[81.0563,7.3753],[81.0612,7.3821],[81.0682,7.382],[81.0677,7.3876],[81.059,7.4022],[81.057,7.4014],[81.0577,7.4088],[81.0519,7.413],[81.0463,7.4106],[81.0451,7.4056],[81.0415,7.4038],[81.0334,7.3697],[81.036,7.3687],[81.036,7.3658],[81.0335,7.365],[81.0313,7.3593],[81.0349,7.3434],[81.0283,7.3362],[81.0264,7.33],[81.0238,7.3323],[81.0289,7.3152],[81.0383,7.3056],[81.0444,7.3041],[81.0405,7.2984],[81.0474,7.2954],[81.049,7.2868],[81.0548,7.2871],[81.0592,7.2837],[81.0555,7.2741],[81.0514,7.27],[81.0531,7.26],[81.0514,7.2528],[81.0401,7.2362],[81.0309,7.2312],[81.0303,7.2213],[81.0184,7.2158],[81.0259,7.2153],[81.0386,7.2052],[81.048,7.1845],[81.0528,7.1851],[81.0549,7.1812],[81.0552,7.1724],[81.0628,7.1716],[81.0632,7.1646],[81.0688,7.162],[81.0714,7.1554],[81.0775,7.1504],[81.0864,7.1527],[81.0916,7.1572],[81.1083,7.1507],[81.1115,7.1553],[81.1197,7.1597],[81.1212,7.1667],[81.1324,7.1779],[81.1391,7.1898],[81.1475,7.196],[81.1524,7.1938],[81.1618,7.1729],[81.165,7.1746],[81.1709,7.1702],[81.1836,7.174],[81.1835,7.1815],[81.1872,7.1861],[81.1855,7.1916],[81.2035,7.2018],[81.2223,7.2285],[81.2339,7.2392],[81.2281,7.269],[81.2303,7.2666],[81.2342,7.2692],[81.2379,7.2683],[81.2572,7.2759],[81.2624,7.2804],[81.2688,7.2776]]]}},{"type":"Feature","properties":{"n":"Soranathota","d":"Badulla","c":[81.0479,7.0449]},"geometry":{"type":"Polygon","coordinates":[[[81.0996,7.0166],[81.0989,7.0214],[81.1029,7.0293],[81.1028,7.0341],[81.0919,7.0556],[81.0938,7.0607],[81.0857,7.0674],[81.0806,7.078],[81.0702,7.0781],[81.0648,7.0859],[81.0602,7.087],[81.0577,7.0824],[81.0549,7.0825],[81.0495,7.0766],[81.0498,7.0835],[81.0465,7.0893],[81.0412,7.0873],[81.0392,7.0836],[81.0325,7.0846],[81.0326,7.0874],[81.028,7.0885],[81.0213,7.0864],[81.0178,7.0883],[81.016,7.082],[81.009,7.0799],[81.0102,7.0743],[81.0077,7.0748],[81.0069,7.0675],[80.9972,7.0604],[81.0009,7.0476],[81.0072,7.0458],[81.004,7.0228],[81.0131,7.0158],[81.0117,7.0109],[81.0189,7.0088],[81.0195,7.0015],[81.0225,6.9984],[81.0332,7.0006],[81.0323,6.9983],[81.0353,6.9976],[81.0442,7.0006],[81.051,7.0123],[81.0621,7.0126],[81.0614,7.017],[81.0727,7.0162],[81.0791,7.0122],[81.0841,7.0183],[81.0898,7.0134],[81.0996,7.0166]]]}},{"type":"Feature","properties":{"n":"Uvaparanagama","d":"Badulla","c":[80.9153,6.9659]},"geometry":{"type":"Polygon","coordinates":[[[80.9642,7.054],[80.9648,7.0615],[80.9555,7.0628],[80.94,7.0533],[80.9379,7.0435],[80.9294,7.0368],[80.926,7.0128],[80.9179,6.99],[80.9057,6.9845],[80.8945,6.9758],[80.8951,6.978],[80.8897,6.9787],[80.8727,6.974],[80.862,6.9785],[80.8566,6.9715],[80.8458,6.9657],[80.8337,6.9548],[80.8306,6.9319],[80.8279,6.9279],[80.8489,6.9146],[80.8583,6.9152],[80.8626,6.92],[80.8665,6.9168],[80.8735,6.9188],[80.8774,6.916],[80.8833,6.9169],[80.8867,6.9119],[80.896,6.9137],[80.8973,6.916],[80.9009,6.9147],[80.9023,6.9168],[80.9082,6.9142],[80.9061,6.911],[80.9115,6.9063],[80.92,6.9108],[80.9224,6.9062],[80.9285,6.9133],[80.9371,6.9168],[80.9394,6.9127],[80.9524,6.9155],[80.9567,6.9237],[80.948,6.9274],[80.9571,6.9426],[80.961,6.9577],[80.9649,6.9634],[80.9744,6.9658],[80.9726,6.9696],[80.9778,6.9759],[80.9787,6.974],[80.9806,6.9758],[80.9846,6.9738],[80.9867,6.977],[80.9819,6.9803],[80.9824,6.9862],[80.9856,6.9884],[80.9842,6.996],[80.9777,7.0002],[80.9788,7.0028],[80.9755,7.0072],[80.9664,7.0072],[80.9632,7.0183],[80.9598,7.0219],[80.9612,7.0355],[80.959,7.0415],[80.9642,7.054]]]}},{"type":"Feature","properties":{"n":"Welimada","d":"Badulla","c":[80.8786,6.8601]},"geometry":{"type":"Polygon","coordinates":[[[80.9509,6.876],[80.9517,6.8833],[80.9558,6.888],[80.9555,6.8958],[80.9526,6.8967],[80.9574,6.9067],[80.9569,6.914],[80.9536,6.9132],[80.9524,6.9155],[80.9394,6.9127],[80.9371,6.9168],[80.9285,6.9133],[80.9224,6.9062],[80.92,6.9108],[80.9115,6.9063],[80.9061,6.911],[80.9082,6.9142],[80.9023,6.9168],[80.9009,6.9147],[80.8973,6.916],[80.896,6.9137],[80.8867,6.9119],[80.8833,6.9169],[80.8774,6.916],[80.8735,6.9188],[80.8665,6.9168],[80.8626,6.92],[80.8583,6.9152],[80.8489,6.9146],[80.8279,6.9279],[80.8103,6.9169],[80.7791,6.921],[80.7743,6.9132],[80.7756,6.9098],[80.7958,6.9046],[80.8024,6.8942],[80.8124,6.8915],[80.8107,6.8782],[80.8153,6.8812],[80.8232,6.8749],[80.8207,6.872],[80.8191,6.8608],[80.822,6.8588],[80.8216,6.855],[80.8242,6.8563],[80.8295,6.8535],[80.829,6.8499],[80.8346,6.8456],[80.8353,6.8402],[80.8305,6.8333],[80.8231,6.8294],[80.8171,6.8318],[80.8128,6.8279],[80.8156,6.8207],[80.8204,6.815],[80.8325,6.8142],[80.8435,6.8037],[80.8492,6.8041],[80.8503,6.7939],[80.8546,6.7923],[80.8502,6.7872],[80.8604,6.7788],[80.8672,6.7778],[80.8726,6.7868],[80.8871,6.7793],[80.9079,6.7774],[80.9079,6.7816],[80.911,6.7815],[80.9095,6.7858],[80.9004,6.7905],[80.9054,6.7963],[80.9133,6.7975],[80.9138,6.7995],[80.9109,6.8012],[80.9148,6.8058],[80.9208,6.8057],[80.9224,6.8119],[80.9337,6.8218],[80.946,6.8399],[80.9485,6.8625],[80.9532,6.8684],[80.9498,6.8728],[80.9509,6.876]]]}},{"type":"Feature","properties":{"n":"Eravur Pattu","d":"Batticaloa","c":[81.4703,7.7062]},"geometry":{"type":"Polygon","coordinates":[[[81.5473,7.5347],[81.5333,7.5369],[81.5159,7.5332],[81.5057,7.5343],[81.5113,7.5412],[81.5154,7.5542],[81.5123,7.5565],[81.5106,7.5641],[81.5112,7.5766],[81.5177,7.6178],[81.5149,7.6254],[81.5202,7.6313],[81.5146,7.6436],[81.5237,7.6544],[81.5349,7.6596],[81.542,7.6721],[81.5529,7.6795],[81.5603,7.6958],[81.5593,7.702],[81.5633,7.7063],[81.5645,7.7204],[81.5733,7.729],[81.5777,7.7285],[81.5781,7.7432],[81.5865,7.7503],[81.5832,7.7548],[81.5881,7.7551],[81.5874,7.759],[81.5936,7.7588],[81.5924,7.7656],[81.5935,7.7628],[81.5935,7.7675],[81.5991,7.7687],[81.5977,7.7701],[81.6026,7.7847],[81.6149,7.7761],[81.61,7.7678],[81.6365,7.7474],[81.6433,7.7496],[81.6516,7.757],[81.6344,7.7654],[81.6459,7.7827],[81.6318,7.8009],[81.6184,7.8283],[81.6103,7.8225],[81.6014,7.8247],[81.5875,7.8351],[81.5772,7.8484],[81.5663,7.8399],[81.5681,7.8351],[81.5626,7.8334],[81.567,7.8281],[81.5649,7.8256],[81.5529,7.8205],[81.5522,7.8231],[81.5468,7.824],[81.5386,7.817],[81.535,7.8195],[81.5335,7.8173],[81.5321,7.8208],[81.5263,7.8218],[81.5261,7.8186],[81.5227,7.8163],[81.5149,7.8164],[81.5161,7.8115],[81.5122,7.8158],[81.5108,7.808],[81.5044,7.8081],[81.5032,7.8062],[81.4828,7.819],[81.477,7.818],[81.4629,7.8003],[81.461,7.8003],[81.4559,7.7877],[81.4507,7.7829],[81.4391,7.7798],[81.4252,7.7813],[81.405,7.7877],[81.4062,7.7753],[81.3972,7.7671],[81.3795,7.7705],[81.3608,7.7703],[81.2545,7.7589],[81.2421,7.7616],[81.2357,7.76],[81.2335,7.7567],[81.2341,7.7507],[81.2384,7.7392],[81.2481,7.7351],[81.2491,7.7305],[81.2566,7.7309],[81.2615,7.7351],[81.3199,7.7343],[81.3282,7.7237],[81.3268,7.7198],[81.3309,7.7175],[81.3364,7.7059],[81.3404,7.706],[81.3514,7.6915],[81.3652,7.6658],[81.3682,7.6662],[81.3758,7.6589],[81.3865,7.6552],[81.443,7.6412],[81.4402,7.6324],[81.4461,7.619],[81.4387,7.6061],[81.4408,7.5996],[81.4312,7.58],[81.4303,7.5714],[81.4492,7.5422],[81.4877,7.5258],[81.4985,7.5179],[81.4926,7.5133],[81.5145,7.5081],[81.5453,7.5075],[81.5473,7.5347]]]}},{"type":"Feature","properties":{"n":"Eravur Town","d":"Batticaloa","c":[81.6063,7.7753]},"geometry":{"type":"Polygon","coordinates":[[[81.599,7.7708],[81.61,7.7678],[81.6149,7.7761],[81.6026,7.7847],[81.599,7.7708]]]}},{"type":"Feature","properties":{"n":"Kattankudy","d":"Batticaloa","c":[81.7301,7.6828]},"geometry":{"type":"Polygon","coordinates":[[[81.7442,7.6777],[81.7334,7.6946],[81.7174,7.684],[81.7233,7.6726],[81.7325,7.6764],[81.7442,7.6777]]]}},{"type":"Feature","properties":{"n":"Koralai Pattu","d":"Batticaloa","c":[81.5451,7.9035]},"geometry":{"type":"MultiPolygon","coordinates":[[[[81.5163,7.8928],[81.519,7.8837],[81.5205,7.8866],[81.519,7.8882],[81.5182,7.8866],[81.5185,7.8908],[81.5163,7.8928]]],[[[81.5158,7.9015],[81.5145,7.9006],[81.5135,7.9037],[81.5126,7.8996],[81.5108,7.9026],[81.5142,7.8986],[81.5139,7.9014],[81.5207,7.8866],[81.5173,7.8805],[81.5195,7.8758],[81.5386,7.8782],[81.5386,7.8741],[81.5472,7.8725],[81.5558,7.8746],[81.5642,7.8793],[81.5618,7.896],[81.5644,7.9131],[81.5685,7.9188],[81.5808,7.9203],[81.5737,7.9267],[81.5681,7.927],[81.5657,7.9248],[81.5616,7.9268],[81.5585,7.9325],[81.5597,7.9383],[81.5552,7.9428],[81.5522,7.9426],[81.5489,7.9325],[81.5421,7.9316],[81.5371,7.9278],[81.5268,7.9267],[81.5296,7.9142],[81.5272,7.8988],[81.5158,7.9015]]],[[[81.5234,7.9337],[81.5255,7.9312],[81.5376,7.9328],[81.5479,7.9409],[81.5434,7.947],[81.5376,7.9426],[81.5311,7.9424],[81.5292,7.9371],[81.5234,7.9337]]],[[[81.5234,7.9307],[81.5207,7.9286],[81.5281,7.9282],[81.5217,7.9288],[81.5234,7.9307]]]]}},{"type":"Feature","properties":{"n":"Koralai Pattu Central","d":"Batticaloa","c":[81.5076,7.9377]},"geometry":{"type":"MultiPolygon","coordinates":[[[[81.5272,7.8988],[81.5296,7.9142],[81.5268,7.9267],[81.522,7.9242],[81.5192,7.9191],[81.5245,7.9176],[81.5227,7.9002],[81.5272,7.8988]]],[[[81.5178,7.9207],[81.5243,7.927],[81.5148,7.9225],[81.5178,7.9207]]],[[[81.5121,7.9222],[81.5193,7.9327],[81.5233,7.9337],[81.5204,7.9459],[81.4681,7.9449],[81.49,7.9435],[81.5121,7.9222]]]]}},{"type":"Feature","properties":{"n":"Koralai Pattu North","d":"Batticaloa","c":[81.3928,8.0849]},"geometry":{"type":"MultiPolygon","coordinates":[[[[81.4399,8.1094],[81.4431,8.1149],[81.4425,8.118],[81.4384,8.1132],[81.4399,8.1094]]],[[[81.5434,7.947],[81.5386,7.9575],[81.5377,7.969],[81.541,7.9783],[81.5516,7.9856],[81.5501,7.9921],[81.5443,7.9945],[81.5409,7.9884],[81.5354,7.9848],[81.5248,7.9849],[81.5143,7.9961],[81.5058,7.9978],[81.4915,8.01],[81.4725,8.0392],[81.464,8.0605],[81.4568,8.0885],[81.4553,8.1014],[81.4577,8.1103],[81.4465,8.1191],[81.4375,8.1377],[81.4305,8.167],[81.4314,8.1745],[81.4349,8.1787],[81.4288,8.1797],[81.4234,8.1892],[81.4206,8.2019],[81.4222,8.2069],[81.4194,8.2074],[81.4124,8.2195],[81.4017,8.2657],[81.3992,8.2605],[81.399,8.2491],[81.3944,8.2481],[81.3914,8.2518],[81.3943,8.2539],[81.3908,8.2614],[81.3836,8.2585],[81.3853,8.2563],[81.3839,8.2531],[81.3754,8.2566],[81.3747,8.2535],[81.3714,8.2527],[81.365,8.257],[81.3609,8.2574],[81.3594,8.2551],[81.3527,8.2572],[81.3553,8.2652],[81.3522,8.2686],[81.3449,8.264],[81.3341,8.2633],[81.3289,8.2654],[81.3228,8.2623],[81.3094,8.2516],[81.3123,8.248],[81.3126,8.2169],[81.3047,8.0289],[81.3266,7.9788],[81.3308,7.9737],[81.33,7.9714],[81.3326,7.9699],[81.3337,7.9637],[81.3767,7.9662],[81.3859,7.9637],[81.4123,7.9637],[81.4188,7.9612],[81.4308,7.9516],[81.4547,7.9517],[81.4681,7.9449],[81.5204,7.9459],[81.5234,7.9337],[81.5292,7.9371],[81.5311,7.9424],[81.5376,7.9426],[81.5434,7.947]],[[81.3769,8.1822],[81.3799,8.1906],[81.3786,8.1962],[81.3818,8.1997],[81.3909,8.1955],[81.3898,8.1899],[81.3949,8.1952],[81.3975,8.1926],[81.4024,8.1498],[81.4173,8.1165],[81.4225,8.1096],[81.4248,8.1005],[81.4321,8.0969],[81.4383,8.1018],[81.4381,8.1067],[81.437,8.1023],[81.4359,8.1045],[81.4378,8.1196],[81.4403,8.1222],[81.4343,8.1354],[81.435,8.1398],[81.4308,8.149],[81.432,8.1534],[81.4454,8.1158],[81.4402,8.0992],[81.435,8.092],[81.4366,8.0856],[81.4342,8.079],[81.4363,8.0755],[81.4337,8.0728],[81.444,8.0704],[81.4447,8.0652],[81.4429,8.0704],[81.4291,8.0703],[81.4288,8.0751],[81.4349,8.0852],[81.4333,8.093],[81.4279,8.0954],[81.4181,8.0954],[81.4164,8.0994],[81.4102,8.1015],[81.4111,8.1054],[81.4056,8.1055],[81.4032,8.1204],[81.4054,8.1205],[81.4062,8.1235],[81.4022,8.1292],[81.4029,8.1325],[81.3998,8.1342],[81.3952,8.1323],[81.3948,8.1348],[81.3842,8.1396],[81.3846,8.1461],[81.3792,8.1533],[81.3803,8.166],[81.3768,8.165],[81.3769,8.1822]]]]}},{"type":"Feature","properties":{"n":"Koralai Pattu South","d":"Batticaloa","c":[81.3629,7.8592]},"geometry":{"type":"MultiPolygon","coordinates":[[[[81.5215,7.8748],[81.5238,7.8735],[81.5214,7.8738],[81.5237,7.8637],[81.5317,7.858],[81.5391,7.8456],[81.5421,7.8477],[81.5422,7.8438],[81.5392,7.8422],[81.5493,7.8317],[81.5491,7.8263],[81.5468,7.824],[81.5522,7.8231],[81.5529,7.8205],[81.5649,7.8256],[81.567,7.8281],[81.5626,7.8334],[81.5681,7.8351],[81.5663,7.8399],[81.5772,7.8484],[81.5642,7.8793],[81.5472,7.8725],[81.5386,7.8741],[81.5386,7.8782],[81.5215,7.8748]]],[[[81.5146,7.8971],[81.515,7.8944],[81.5118,7.8953],[81.514,7.8908],[81.5146,7.8971]]],[[[81.468,7.9436],[81.4547,7.9517],[81.4308,7.9516],[81.4188,7.9612],[81.4123,7.9637],[81.3859,7.9637],[81.3767,7.9662],[81.3337,7.9637],[81.3379,7.9542],[81.3374,7.936],[81.3319,7.9371],[81.3252,7.9337],[81.3136,7.9389],[81.3047,7.9363],[81.2956,7.9464],[81.2863,7.9473],[81.2727,7.937],[81.2643,7.9366],[81.2606,7.9396],[81.2511,7.9361],[81.2351,7.9213],[81.2342,7.9063],[81.2359,7.9027],[81.233,7.8943],[81.2346,7.8868],[81.2264,7.8769],[81.2247,7.867],[81.2289,7.8609],[81.2302,7.8431],[81.2228,7.8208],[81.2283,7.7942],[81.2244,7.7826],[81.2288,7.7695],[81.233,7.7665],[81.2357,7.76],[81.2421,7.7616],[81.2545,7.7589],[81.3608,7.7703],[81.3795,7.7705],[81.3972,7.7671],[81.4062,7.7753],[81.405,7.7877],[81.4252,7.7813],[81.4391,7.7798],[81.4507,7.7829],[81.4559,7.7877],[81.461,7.8003],[81.4629,7.8003],[81.477,7.818],[81.4828,7.819],[81.5032,7.8062],[81.5044,7.8081],[81.5108,7.808],[81.5131,7.82],[81.5098,7.825],[81.5118,7.8308],[81.53,7.8262],[81.5299,7.8311],[81.5337,7.8327],[81.5384,7.8261],[81.5451,7.8266],[81.544,7.8317],[81.5385,7.8351],[81.5294,7.8558],[81.5254,7.8599],[81.5218,7.8575],[81.5225,7.8629],[81.5185,7.8648],[81.5223,7.8658],[81.5191,7.8677],[81.5223,7.8675],[81.5199,7.8744],[81.5172,7.873],[81.5188,7.8743],[81.5159,7.8777],[81.5172,7.8832],[81.5152,7.891],[81.5146,7.8884],[81.5103,7.895],[81.5079,7.8921],[81.5094,7.8908],[81.5063,7.8922],[81.507,7.8955],[81.5036,7.8952],[81.5009,7.8987],[81.4897,7.8937],[81.4827,7.8999],[81.4751,7.9021],[81.472,7.9066],[81.468,7.9065],[81.468,7.9436]]]]}},{"type":"Feature","properties":{"n":"Koralai Pattu West","d":"Batticaloa","c":[81.4888,7.919]},"geometry":{"type":"MultiPolygon","coordinates":[[[[81.5148,7.9225],[81.5141,7.9187],[81.5179,7.9076],[81.5149,7.9019],[81.5272,7.8988],[81.5227,7.9002],[81.5245,7.9176],[81.5171,7.9179],[81.5189,7.9194],[81.5148,7.9225]]],[[[81.5135,7.9143],[81.5114,7.9125],[81.5141,7.9069],[81.5163,7.91],[81.5135,7.9143]]],[[[81.5121,7.9222],[81.49,7.9435],[81.468,7.9436],[81.468,7.9065],[81.472,7.9066],[81.4751,7.9021],[81.4827,7.8999],[81.4897,7.8937],[81.5009,7.8987],[81.5036,7.8952],[81.507,7.8955],[81.5073,7.8918],[81.5108,7.8964],[81.5093,7.9004],[81.5054,7.901],[81.5024,7.9051],[81.5055,7.9012],[81.5074,7.9028],[81.5092,7.9011],[81.5128,7.9053],[81.5108,7.9118],[81.5121,7.9222]]]]}},{"type":"Feature","properties":{"n":"Manmunai North","d":"Batticaloa","c":[81.6708,7.7395]},"geometry":{"type":"MultiPolygon","coordinates":[[[[81.6628,7.703],[81.6569,7.701],[81.6604,7.6963],[81.6645,7.7016],[81.6628,7.703]]],[[[81.6961,7.7035],[81.6915,7.7018],[81.6888,7.6948],[81.6903,7.6757],[81.694,7.6702],[81.7075,7.6874],[81.7046,7.699],[81.7023,7.7015],[81.6993,7.6994],[81.6961,7.7035]]],[[[81.6954,7.7145],[81.6893,7.7133],[81.686,7.709],[81.6833,7.7122],[81.688,7.7028],[81.697,7.7058],[81.7008,7.7112],[81.6954,7.7145]]],[[[81.7334,7.6946],[81.7007,7.748],[81.6927,7.7565],[81.6848,7.7608],[81.6935,7.7516],[81.7065,7.7298],[81.7097,7.7297],[81.7057,7.7121],[81.7099,7.6981],[81.7174,7.684],[81.7334,7.6946]]],[[[81.6433,7.7496],[81.6497,7.7474],[81.6575,7.7371],[81.6648,7.7331],[81.6626,7.7232],[81.6686,7.7044],[81.6697,7.6925],[81.6768,7.69],[81.6824,7.6924],[81.6854,7.7041],[81.6816,7.7098],[81.6777,7.7093],[81.681,7.7181],[81.6745,7.7262],[81.6756,7.7291],[81.6827,7.7279],[81.6867,7.7204],[81.6984,7.7139],[81.7035,7.7203],[81.7037,7.7275],[81.6901,7.7462],[81.6842,7.7502],[81.6846,7.7548],[81.6805,7.7568],[81.6843,7.7553],[81.6808,7.7604],[81.6844,7.7578],[81.6837,7.7599],[81.6686,7.7654],[81.6459,7.7827],[81.6344,7.7654],[81.6516,7.757],[81.6433,7.7496]]]]}},{"type":"Feature","properties":{"n":"Manmunai Pattu","d":"Batticaloa","c":[81.7512,7.6392]},"geometry":{"type":"Polygon","coordinates":[[[81.7838,7.6019],[81.7754,7.6219],[81.7442,7.6777],[81.7325,7.6764],[81.7233,7.6726],[81.7247,7.6639],[81.7221,7.6597],[81.7191,7.6601],[81.7188,7.6572],[81.7309,7.641],[81.7306,7.6378],[81.7368,7.6398],[81.7416,7.6382],[81.7456,7.6411],[81.7469,7.6359],[81.7502,7.636],[81.7489,7.632],[81.7509,7.6234],[81.7628,7.5952],[81.7838,7.6019]]]}},{"type":"Feature","properties":{"n":"Manmunai South & Eruvil Pattu","d":"Batticaloa","c":[81.7892,7.524]},"geometry":{"type":"Polygon","coordinates":[[[81.8161,7.4596],[81.7985,7.5534],[81.7838,7.6019],[81.7628,7.5952],[81.7694,7.586],[81.7768,7.5854],[81.7788,7.583],[81.7724,7.5782],[81.7753,7.5709],[81.7703,7.5561],[81.7754,7.5469],[81.7746,7.537],[81.7796,7.5302],[81.7811,7.5193],[81.7788,7.5149],[81.7685,7.5085],[81.768,7.4967],[81.7712,7.496],[81.7714,7.4896],[81.7842,7.4799],[81.7835,7.478],[81.7935,7.4744],[81.7973,7.4773],[81.7974,7.4948],[81.8031,7.4986],[81.8011,7.4845],[81.8019,7.4803],[81.8062,7.4808],[81.8071,7.4773],[81.8046,7.4692],[81.806,7.4579],[81.8028,7.4511],[81.8023,7.4549],[81.7951,7.4585],[81.7936,7.4395],[81.8033,7.4408],[81.8037,7.4487],[81.8059,7.4486],[81.8109,7.4605],[81.8161,7.4596]],[[81.8033,7.4987],[81.8063,7.4964],[81.8144,7.4642],[81.8076,7.477],[81.8082,7.4826],[81.8033,7.4987]]]}},{"type":"Feature","properties":{"n":"Manmunai South West","d":"Batticaloa","c":[81.6582,7.5661]},"geometry":{"type":"MultiPolygon","coordinates":[[[[81.6439,7.5225],[81.6462,7.5306],[81.6367,7.5352],[81.6371,7.5418],[81.6346,7.5461],[81.6397,7.5445],[81.6436,7.5479],[81.6487,7.5477],[81.6522,7.5536],[81.6614,7.5556],[81.6693,7.5486],[81.6723,7.55],[81.675,7.547],[81.6812,7.5478],[81.6865,7.5546],[81.6953,7.5518],[81.6955,7.5563],[81.699,7.5599],[81.7025,7.5583],[81.7102,7.5613],[81.7102,7.5531],[81.7137,7.5516],[81.7202,7.5573],[81.7269,7.5578],[81.7317,7.5618],[81.7433,7.5628],[81.7451,7.5651],[81.7495,7.5616],[81.758,7.5653],[81.7621,7.5744],[81.7675,7.5762],[81.7684,7.5799],[81.762,7.5822],[81.7545,7.5891],[81.7495,7.591],[81.7513,7.5867],[81.7476,7.5899],[81.7482,7.5945],[81.7437,7.5983],[81.7508,7.5937],[81.7529,7.5983],[81.7357,7.6257],[81.7327,7.627],[81.7332,7.623],[81.7298,7.6256],[81.7257,7.621],[81.7285,7.6282],[81.7227,7.635],[81.7205,7.6472],[81.7187,7.6477],[81.717,7.6436],[81.715,7.6443],[81.7104,7.6371],[81.7095,7.6282],[81.709,7.6336],[81.704,7.6407],[81.7015,7.64],[81.6966,7.6302],[81.6972,7.6216],[81.7008,7.6126],[81.7078,7.6054],[81.7073,7.603],[81.7038,7.6062],[81.7047,7.6094],[81.702,7.6095],[81.7017,7.6074],[81.6979,7.6141],[81.6799,7.6082],[81.6664,7.6105],[81.661,7.5868],[81.6533,7.5784],[81.6456,7.5778],[81.628,7.584],[81.6175,7.5762],[81.614,7.579],[81.5991,7.5795],[81.5963,7.5778],[81.5982,7.5743],[81.5932,7.5736],[81.5753,7.5457],[81.568,7.5426],[81.5495,7.5434],[81.5453,7.5075],[81.6164,7.5074],[81.6439,7.5225]]],[[[81.7262,7.6362],[81.7255,7.6421],[81.724,7.6403],[81.7262,7.6362]]]]}},{"type":"Feature","properties":{"n":"Manmunai West","d":"Batticaloa","c":[81.596,7.6324]},"geometry":{"type":"MultiPolygon","coordinates":[[[[81.703,7.649],[81.7015,7.6551],[81.6979,7.6551],[81.6973,7.6498],[81.6997,7.6479],[81.703,7.649]]],[[[81.6987,7.6325],[81.6871,7.6326],[81.6907,7.6339],[81.6906,7.639],[81.6844,7.6384],[81.6869,7.6445],[81.6862,7.6523],[81.6895,7.6503],[81.6908,7.6547],[81.6952,7.6554],[81.6832,7.6789],[81.6699,7.6807],[81.6718,7.6705],[81.6683,7.668],[81.6624,7.686],[81.6655,7.687],[81.663,7.6892],[81.6648,7.6899],[81.6505,7.6991],[81.6487,7.7073],[81.6418,7.7063],[81.6416,7.7015],[81.6384,7.6996],[81.6333,7.704],[81.6358,7.708],[81.6457,7.7096],[81.6506,7.7165],[81.6535,7.7143],[81.655,7.7211],[81.6508,7.7183],[81.6451,7.7214],[81.6327,7.7222],[81.6213,7.7291],[81.6177,7.7345],[81.6136,7.7306],[81.6137,7.7189],[81.6113,7.7152],[81.6079,7.7151],[81.6078,7.7113],[81.5974,7.715],[81.5951,7.7187],[81.5896,7.7191],[81.5877,7.7227],[81.5775,7.7238],[81.5751,7.7287],[81.5711,7.7242],[81.5703,7.7194],[81.5645,7.7204],[81.5633,7.7063],[81.5593,7.702],[81.5603,7.6958],[81.5529,7.6795],[81.542,7.6721],[81.5349,7.6596],[81.5237,7.6544],[81.5146,7.6436],[81.5202,7.6313],[81.5149,7.6254],[81.5177,7.6178],[81.5112,7.5766],[81.5106,7.5641],[81.5123,7.5565],[81.5154,7.5542],[81.5113,7.5412],[81.5057,7.5343],[81.5159,7.5332],[81.5333,7.5369],[81.5473,7.5347],[81.5495,7.5434],[81.568,7.5426],[81.5753,7.5457],[81.5932,7.5736],[81.5982,7.5743],[81.5963,7.5778],[81.5991,7.5795],[81.614,7.579],[81.6175,7.5762],[81.628,7.584],[81.6456,7.5778],[81.6533,7.5784],[81.661,7.5868],[81.6664,7.6105],[81.6799,7.6082],[81.6979,7.6141],[81.7017,7.6074],[81.702,7.6095],[81.7047,7.6094],[81.7038,7.6062],[81.7073,7.603],[81.7078,7.6054],[81.7008,7.6126],[81.6972,7.6216],[81.6966,7.6302],[81.6987,7.6325]]]]}},{"type":"Feature","properties":{"n":"Porativu Pattu","d":"Batticaloa","c":[81.7028,7.4973]},"geometry":{"type":"Polygon","coordinates":[[[81.6439,7.5225],[81.6485,7.5229],[81.6449,7.5189],[81.6479,7.5171],[81.6463,7.5125],[81.6486,7.5091],[81.6459,7.5034],[81.6534,7.4902],[81.6528,7.4795],[81.6594,7.4703],[81.6552,7.4541],[81.661,7.4526],[81.6598,7.4183],[81.6621,7.4124],[81.6621,7.3991],[81.67,7.4044],[81.6721,7.4137],[81.6946,7.4235],[81.7239,7.4547],[81.7474,7.4547],[81.7514,7.4576],[81.7495,7.4585],[81.7549,7.4627],[81.7575,7.4695],[81.7574,7.4783],[81.7596,7.4798],[81.7652,7.4775],[81.7671,7.4826],[81.766,7.4859],[81.7568,7.4878],[81.7574,7.4923],[81.7529,7.4931],[81.7508,7.5027],[81.7471,7.505],[81.7497,7.5066],[81.7454,7.5062],[81.7442,7.5094],[81.7652,7.5015],[81.7668,7.5114],[81.7779,7.5165],[81.7798,7.5198],[81.7786,7.5222],[81.776,7.5191],[81.7696,7.5221],[81.7702,7.5257],[81.7639,7.5338],[81.7594,7.5322],[81.752,7.5348],[81.7465,7.5315],[81.7456,7.5278],[81.7421,7.529],[81.7378,7.5392],[81.739,7.5465],[81.7441,7.5469],[81.7534,7.5371],[81.7603,7.5349],[81.7676,7.5367],[81.7693,7.5465],[81.7627,7.5603],[81.7559,7.5581],[81.7541,7.5521],[81.7492,7.5545],[81.7471,7.5605],[81.7433,7.5628],[81.7317,7.5618],[81.7269,7.5578],[81.7202,7.5573],[81.7137,7.5516],[81.7102,7.5531],[81.7102,7.5613],[81.7025,7.5583],[81.699,7.5599],[81.6955,7.5563],[81.6953,7.5518],[81.6865,7.5546],[81.6812,7.5478],[81.675,7.547],[81.6723,7.55],[81.6693,7.5486],[81.6614,7.5556],[81.6522,7.5536],[81.6487,7.5477],[81.6436,7.5479],[81.6397,7.5445],[81.6346,7.5461],[81.6371,7.5418],[81.6367,7.5352],[81.6462,7.5306],[81.6439,7.5225]]]}},{"type":"Feature","properties":{"n":"Colombo","d":"Colombo","c":[79.8572,6.9436]},"geometry":{"type":"Polygon","coordinates":[[[79.8828,6.9743],[79.8781,6.9807],[79.867,6.9778],[79.8654,6.968],[79.8595,6.963],[79.8571,6.9646],[79.8567,6.9625],[79.8512,6.9608],[79.8544,6.9605],[79.8511,6.9585],[79.8544,6.9581],[79.852,6.9562],[79.8554,6.9561],[79.8517,6.9543],[79.8539,6.9529],[79.8516,6.9531],[79.8477,6.9422],[79.8502,6.9414],[79.8451,6.9377],[79.8453,6.9416],[79.8431,6.9384],[79.8408,6.9396],[79.8441,6.9515],[79.8379,6.9604],[79.8424,6.9544],[79.84,6.9455],[79.8379,6.9458],[79.8377,6.9515],[79.837,6.945],[79.8217,6.9443],[79.8211,6.9568],[79.8289,6.9656],[79.8205,6.9571],[79.8209,6.9433],[79.8297,6.9343],[79.8322,6.9267],[79.8359,6.925],[79.8283,6.9223],[79.8382,6.9248],[79.8403,6.9297],[79.8441,6.9171],[79.8469,6.9197],[79.8484,6.9164],[79.8538,6.9149],[79.8536,6.9126],[79.8648,6.9185],[79.8644,6.9258],[79.8708,6.9305],[79.8759,6.9301],[79.8763,6.9476],[79.8725,6.9509],[79.8828,6.9743]]]}},{"type":"Feature","properties":{"n":"Dehiwala","d":"Colombo","c":[79.8738,6.8583]},"geometry":{"type":"Polygon","coordinates":[[[79.883,6.8731],[79.8783,6.8699],[79.8716,6.8738],[79.8641,6.8712],[79.8628,6.8642],[79.8576,6.8623],[79.8603,6.8487],[79.8678,6.8474],[79.8735,6.8439],[79.8747,6.8405],[79.8805,6.8392],[79.8826,6.8394],[79.8839,6.8526],[79.8809,6.854],[79.8806,6.857],[79.8882,6.8619],[79.891,6.869],[79.883,6.8731]]]}},{"type":"Feature","properties":{"n":"Homagama","d":"Colombo","c":[80.0135,6.8331]},"geometry":{"type":"Polygon","coordinates":[[[79.97,6.7587],[79.9763,6.758],[79.9819,6.7625],[79.9859,6.7619],[79.9899,6.7675],[80.0008,6.7706],[80.0023,6.7778],[80.0068,6.7775],[80.0136,6.7841],[80.0126,6.787],[80.0259,6.7926],[80.0339,6.8059],[80.0393,6.8042],[80.0432,6.8073],[80.0395,6.814],[80.0374,6.8135],[80.0421,6.8192],[80.0382,6.8267],[80.0423,6.8315],[80.0507,6.8346],[80.0528,6.8306],[80.0565,6.8299],[80.0569,6.8333],[80.0639,6.8364],[80.0686,6.844],[80.0745,6.842],[80.0769,6.8437],[80.0778,6.8653],[80.0701,6.877],[80.0706,6.8845],[80.0628,6.9083],[80.0622,6.9067],[80.0529,6.9072],[80.0513,6.9126],[80.0429,6.9145],[80.0401,6.912],[80.0348,6.9127],[80.0347,6.9083],[80.032,6.9063],[80.0344,6.9022],[80.0321,6.9005],[80.0325,6.8904],[80.0384,6.8813],[80.0336,6.8814],[80.0334,6.8795],[80.0295,6.882],[80.0203,6.8805],[80.0209,6.8859],[80.0158,6.8943],[80.0055,6.8809],[80.003,6.8628],[79.9874,6.8583],[79.9897,6.8455],[79.9848,6.8425],[79.9871,6.8384],[79.9709,6.833],[79.9689,6.8343],[79.9658,6.8296],[79.9628,6.8302],[79.9672,6.8287],[79.9657,6.8258],[79.9637,6.8284],[79.9595,6.828],[79.9589,6.8233],[79.9568,6.8244],[79.9491,6.8176],[79.948,6.8095],[79.9507,6.8017],[79.9626,6.7884],[79.9644,6.7825],[79.962,6.7831],[79.9484,6.7631],[79.9518,6.7584],[79.958,6.7575],[79.9652,6.7604],[79.97,6.7587]]]}},{"type":"Feature","properties":{"n":"Kaduwela","d":"Colombo","c":[79.9751,6.9029]},"geometry":{"type":"Polygon","coordinates":[[[79.9481,6.94],[79.9483,6.9379],[79.9444,6.9368],[79.9568,6.9171],[79.9495,6.9132],[79.945,6.9176],[79.9423,6.9112],[79.9402,6.9154],[79.9327,6.9153],[79.9271,6.9224],[79.9215,6.9232],[79.9136,6.9205],[79.914,6.9174],[79.912,6.9181],[79.9094,6.9144],[79.907,6.9166],[79.8991,6.9131],[79.907,6.9063],[79.9041,6.9044],[79.9125,6.8926],[79.9172,6.8898],[79.9247,6.8766],[79.9272,6.8789],[79.932,6.8747],[79.9353,6.8796],[79.9448,6.8816],[79.9437,6.8735],[79.9551,6.8738],[79.9581,6.8659],[79.9757,6.8659],[79.976,6.8635],[79.9821,6.863],[79.9846,6.8574],[80.003,6.8628],[80.0055,6.8809],[80.0158,6.8943],[80.0209,6.8859],[80.0203,6.8805],[80.0295,6.882],[80.0334,6.8795],[80.0336,6.8814],[80.0384,6.8813],[80.0325,6.8904],[80.0321,6.9005],[80.0344,6.9022],[80.032,6.9063],[80.0347,6.9083],[80.0348,6.9127],[80.0401,6.912],[80.0429,6.9145],[80.0275,6.9238],[80.0179,6.9245],[80.0115,6.939],[80.0121,6.9459],[79.9988,6.9419],[79.9918,6.9439],[79.984,6.9351],[79.9802,6.9383],[79.9675,6.9374],[79.9527,6.9428],[79.9481,6.94]]]}},{"type":"Feature","properties":{"n":"Kesbewa","d":"Colombo","c":[79.9262,6.8026]},"geometry":{"type":"Polygon","coordinates":[[[79.9484,6.7631],[79.962,6.7831],[79.9644,6.7825],[79.9626,6.7884],[79.9507,6.8017],[79.948,6.8095],[79.9491,6.8176],[79.9568,6.8244],[79.9589,6.8233],[79.9595,6.828],[79.9637,6.8284],[79.9657,6.8258],[79.9672,6.8287],[79.9634,6.8289],[79.9651,6.8305],[79.9626,6.8308],[79.9617,6.8385],[79.9493,6.8462],[79.946,6.8422],[79.933,6.8381],[79.9263,6.8293],[79.9207,6.8265],[79.916,6.8363],[79.9111,6.8358],[79.9126,6.844],[79.9086,6.8455],[79.9085,6.851],[79.8964,6.8516],[79.8996,6.8528],[79.8955,6.853],[79.8955,6.8564],[79.8882,6.8619],[79.8806,6.857],[79.8809,6.854],[79.8839,6.8526],[79.8833,6.8442],[79.8866,6.843],[79.8909,6.8351],[79.9007,6.8104],[79.9068,6.7769],[79.9033,6.7678],[79.9104,6.7647],[79.9165,6.758],[79.9182,6.7543],[79.9153,6.7515],[79.9181,6.7488],[79.9253,6.7471],[79.9438,6.7496],[79.9484,6.7631]]]}},{"type":"Feature","properties":{"n":"Kolonnawa","d":"Colombo","c":[79.9134,6.9341]},"geometry":{"type":"Polygon","coordinates":[[[79.9272,6.9495],[79.9237,6.9491],[79.9203,6.9522],[79.9146,6.9454],[79.91,6.9469],[79.9083,6.9501],[79.8976,6.9471],[79.8942,6.9508],[79.898,6.9536],[79.8975,6.9557],[79.8817,6.9539],[79.8771,6.9581],[79.8725,6.9509],[79.8763,6.9476],[79.8762,6.9429],[79.8816,6.9386],[79.8795,6.934],[79.8818,6.9256],[79.8984,6.9233],[79.8971,6.9147],[79.8991,6.9131],[79.907,6.9166],[79.9094,6.9144],[79.912,6.9181],[79.914,6.9174],[79.9136,6.9205],[79.9259,6.923],[79.9327,6.9153],[79.9402,6.9154],[79.9423,6.9112],[79.945,6.9176],[79.9495,6.9132],[79.9568,6.9171],[79.9444,6.9368],[79.9483,6.9379],[79.9481,6.94],[79.9415,6.9382],[79.941,6.9423],[79.9323,6.95],[79.9272,6.9495]]]}},{"type":"Feature","properties":{"n":"Maharagama","d":"Colombo","c":[79.9401,6.8562]},"geometry":{"type":"Polygon","coordinates":[[[79.8882,6.8619],[79.8955,6.8564],[79.8955,6.853],[79.8996,6.8528],[79.8964,6.8516],[79.9085,6.851],[79.9086,6.8455],[79.9126,6.844],[79.9111,6.8358],[79.916,6.8363],[79.9207,6.8265],[79.9263,6.8293],[79.933,6.8381],[79.946,6.8422],[79.9493,6.8462],[79.9617,6.8385],[79.9626,6.8308],[79.9649,6.8319],[79.9658,6.8296],[79.9689,6.8343],[79.9709,6.833],[79.9871,6.8384],[79.9848,6.8425],[79.9897,6.8455],[79.9874,6.8583],[79.9846,6.8574],[79.9821,6.863],[79.976,6.8635],[79.9757,6.8659],[79.9581,6.8659],[79.9551,6.8738],[79.9437,6.8735],[79.9448,6.8816],[79.9353,6.8796],[79.932,6.8747],[79.9272,6.8789],[79.9247,6.8766],[79.92,6.8841],[79.9081,6.8843],[79.9059,6.881],[79.8982,6.8798],[79.8992,6.8754],[79.911,6.864],[79.9122,6.8597],[79.9105,6.8615],[79.9088,6.8564],[79.9054,6.857],[79.8901,6.8669],[79.8882,6.8619]]]}},{"type":"Feature","properties":{"n":"Moratuwa","d":"Colombo","c":[79.8893,6.7826]},"geometry":{"type":"Polygon","coordinates":[[[79.8964,6.8181],[79.8734,6.8054],[79.8724,6.8073],[79.8673,6.8054],[79.899,6.715],[79.9018,6.7188],[79.8995,6.7313],[79.8909,6.7542],[79.8903,6.7649],[79.8843,6.7729],[79.8913,6.7771],[79.9033,6.7678],[79.9064,6.773],[79.9007,6.8104],[79.8964,6.8181]]]}},{"type":"Feature","properties":{"n":"Padukka","d":"Colombo","c":[80.1195,6.8336]},"geometry":{"type":"Polygon","coordinates":[[[80.1772,6.8653],[80.1716,6.8661],[80.1686,6.8642],[80.159,6.873],[80.1494,6.8718],[80.1462,6.869],[80.1406,6.8781],[80.1344,6.8797],[80.1225,6.8881],[80.112,6.8819],[80.1109,6.8774],[80.1129,6.8732],[80.1103,6.8703],[80.099,6.873],[80.0965,6.8612],[80.0872,6.8599],[80.0861,6.8624],[80.0832,6.8597],[80.0777,6.8627],[80.0769,6.8437],[80.0745,6.842],[80.0686,6.844],[80.0639,6.8364],[80.0569,6.8333],[80.0565,6.8299],[80.0528,6.8306],[80.0507,6.8346],[80.0388,6.8286],[80.0421,6.8192],[80.0374,6.8135],[80.0395,6.814],[80.0432,6.8073],[80.0393,6.8042],[80.0412,6.7978],[80.0479,6.7974],[80.0596,6.7901],[80.0652,6.7956],[80.074,6.8154],[80.0783,6.8165],[80.083,6.8125],[80.0876,6.815],[80.0888,6.8084],[80.0957,6.8039],[80.0958,6.7946],[80.0993,6.7894],[80.1007,6.7811],[80.1082,6.7703],[80.1213,6.7705],[80.1239,6.7738],[80.1241,6.7819],[80.1154,6.7982],[80.1143,6.805],[80.1219,6.8073],[80.1312,6.8159],[80.1411,6.8192],[80.1426,6.8234],[80.1468,6.8261],[80.1572,6.823],[80.1647,6.8162],[80.1726,6.8212],[80.178,6.814],[80.1835,6.8154],[80.1854,6.8183],[80.1872,6.8144],[80.197,6.814],[80.2003,6.8181],[80.2012,6.8264],[80.1927,6.8512],[80.1735,6.8574],[80.1772,6.8653]]]}},{"type":"Feature","properties":{"n":"Ratmalana","d":"Colombo","c":[79.8757,6.8267]},"geometry":{"type":"Polygon","coordinates":[[[79.8603,6.8487],[79.8608,6.8361],[79.8589,6.8333],[79.8673,6.8054],[79.8724,6.8073],[79.8734,6.8054],[79.8964,6.8181],[79.8866,6.843],[79.8833,6.8442],[79.8826,6.8394],[79.8747,6.8405],[79.8735,6.8439],[79.8678,6.8474],[79.8603,6.8487]]]}},{"type":"Feature","properties":{"n":"Seethawaka","d":"Colombo","c":[80.1451,6.9223]},"geometry":{"type":"Polygon","coordinates":[[[80.2052,6.9784],[80.1982,6.9758],[80.1879,6.9783],[80.1821,6.9748],[80.1671,6.9791],[80.1669,6.9723],[80.1637,6.9705],[80.1495,6.9737],[80.122,6.9742],[80.1195,6.9652],[80.1079,6.9626],[80.1083,6.9596],[80.1041,6.9539],[80.0966,6.9513],[80.0958,6.9453],[80.0916,6.9391],[80.0932,6.934],[80.0912,6.9121],[80.0864,6.9135],[80.0831,6.9098],[80.0753,6.9109],[80.0717,6.9079],[80.0623,6.9126],[80.0605,6.908],[80.0641,6.9066],[80.0678,6.8885],[80.0706,6.8845],[80.0701,6.877],[80.0777,6.8627],[80.0832,6.8597],[80.0861,6.8624],[80.0872,6.8599],[80.0965,6.8612],[80.099,6.873],[80.1103,6.8703],[80.1129,6.8732],[80.1109,6.8774],[80.112,6.8819],[80.1225,6.8881],[80.1344,6.8797],[80.1406,6.8781],[80.1462,6.869],[80.1494,6.8718],[80.159,6.873],[80.1686,6.8642],[80.1716,6.8661],[80.1772,6.8653],[80.1819,6.8856],[80.1878,6.8928],[80.1867,6.8981],[80.1924,6.904],[80.197,6.9032],[80.2018,6.9126],[80.209,6.9165],[80.2106,6.923],[80.206,6.9372],[80.2185,6.9356],[80.2218,6.9413],[80.2209,6.9497],[80.2153,6.9565],[80.2158,6.9732],[80.2052,6.9784]]]}},{"type":"Feature","properties":{"n":"Sri Jayawardanapura Kotte","d":"Colombo","c":[79.8962,6.891]},"geometry":{"type":"Polygon","coordinates":[[[79.8901,6.8669],[79.9088,6.8564],[79.9105,6.8615],[79.9122,6.8597],[79.911,6.864],[79.8992,6.8754],[79.8982,6.8798],[79.9059,6.881],[79.9081,6.8843],[79.92,6.8841],[79.9041,6.9044],[79.907,6.9063],[79.8971,6.9147],[79.8984,6.9233],[79.8841,6.9238],[79.8841,6.9168],[79.8879,6.9144],[79.8851,6.9048],[79.8804,6.8997],[79.8826,6.8923],[79.8804,6.8876],[79.8859,6.8736],[79.883,6.8731],[79.8865,6.87],[79.8899,6.8703],[79.8901,6.8669]]]}},{"type":"Feature","properties":{"n":"Thimbirigasyaya","d":"Colombo","c":[79.8678,6.8995]},"geometry":{"type":"Polygon","coordinates":[[[79.8441,6.9171],[79.8576,6.8623],[79.8628,6.8642],[79.8641,6.8712],[79.8716,6.8738],[79.8783,6.8699],[79.8859,6.8736],[79.8804,6.8876],[79.8826,6.8923],[79.8804,6.8997],[79.8851,6.9048],[79.8879,6.9144],[79.8841,6.9168],[79.8841,6.9238],[79.8795,6.934],[79.8816,6.9386],[79.8789,6.9421],[79.8762,6.9429],[79.8759,6.9301],[79.8708,6.9305],[79.8644,6.9258],[79.8648,6.9185],[79.8536,6.9126],[79.8538,6.9149],[79.8484,6.9164],[79.8469,6.9197],[79.8441,6.9171]]]}},{"type":"Feature","properties":{"n":"Akmeemana","d":"Galle","c":[80.2825,6.0593]},"geometry":{"type":"Polygon","coordinates":[[[80.279,6.0848],[80.2766,6.0836],[80.2592,6.0902],[80.249,6.0991],[80.2479,6.1027],[80.2423,6.1052],[80.2377,6.0988],[80.2408,6.0951],[80.2389,6.0947],[80.2389,6.0904],[80.2301,6.0853],[80.2416,6.0747],[80.2456,6.0739],[80.2482,6.0685],[80.2463,6.0648],[80.2496,6.0617],[80.2457,6.0568],[80.2354,6.0618],[80.2339,6.0595],[80.234,6.062],[80.232,6.0622],[80.2256,6.0512],[80.2355,6.0513],[80.2352,6.0379],[80.2419,6.036],[80.2453,6.0286],[80.2443,6.0261],[80.2506,6.0222],[80.2551,6.0089],[80.2542,6.0054],[80.2602,6.0024],[80.2692,6.0069],[80.2743,6.0057],[80.2674,6.0183],[80.2726,6.0247],[80.277,6.0217],[80.277,6.0256],[80.2822,6.0241],[80.286,6.0268],[80.2819,6.0296],[80.2811,6.0366],[80.2886,6.0335],[80.2918,6.0355],[80.2978,6.0318],[80.3024,6.0459],[80.2969,6.0495],[80.3002,6.0551],[80.3255,6.0491],[80.3322,6.0554],[80.3506,6.0582],[80.3527,6.0635],[80.35,6.0694],[80.3534,6.0721],[80.3515,6.0783],[80.3497,6.0763],[80.3451,6.0771],[80.3432,6.0899],[80.3284,6.0913],[80.3218,6.0879],[80.3102,6.0895],[80.309,6.0793],[80.3061,6.0779],[80.2944,6.0808],[80.2932,6.078],[80.2875,6.0832],[80.279,6.0848]]]}},{"type":"Feature","properties":{"n":"Ambalangoda","d":"Galle","c":[80.0996,6.2219]},"geometry":{"type":"Polygon","coordinates":[[[80.1337,6.2486],[80.1289,6.245],[80.1215,6.2471],[80.1188,6.2507],[80.1119,6.2488],[80.107,6.2512],[80.099,6.243],[80.0956,6.2462],[80.0844,6.2462],[80.0826,6.2528],[80.0751,6.2581],[80.0702,6.2491],[80.0613,6.2555],[80.0578,6.2511],[80.0595,6.2495],[80.0567,6.2488],[80.0535,6.2433],[80.0487,6.2431],[80.05,6.2461],[80.0433,6.2449],[80.0475,6.2356],[80.0497,6.2356],[80.0496,6.2331],[80.0476,6.2349],[80.0509,6.2279],[80.063,6.2262],[80.0633,6.2309],[80.0665,6.2323],[80.0653,6.2376],[80.0705,6.226],[80.0777,6.2248],[80.0833,6.2198],[80.0824,6.2158],[80.0866,6.2139],[80.0869,6.2065],[80.0837,6.2073],[80.0789,6.2046],[80.0842,6.1981],[80.088,6.197],[80.0862,6.1933],[80.0875,6.1861],[80.0908,6.1856],[80.0918,6.1819],[80.0861,6.178],[80.0918,6.17],[80.1058,6.1747],[80.1005,6.1835],[80.1057,6.1835],[80.1087,6.1853],[80.1078,6.1879],[80.111,6.1891],[80.1192,6.1872],[80.121,6.1904],[80.1196,6.1978],[80.1204,6.2012],[80.1233,6.2016],[80.1227,6.204],[80.1335,6.2039],[80.1343,6.2079],[80.1372,6.2089],[80.1388,6.2296],[80.1437,6.2337],[80.1337,6.2486]]]}},{"type":"Feature","properties":{"n":"Baddegama","d":"Galle","c":[80.2184,6.1363]},"geometry":{"type":"Polygon","coordinates":[[[80.279,6.0848],[80.2794,6.0922],[80.2861,6.0936],[80.2925,6.0994],[80.2905,6.1074],[80.3041,6.1254],[80.3022,6.1273],[80.3032,6.1333],[80.2979,6.1345],[80.2954,6.14],[80.3045,6.1456],[80.2931,6.151],[80.2901,6.1482],[80.2908,6.1424],[80.2872,6.1399],[80.2817,6.1409],[80.2804,6.1372],[80.2783,6.1377],[80.2787,6.133],[80.2743,6.1341],[80.2692,6.1417],[80.2528,6.143],[80.2481,6.1534],[80.2442,6.1526],[80.2338,6.1586],[80.2338,6.165],[80.2316,6.1672],[80.2352,6.1697],[80.2269,6.1736],[80.2191,6.1826],[80.2143,6.1821],[80.1995,6.1918],[80.1867,6.1833],[80.1861,6.1796],[80.1796,6.1793],[80.1754,6.1746],[80.1722,6.1788],[80.1683,6.1765],[80.1651,6.1778],[80.1602,6.1735],[80.1514,6.1816],[80.1486,6.1785],[80.1387,6.1784],[80.143,6.1728],[80.1478,6.172],[80.1496,6.1679],[80.1466,6.1665],[80.1471,6.1613],[80.1517,6.1597],[80.1507,6.1564],[80.1534,6.1516],[80.1496,6.1511],[80.1483,6.1447],[80.1505,6.139],[80.1487,6.1391],[80.1481,6.135],[80.1581,6.1302],[80.1731,6.1174],[80.1715,6.1142],[80.1748,6.1103],[80.1769,6.0992],[80.175,6.0959],[80.1816,6.0896],[80.1815,6.0869],[80.1822,6.0933],[80.1852,6.0926],[80.1928,6.0978],[80.2062,6.0979],[80.2052,6.104],[80.2098,6.1084],[80.2111,6.1156],[80.2266,6.1092],[80.2315,6.1106],[80.2398,6.1041],[80.2423,6.1052],[80.2479,6.1027],[80.249,6.0991],[80.2592,6.0902],[80.2766,6.0836],[80.279,6.0848]]]}},{"type":"Feature","properties":{"n":"Balapitiya","d":"Galle","c":[80.0486,6.3139]},"geometry":{"type":"Polygon","coordinates":[[[80.0613,6.2555],[80.0642,6.2573],[80.0584,6.2729],[80.0641,6.281],[80.0611,6.2831],[80.0628,6.2909],[80.0604,6.2965],[80.0683,6.3018],[80.065,6.3126],[80.0783,6.3204],[80.0791,6.3243],[80.0726,6.3509],[80.0672,6.3534],[80.0663,6.3571],[80.0623,6.3576],[80.0663,6.3618],[80.0583,6.3702],[80.0477,6.3674],[80.0459,6.3704],[80.0395,6.3672],[80.0383,6.3622],[80.0353,6.3609],[80.0371,6.3545],[80.0216,6.3535],[80.0165,6.3582],[80.0136,6.3564],[80.0261,6.3301],[80.0283,6.3213],[80.0262,6.3126],[80.0318,6.3051],[80.0357,6.293],[80.0337,6.2852],[80.0312,6.284],[80.033,6.2738],[80.0306,6.2732],[80.0358,6.2552],[80.0433,6.2449],[80.05,6.2461],[80.0487,6.2431],[80.0535,6.2433],[80.0572,6.2466],[80.0613,6.2555]]]}},{"type":"Feature","properties":{"n":"Bentota","d":"Galle","c":[80.0539,6.3862]},"geometry":{"type":"Polygon","coordinates":[[[80.0663,6.3618],[80.071,6.3673],[80.0724,6.3768],[80.0791,6.379],[80.0939,6.3626],[80.1035,6.3623],[80.1101,6.3523],[80.1087,6.3505],[80.112,6.3462],[80.1112,6.3433],[80.1195,6.3412],[80.1222,6.3367],[80.1213,6.3331],[80.1384,6.3362],[80.1339,6.3421],[80.1355,6.3449],[80.1311,6.3483],[80.1313,6.3644],[80.1261,6.3693],[80.1208,6.3701],[80.1148,6.3815],[80.1063,6.3887],[80.0832,6.4016],[80.0777,6.4012],[80.0723,6.3975],[80.067,6.3978],[80.0607,6.4069],[80.0535,6.4082],[80.0474,6.4138],[80.0402,6.4154],[80.0361,6.4189],[80.0275,6.4193],[80.0184,6.4325],[80.0069,6.4368],[80.0034,6.4344],[80.002,6.428],[79.9957,6.4261],[79.9909,6.4379],[79.9859,6.4419],[79.984,6.4398],[79.9916,6.4287],[79.9922,6.4169],[80.0025,6.3983],[80.0016,6.3947],[80.0068,6.382],[80.0082,6.3673],[80.0141,6.3579],[80.0216,6.3535],[80.0371,6.3545],[80.0353,6.3609],[80.0383,6.3622],[80.0395,6.3672],[80.0459,6.3704],[80.0477,6.3674],[80.0583,6.3702],[80.0663,6.3618]]]}},{"type":"Feature","properties":{"n":"Bope-Poddala","d":"Galle","c":[80.2145,6.0834]},"geometry":{"type":"Polygon","coordinates":[[[80.2398,6.1041],[80.2315,6.1106],[80.2266,6.1092],[80.2111,6.1156],[80.2098,6.1084],[80.2052,6.104],[80.2048,6.0967],[80.1928,6.0978],[80.1852,6.0926],[80.1822,6.0933],[80.1897,6.0596],[80.1933,6.0574],[80.2004,6.058],[80.2317,6.0703],[80.2339,6.0595],[80.2354,6.0618],[80.2457,6.0568],[80.2496,6.0617],[80.2463,6.0648],[80.2482,6.0685],[80.2456,6.0739],[80.2416,6.0747],[80.2301,6.0853],[80.2389,6.0904],[80.2389,6.0947],[80.2408,6.0951],[80.2377,6.0988],[80.2398,6.1041]]]}},{"type":"Feature","properties":{"n":"Elpitiya","d":"Galle","c":[80.1843,6.2899]},"geometry":{"type":"Polygon","coordinates":[[[80.1338,6.3352],[80.1375,6.3284],[80.1322,6.3246],[80.1246,6.3236],[80.1252,6.3167],[80.1296,6.3151],[80.1309,6.3091],[80.1256,6.3072],[80.1319,6.3045],[80.128,6.2844],[80.1374,6.2756],[80.1427,6.2653],[80.1534,6.2596],[80.1625,6.2405],[80.1702,6.2381],[80.1744,6.234],[80.174,6.2305],[80.169,6.2311],[80.1701,6.2295],[80.1746,6.2286],[80.1878,6.2127],[80.2035,6.2034],[80.2045,6.2069],[80.2189,6.2027],[80.2168,6.2056],[80.2182,6.2082],[80.2279,6.2078],[80.2408,6.2191],[80.2408,6.2255],[80.2443,6.2293],[80.2457,6.2357],[80.2438,6.2479],[80.2364,6.2539],[80.2323,6.2543],[80.2311,6.2652],[80.2183,6.2666],[80.2115,6.2699],[80.2008,6.2861],[80.2048,6.2889],[80.205,6.2921],[80.2106,6.2929],[80.21,6.3033],[80.2151,6.3028],[80.2256,6.3073],[80.2256,6.3191],[80.229,6.3248],[80.2408,6.3282],[80.2386,6.3389],[80.2201,6.3404],[80.209,6.3563],[80.2064,6.3562],[80.2044,6.3593],[80.1877,6.3542],[80.1843,6.3579],[80.1681,6.3595],[80.1524,6.3674],[80.1339,6.3659],[80.1302,6.3676],[80.1311,6.3483],[80.1355,6.3449],[80.1339,6.3421],[80.1384,6.3362],[80.1338,6.3352]]]}},{"type":"Feature","properties":{"n":"Galle4Gravets","d":"Galle","c":[80.2057,6.0529]},"geometry":{"type":"Polygon","coordinates":[[[80.232,6.0622],[80.2334,6.0669],[80.2317,6.0703],[80.2004,6.058],[80.1933,6.0574],[80.1888,6.0617],[80.1829,6.0905],[80.1815,6.0869],[80.1771,6.0877],[80.17,6.0837],[80.176,6.0732],[80.1715,6.0617],[80.1779,6.0516],[80.1964,6.0383],[80.1996,6.0393],[80.2069,6.0356],[80.2098,6.0302],[80.2118,6.0309],[80.2116,6.026],[80.2154,6.0232],[80.2178,6.0245],[80.2153,6.0299],[80.2164,6.0327],[80.2225,6.0362],[80.2258,6.0334],[80.2256,6.0357],[80.2297,6.0342],[80.2282,6.0336],[80.2305,6.0318],[80.2248,6.0317],[80.2269,6.0302],[80.2326,6.0297],[80.235,6.0326],[80.2443,6.0261],[80.2453,6.0286],[80.2419,6.036],[80.2352,6.0379],[80.2355,6.0513],[80.2256,6.0512],[80.232,6.0622]]]}},{"type":"Feature","properties":{"n":"Gonapinuwala","d":"Galle","c":[80.1293,6.1657]},"geometry":{"type":"Polygon","coordinates":[[[80.1058,6.1747],[80.1133,6.1706],[80.1145,6.1668],[80.1127,6.1649],[80.1167,6.1601],[80.1169,6.1511],[80.1128,6.1472],[80.1184,6.1398],[80.1171,6.1348],[80.1211,6.1348],[80.1247,6.1388],[80.1286,6.1338],[80.1369,6.131],[80.1417,6.1339],[80.1418,6.1377],[80.1481,6.135],[80.1487,6.1391],[80.1505,6.139],[80.1483,6.1447],[80.1496,6.1511],[80.1534,6.1516],[80.1507,6.1564],[80.1517,6.1597],[80.1471,6.1613],[80.1466,6.1665],[80.1496,6.1679],[80.1478,6.172],[80.143,6.1728],[80.1416,6.1766],[80.1387,6.1767],[80.1408,6.1842],[80.1379,6.1851],[80.1378,6.1926],[80.1335,6.2039],[80.1227,6.204],[80.1233,6.2016],[80.1204,6.2012],[80.1196,6.1978],[80.121,6.1904],[80.1192,6.1872],[80.111,6.1891],[80.1078,6.1879],[80.1087,6.1853],[80.1057,6.1835],[80.1005,6.1835],[80.1058,6.1747]]]}},{"type":"Feature","properties":{"n":"Habaraduwa","d":"Galle","c":[80.3187,6.0013]},"geometry":{"type":"Polygon","coordinates":[[[80.2443,6.0261],[80.2397,6.0281],[80.2375,6.0184],[80.2327,6.0172],[80.2411,6.0052],[80.243,6.0085],[80.2475,6.0092],[80.2545,6.0025],[80.2625,5.9989],[80.3146,5.9903],[80.3617,5.9713],[80.3686,5.9666],[80.3798,5.9646],[80.3828,5.967],[80.384,5.9723],[80.3795,5.9834],[80.3855,5.9944],[80.3865,6.0034],[80.3842,6.002],[80.3794,6.0049],[80.3762,5.9984],[80.3726,5.9984],[80.3701,6.0014],[80.3704,5.9994],[80.3635,6.0014],[80.358,5.9965],[80.3574,5.9909],[80.3556,5.991],[80.3519,6.0028],[80.3527,6.0069],[80.3485,6.0045],[80.3418,6.0097],[80.3412,6.0136],[80.3379,6.0133],[80.3339,6.0168],[80.3225,6.0138],[80.3172,6.0186],[80.3192,6.0216],[80.3151,6.0202],[80.2977,6.0327],[80.2945,6.0324],[80.2918,6.0355],[80.2886,6.0335],[80.2828,6.0375],[80.2803,6.0359],[80.2825,6.035],[80.2819,6.0296],[80.286,6.0268],[80.2822,6.0241],[80.277,6.0256],[80.277,6.0217],[80.2726,6.0247],[80.2674,6.0183],[80.2743,6.0057],[80.2692,6.0069],[80.2602,6.0024],[80.2542,6.0054],[80.2551,6.0089],[80.2506,6.0222],[80.2443,6.0261]]]}},{"type":"Feature","properties":{"n":"Hikkaduwa","d":"Galle","c":[80.1286,6.1338]},"geometry":{"type":"Polygon","coordinates":[[[80.0509,6.2279],[80.0615,6.2023],[80.0603,6.1919],[80.0865,6.1666],[80.0891,6.1557],[80.0929,6.154],[80.0971,6.1467],[80.0954,6.1444],[80.097,6.1446],[80.0968,6.1408],[80.0943,6.1425],[80.0974,6.1396],[80.0975,6.1309],[80.1208,6.1111],[80.1231,6.1055],[80.1215,6.1006],[80.1389,6.0892],[80.1485,6.0781],[80.1715,6.0617],[80.176,6.0732],[80.17,6.0837],[80.1771,6.0877],[80.1815,6.0869],[80.1816,6.0896],[80.175,6.0959],[80.1769,6.0992],[80.1748,6.1103],[80.1715,6.1142],[80.1731,6.1174],[80.1581,6.1302],[80.1418,6.1377],[80.1417,6.1339],[80.1369,6.131],[80.1286,6.1338],[80.1247,6.1388],[80.1211,6.1348],[80.1171,6.1348],[80.1184,6.1398],[80.1128,6.1472],[80.1169,6.1511],[80.1167,6.1601],[80.1127,6.1649],[80.1145,6.1668],[80.1133,6.1706],[80.1058,6.1747],[80.0918,6.17],[80.0861,6.178],[80.0918,6.1819],[80.0908,6.1856],[80.0875,6.1861],[80.0862,6.1933],[80.088,6.197],[80.0842,6.1981],[80.0789,6.2046],[80.0837,6.2073],[80.0869,6.2065],[80.0866,6.2139],[80.0824,6.2158],[80.0833,6.2198],[80.0777,6.2248],[80.0705,6.226],[80.0653,6.2376],[80.0665,6.2323],[80.0633,6.2309],[80.063,6.2262],[80.0509,6.2279]]]}},{"type":"Feature","properties":{"n":"Imaduwa","d":"Galle","c":[80.3561,6.0321]},"geometry":{"type":"Polygon","coordinates":[[[80.2977,6.0327],[80.3088,6.0231],[80.3151,6.0202],[80.3192,6.0216],[80.3172,6.0186],[80.3225,6.0138],[80.3339,6.0168],[80.3379,6.0133],[80.3412,6.0136],[80.3418,6.0097],[80.3485,6.0045],[80.3527,6.0069],[80.3519,6.0028],[80.3556,5.991],[80.3574,5.9909],[80.358,5.9965],[80.3635,6.0014],[80.3704,5.9994],[80.3701,6.0014],[80.3726,5.9984],[80.3762,5.9984],[80.3794,6.0049],[80.3842,6.002],[80.3884,6.0101],[80.394,6.0135],[80.408,6.0122],[80.414,6.0171],[80.4221,6.0196],[80.4159,6.0253],[80.4152,6.0289],[80.4116,6.0296],[80.4109,6.0328],[80.4016,6.0343],[80.3916,6.0324],[80.3872,6.0358],[80.3855,6.0529],[80.3785,6.0535],[80.3779,6.0574],[80.3738,6.0577],[80.3742,6.0633],[80.3764,6.0637],[80.3681,6.0689],[80.3675,6.0724],[80.3626,6.0731],[80.3656,6.0708],[80.3603,6.0676],[80.3534,6.0721],[80.35,6.0694],[80.3527,6.0635],[80.3506,6.0582],[80.3322,6.0554],[80.3255,6.0491],[80.3002,6.0551],[80.2969,6.0495],[80.3024,6.0459],[80.2977,6.0327]]]}},{"type":"Feature","properties":{"n":"Karandeniya","d":"Galle","c":[80.0985,6.3006]},"geometry":{"type":"Polygon","coordinates":[[[80.1337,6.2486],[80.1372,6.2523],[80.1448,6.2516],[80.1408,6.2557],[80.1494,6.2536],[80.1374,6.2756],[80.128,6.2844],[80.1319,6.3045],[80.1256,6.3072],[80.1309,6.3091],[80.1296,6.3151],[80.1252,6.3167],[80.1246,6.3236],[80.1322,6.3246],[80.1375,6.3284],[80.1338,6.3352],[80.1228,6.3349],[80.1213,6.3331],[80.1222,6.3367],[80.1195,6.3412],[80.1112,6.3433],[80.112,6.3462],[80.1087,6.3505],[80.1101,6.3523],[80.1035,6.3623],[80.0939,6.3626],[80.0791,6.379],[80.0724,6.3768],[80.071,6.3673],[80.0623,6.3576],[80.0663,6.3571],[80.0672,6.3534],[80.0726,6.3509],[80.0791,6.3243],[80.0783,6.3204],[80.065,6.3126],[80.0683,6.3018],[80.0604,6.2965],[80.0628,6.2909],[80.0611,6.2831],[80.0641,6.281],[80.0584,6.2729],[80.0642,6.2573],[80.0613,6.2555],[80.0702,6.2491],[80.0762,6.2578],[80.0826,6.2528],[80.0844,6.2462],[80.0956,6.2462],[80.099,6.243],[80.107,6.2512],[80.1119,6.2488],[80.1188,6.2507],[80.1215,6.2471],[80.1289,6.245],[80.1337,6.2486]]]}},{"type":"Feature","properties":{"n":"Nagoda","d":"Galle","c":[80.311,6.1991]},"geometry":{"type":"Polygon","coordinates":[[[80.3841,6.2195],[80.3719,6.2356],[80.3652,6.2331],[80.3647,6.2292],[80.3605,6.2281],[80.3455,6.2373],[80.3341,6.235],[80.3287,6.2362],[80.3254,6.2434],[80.3173,6.2441],[80.3145,6.2414],[80.3101,6.2432],[80.308,6.2662],[80.298,6.2717],[80.3013,6.2852],[80.2798,6.2863],[80.2651,6.2783],[80.2637,6.2697],[80.2654,6.2666],[80.2633,6.2595],[80.2756,6.2324],[80.2738,6.2282],[80.2677,6.2247],[80.2702,6.2218],[80.2701,6.216],[80.262,6.2197],[80.2613,6.2144],[80.2567,6.2131],[80.2537,6.2065],[80.2524,6.2086],[80.2438,6.2015],[80.2387,6.1869],[80.2407,6.1827],[80.238,6.171],[80.2316,6.1672],[80.2338,6.165],[80.2327,6.1609],[80.2442,6.1526],[80.2481,6.1534],[80.2528,6.143],[80.2692,6.1417],[80.2743,6.1341],[80.2787,6.133],[80.2783,6.1377],[80.2804,6.1372],[80.2817,6.1409],[80.2872,6.1399],[80.2908,6.1424],[80.2901,6.1482],[80.2931,6.151],[80.3045,6.1456],[80.328,6.1427],[80.3346,6.1508],[80.3423,6.1502],[80.3481,6.1558],[80.3507,6.1526],[80.3597,6.1529],[80.3636,6.158],[80.3684,6.158],[80.3688,6.1628],[80.3741,6.166],[80.3807,6.1617],[80.383,6.1672],[80.3892,6.1663],[80.3937,6.1707],[80.3878,6.1768],[80.3889,6.18],[80.3856,6.1868],[80.3957,6.1882],[80.4007,6.1916],[80.3956,6.2058],[80.3841,6.2195]]]}},{"type":"Feature","properties":{"n":"Neluwa","d":"Galle","c":[80.4086,6.3598]},"geometry":{"type":"Polygon","coordinates":[[[80.3788,6.4257],[80.3768,6.4246],[80.3736,6.4288],[80.3664,6.4272],[80.3543,6.4173],[80.3505,6.4193],[80.3143,6.3991],[80.3367,6.3712],[80.3391,6.3641],[80.3698,6.3188],[80.3735,6.3198],[80.3744,6.3244],[80.3839,6.3321],[80.3904,6.33],[80.3967,6.3338],[80.4046,6.3345],[80.4084,6.3317],[80.4102,6.3257],[80.4214,6.3179],[80.4276,6.3172],[80.4298,6.3096],[80.4432,6.3018],[80.4516,6.2873],[80.4576,6.29],[80.4644,6.2813],[80.4708,6.2797],[80.4742,6.2802],[80.4786,6.2856],[80.4837,6.2839],[80.4851,6.2921],[80.4938,6.2997],[80.4909,6.3013],[80.4877,6.3124],[80.4846,6.3141],[80.4821,6.3212],[80.4763,6.3223],[80.4726,6.3304],[80.4687,6.3315],[80.4626,6.3381],[80.458,6.3504],[80.464,6.3525],[80.4759,6.3651],[80.4804,6.3663],[80.4874,6.3637],[80.4937,6.3678],[80.4923,6.3774],[80.489,6.3799],[80.481,6.3805],[80.4702,6.3784],[80.4638,6.386],[80.4509,6.3867],[80.4394,6.3942],[80.4357,6.394],[80.4295,6.3885],[80.4192,6.3906],[80.4016,6.4037],[80.3788,6.4257]]]}},{"type":"Feature","properties":{"n":"Niyagama","d":"Galle","c":[80.2503,6.3017]},"geometry":{"type":"Polygon","coordinates":[[[80.2394,6.218],[80.2432,6.2116],[80.2422,6.209],[80.2465,6.204],[80.2524,6.2086],[80.2537,6.2065],[80.2567,6.2131],[80.2613,6.2144],[80.262,6.2197],[80.2701,6.216],[80.2702,6.2218],[80.2677,6.2247],[80.2738,6.2282],[80.2756,6.2324],[80.2633,6.2595],[80.2651,6.2783],[80.2798,6.2863],[80.3013,6.2852],[80.3019,6.3041],[80.297,6.3255],[80.2929,6.3246],[80.2735,6.3485],[80.2653,6.3505],[80.2519,6.3645],[80.2453,6.3668],[80.2433,6.3723],[80.2369,6.3766],[80.2151,6.3796],[80.2101,6.3711],[80.2043,6.3721],[80.2059,6.3669],[80.2044,6.3593],[80.2064,6.3562],[80.209,6.3563],[80.2201,6.3404],[80.2386,6.3389],[80.2408,6.3282],[80.229,6.3248],[80.2256,6.3191],[80.2256,6.3073],[80.2151,6.3028],[80.21,6.3033],[80.2106,6.2929],[80.205,6.2921],[80.2048,6.2889],[80.2008,6.2861],[80.2115,6.2699],[80.2183,6.2666],[80.2311,6.2652],[80.2323,6.2543],[80.2364,6.2539],[80.2438,6.2479],[80.2457,6.2357],[80.2394,6.218]]]}},{"type":"Feature","properties":{"n":"Thawalama","d":"Galle","c":[80.3534,6.2927]},"geometry":{"type":"Polygon","coordinates":[[[80.4382,6.2263],[80.4328,6.2367],[80.4378,6.2399],[80.4326,6.2484],[80.4351,6.252],[80.439,6.2528],[80.4391,6.2559],[80.4277,6.2619],[80.4188,6.2724],[80.4187,6.2771],[80.411,6.2872],[80.4091,6.2937],[80.3882,6.3055],[80.3749,6.3218],[80.3698,6.3188],[80.3391,6.3641],[80.3367,6.3712],[80.3143,6.3991],[80.3108,6.3963],[80.2982,6.3965],[80.2896,6.3939],[80.2873,6.3893],[80.2883,6.37],[80.297,6.3464],[80.299,6.3356],[80.297,6.3255],[80.3019,6.3041],[80.3023,6.288],[80.298,6.2717],[80.308,6.2662],[80.3101,6.2432],[80.3145,6.2414],[80.3173,6.2441],[80.3254,6.2434],[80.3287,6.2362],[80.3341,6.235],[80.3455,6.2373],[80.3605,6.2281],[80.3647,6.2292],[80.3652,6.2331],[80.3719,6.2356],[80.3841,6.2195],[80.3895,6.2214],[80.4045,6.2161],[80.4105,6.2178],[80.419,6.213],[80.4283,6.2159],[80.436,6.2267],[80.4382,6.2263]]]}},{"type":"Feature","properties":{"n":"Welivitiya-Divitura","d":"Galle","c":[80.1787,6.2059]},"geometry":{"type":"Polygon","coordinates":[[[80.1335,6.2039],[80.1378,6.1926],[80.1379,6.1851],[80.1408,6.1842],[80.1387,6.1784],[80.1486,6.1785],[80.1514,6.1816],[80.1602,6.1735],[80.1651,6.1778],[80.1683,6.1765],[80.1722,6.1788],[80.1754,6.1746],[80.1796,6.1793],[80.1861,6.1796],[80.1867,6.1833],[80.1995,6.1918],[80.2143,6.1821],[80.2191,6.1826],[80.2269,6.1736],[80.2352,6.1697],[80.239,6.174],[80.2407,6.1827],[80.2393,6.1899],[80.2465,6.204],[80.2422,6.209],[80.2432,6.2116],[80.2394,6.218],[80.2279,6.2078],[80.2182,6.2082],[80.2168,6.2056],[80.2189,6.2027],[80.2045,6.2069],[80.2035,6.2034],[80.2011,6.2038],[80.1878,6.2127],[80.1746,6.2286],[80.1701,6.2295],[80.169,6.2311],[80.174,6.2305],[80.1744,6.234],[80.1702,6.2381],[80.1625,6.2405],[80.1534,6.2596],[80.1462,6.2626],[80.1494,6.2536],[80.1408,6.2557],[80.1448,6.2516],[80.1372,6.2523],[80.1337,6.2486],[80.1437,6.2337],[80.1388,6.2296],[80.1385,6.2124],[80.1335,6.2039]]]}},{"type":"Feature","properties":{"n":"Yakkalamulla","d":"Galle","c":[80.3584,6.1071]},"geometry":{"type":"Polygon","coordinates":[[[80.3534,6.0721],[80.3603,6.0676],[80.3656,6.0708],[80.3626,6.0731],[80.3675,6.0724],[80.3681,6.0689],[80.3764,6.0637],[80.3742,6.0633],[80.3738,6.0577],[80.3779,6.0574],[80.3812,6.052],[80.3911,6.058],[80.3987,6.0527],[80.4028,6.0547],[80.4109,6.0728],[80.4251,6.0843],[80.4337,6.0883],[80.4357,6.0919],[80.4279,6.1004],[80.4197,6.104],[80.4194,6.1094],[80.404,6.1126],[80.3994,6.1264],[80.3853,6.1339],[80.3801,6.149],[80.3807,6.1617],[80.3757,6.166],[80.3688,6.1628],[80.3684,6.158],[80.3636,6.158],[80.3597,6.1529],[80.3507,6.1526],[80.3481,6.1558],[80.3423,6.1502],[80.3346,6.1508],[80.328,6.1427],[80.3181,6.1426],[80.3062,6.1467],[80.2954,6.14],[80.2979,6.1345],[80.3032,6.1333],[80.3022,6.1273],[80.3041,6.1254],[80.2905,6.1074],[80.2925,6.0994],[80.2861,6.0936],[80.2794,6.0922],[80.279,6.0848],[80.2875,6.0832],[80.2932,6.078],[80.2944,6.0808],[80.2996,6.0783],[80.309,6.0793],[80.3102,6.0895],[80.3218,6.0879],[80.3284,6.0913],[80.3432,6.0899],[80.3451,6.0771],[80.3497,6.0763],[80.3515,6.0783],[80.3534,6.0721]]]}},{"type":"Feature","properties":{"n":"Attanagalla","d":"Gampaha","c":[80.1081,7.114]},"geometry":{"type":"Polygon","coordinates":[[[80.1568,7.1361],[80.1448,7.1353],[80.1445,7.1373],[80.1394,7.1376],[80.1353,7.1436],[80.1324,7.1416],[80.1278,7.1513],[80.125,7.1507],[80.1248,7.1603],[80.1218,7.1652],[80.1172,7.162],[80.1066,7.1662],[80.108,7.1617],[80.1002,7.1633],[80.0996,7.1595],[80.0953,7.1619],[80.0922,7.1608],[80.0851,7.1672],[80.0779,7.16],[80.0725,7.1598],[80.0721,7.1574],[80.0669,7.1646],[80.0633,7.1621],[80.0594,7.164],[80.0548,7.1624],[80.0502,7.1647],[80.0505,7.1671],[80.0464,7.164],[80.0394,7.17],[80.0345,7.1636],[80.0361,7.1552],[80.0266,7.1537],[80.0319,7.1499],[80.0291,7.1379],[80.0195,7.1241],[80.0179,7.1292],[80.013,7.1236],[80.009,7.1128],[80.0034,7.1105],[80.0107,7.1036],[80.0173,7.1053],[80.0164,7.1095],[80.0192,7.1113],[80.0203,7.1089],[80.0203,7.1147],[80.0327,7.1122],[80.036,7.117],[80.042,7.1184],[80.042,7.1121],[80.0495,7.1194],[80.0536,7.119],[80.0531,7.1162],[80.0575,7.1123],[80.0563,7.1087],[80.0593,7.1063],[80.0564,7.1022],[80.0489,7.0986],[80.0546,7.0958],[80.0514,7.0876],[80.0416,7.0915],[80.0433,7.0882],[80.0396,7.088],[80.0428,7.083],[80.0398,7.0782],[80.0449,7.0705],[80.0469,7.0705],[80.049,7.0778],[80.0581,7.0797],[80.0626,7.0847],[80.0724,7.0875],[80.0722,7.0856],[80.0793,7.0829],[80.0841,7.0779],[80.0875,7.0805],[80.085,7.0779],[80.0899,7.0738],[80.0973,7.0578],[80.1026,7.0559],[80.1102,7.0575],[80.1148,7.0616],[80.1158,7.06],[80.1168,7.0649],[80.1226,7.069],[80.1335,7.0674],[80.1375,7.0689],[80.1404,7.0624],[80.145,7.0637],[80.1492,7.0612],[80.1513,7.0642],[80.1548,7.0587],[80.1627,7.0598],[80.1663,7.0615],[80.1647,7.0656],[80.1721,7.0719],[80.1751,7.0821],[80.1843,7.0946],[80.1838,7.1029],[80.1929,7.1],[80.1968,7.1163],[80.2014,7.1193],[80.2056,7.1282],[80.2104,7.1302],[80.2103,7.1326],[80.2001,7.1366],[80.1969,7.1344],[80.1921,7.1373],[80.172,7.1358],[80.1653,7.1282],[80.1659,7.1257],[80.1628,7.1248],[80.1568,7.1361]]]}},{"type":"Feature","properties":{"n":"Biyagama","d":"Gampaha","c":[79.9765,6.9683]},"geometry":{"type":"Polygon","coordinates":[[[80.0283,6.9881],[80.026,6.9913],[80.0277,6.9967],[80.0193,6.9989],[80.018,6.9913],[80.0123,6.9921],[80.0068,6.9866],[80.0054,6.9942],[80.0029,6.9956],[80.0012,6.9945],[80.0032,6.9911],[79.9957,6.9937],[79.9915,6.992],[79.9906,6.9884],[79.9857,6.9941],[79.9787,6.9908],[79.9621,6.9987],[79.959,7.0014],[79.9581,7.007],[79.9538,7.0029],[79.9458,7.0003],[79.9441,6.9951],[79.9369,6.9908],[79.9361,6.9775],[79.9342,6.9749],[79.925,6.9717],[79.9269,6.9647],[79.925,6.951],[79.9323,6.95],[79.941,6.9423],[79.9415,6.9382],[79.9527,6.9428],[79.9675,6.9374],[79.9802,6.9383],[79.984,6.9351],[79.9918,6.9439],[79.9988,6.9419],[80.0108,6.9466],[80.0137,6.9453],[80.0129,6.9472],[80.0159,6.948],[80.0176,6.9463],[80.0222,6.9481],[80.0266,6.9566],[80.0208,6.9645],[80.0265,6.9645],[80.0195,6.9676],[80.0272,6.9766],[80.0283,6.9881]]]}},{"type":"Feature","properties":{"n":"Divulapitiya","d":"Gampaha","c":[80.0046,7.2536]},"geometry":{"type":"Polygon","coordinates":[[[79.9104,7.2675],[79.9143,7.2565],[79.9016,7.2492],[79.902,7.245],[79.9062,7.2412],[79.9066,7.2304],[79.9201,7.2],[79.9283,7.2003],[79.9308,7.1975],[79.9358,7.2004],[79.9401,7.1974],[79.9447,7.2054],[79.9474,7.2029],[79.953,7.2041],[79.9547,7.2003],[79.956,7.202],[79.9612,7.1987],[79.9682,7.1887],[79.9773,7.1945],[79.9766,7.1962],[79.9785,7.1929],[79.9952,7.2015],[79.9995,7.1976],[80.0001,7.2003],[80.0052,7.1984],[80.0064,7.2006],[80.0036,7.2047],[79.9989,7.206],[80.0045,7.2114],[80.0101,7.2097],[80.0123,7.2121],[80.0109,7.2136],[80.0154,7.2143],[80.0153,7.2173],[80.0223,7.2108],[80.0267,7.2112],[80.0275,7.2094],[80.035,7.2111],[80.0439,7.2063],[80.0472,7.2206],[80.0415,7.2301],[80.0463,7.2325],[80.0511,7.2286],[80.057,7.2281],[80.0607,7.2293],[80.058,7.2361],[80.0618,7.2342],[80.0645,7.2355],[80.0661,7.2314],[80.071,7.2316],[80.0767,7.2385],[80.0778,7.2354],[80.0846,7.2353],[80.087,7.2317],[80.0948,7.2291],[80.096,7.2347],[80.0932,7.2376],[80.0972,7.2401],[80.0983,7.2383],[80.1023,7.239],[80.102,7.2369],[80.1069,7.2382],[80.1091,7.2341],[80.1166,7.245],[80.1116,7.2565],[80.1118,7.259],[80.1169,7.262],[80.1153,7.2688],[80.111,7.2708],[80.1091,7.2778],[80.0985,7.2802],[80.0987,7.2876],[80.1034,7.2949],[80.1001,7.2989],[80.1027,7.3034],[80.1007,7.3056],[80.0927,7.3073],[80.0855,7.3033],[80.0818,7.3045],[80.0797,7.2975],[80.0612,7.285],[80.0533,7.2836],[80.0512,7.2849],[80.0512,7.2905],[80.045,7.2955],[80.045,7.2991],[80.0357,7.3033],[80.0289,7.302],[80.0272,7.3089],[80.0226,7.3119],[80.0252,7.317],[80.0184,7.3173],[80.0131,7.314],[80.0119,7.3168],[80.0074,7.3171],[80.0057,7.3215],[80.0021,7.3145],[79.9967,7.3141],[79.9864,7.307],[79.9868,7.3048],[79.9922,7.3052],[79.9916,7.3028],[79.9794,7.3011],[79.9752,7.2924],[79.9706,7.293],[79.966,7.2891],[79.9542,7.2935],[79.9547,7.2899],[79.9495,7.29],[79.9496,7.285],[79.9538,7.2826],[79.953,7.2806],[79.9461,7.2803],[79.9438,7.2736],[79.9361,7.2805],[79.931,7.2779],[79.922,7.2843],[79.921,7.282],[79.9261,7.2725],[79.9223,7.2714],[79.9215,7.2779],[79.9128,7.2766],[79.9144,7.2706],[79.9104,7.2675]]]}},{"type":"Feature","properties":{"n":"Dompe","d":"Gampaha","c":[80.0966,6.9899]},"geometry":{"type":"Polygon","coordinates":[[[80.0912,7.0698],[80.0811,7.0609],[80.0836,7.0591],[80.0805,7.0549],[80.081,7.0511],[80.0849,7.049],[80.0902,7.041],[80.0875,7.034],[80.0835,7.034],[80.0827,7.0377],[80.0782,7.0334],[80.0819,7.022],[80.0787,7.0221],[80.076,7.0133],[80.0522,7.0184],[80.0437,7.0093],[80.0413,7.0093],[80.0438,7.0083],[80.0437,7.0025],[80.0381,7.0061],[80.037,7.0],[80.0414,7.0005],[80.0401,6.9987],[80.0445,6.997],[80.0496,6.9993],[80.0504,6.9959],[80.0372,6.9887],[80.0283,6.9881],[80.0272,6.9766],[80.0195,6.9676],[80.0265,6.9645],[80.0208,6.9645],[80.0266,6.9566],[80.0222,6.9481],[80.0121,6.9459],[80.0115,6.939],[80.0179,6.9245],[80.0275,6.9238],[80.0429,6.9145],[80.0513,6.9126],[80.0529,6.9072],[80.0605,6.908],[80.0623,6.9126],[80.0717,6.9079],[80.0753,6.9109],[80.0831,6.9098],[80.0864,6.9135],[80.0912,6.9121],[80.0932,6.934],[80.0916,6.9391],[80.0958,6.9453],[80.0966,6.9513],[80.1041,6.9539],[80.1083,6.9596],[80.1079,6.9626],[80.1195,6.9652],[80.122,6.9742],[80.1495,6.9737],[80.1637,6.9705],[80.1669,6.9723],[80.1671,6.9791],[80.1772,6.9772],[80.1797,6.9808],[80.1803,6.9935],[80.1726,7.0081],[80.1687,7.0222],[80.1658,7.041],[80.1669,7.0484],[80.1621,7.0558],[80.1627,7.0598],[80.1548,7.0587],[80.1513,7.0642],[80.1492,7.0612],[80.145,7.0637],[80.1404,7.0624],[80.1375,7.0689],[80.1335,7.0674],[80.1226,7.069],[80.1168,7.0649],[80.1158,7.06],[80.1148,7.0616],[80.1102,7.0575],[80.1026,7.0559],[80.0973,7.0578],[80.0912,7.0698]]]}},{"type":"Feature","properties":{"n":"Gampaha","d":"Gampaha","c":[79.9923,7.0708]},"geometry":{"type":"Polygon","coordinates":[[[80.0066,7.1067],[80.0036,7.1041],[80.0,7.1054],[79.9945,7.1031],[79.9911,7.0979],[79.9843,7.0947],[79.9771,7.0994],[79.9695,7.0922],[79.9497,7.0993],[79.9482,7.1053],[79.9439,7.1082],[79.9276,7.1104],[79.9255,7.1138],[79.921,7.1088],[79.923,7.1066],[79.9215,7.1032],[79.9302,7.0967],[79.9373,7.0964],[79.9413,7.0906],[79.9375,7.0896],[79.938,7.0856],[79.9323,7.0764],[79.9208,7.071],[79.9242,7.0608],[79.9277,7.0602],[79.93,7.0628],[79.9361,7.0612],[79.9397,7.0635],[79.9506,7.0565],[79.9569,7.0589],[79.9564,7.0546],[79.9603,7.0491],[79.9575,7.038],[79.9669,7.0328],[79.9682,7.0286],[79.9705,7.0291],[79.9735,7.0254],[79.9756,7.0297],[79.9822,7.0342],[79.988,7.03],[79.9988,7.0305],[80.004,7.0234],[80.001,7.0133],[80.0037,7.0139],[80.0062,7.0107],[80.0258,7.0166],[80.0236,7.02],[80.0248,7.0269],[80.0292,7.0279],[80.0272,7.0302],[80.0322,7.0324],[80.0322,7.0348],[80.0368,7.0334],[80.0376,7.0362],[80.0342,7.0368],[80.0336,7.0416],[80.0279,7.0441],[80.0261,7.049],[80.0204,7.0517],[80.0217,7.0568],[80.0268,7.0574],[80.027,7.0595],[80.0215,7.0687],[80.0255,7.0729],[80.0379,7.0724],[80.0428,7.083],[80.0397,7.0858],[80.0396,7.088],[80.0433,7.0882],[80.0416,7.0915],[80.0514,7.0876],[80.0546,7.0958],[80.0489,7.0986],[80.0564,7.1022],[80.0593,7.1063],[80.0563,7.1087],[80.0575,7.1123],[80.0531,7.1162],[80.0536,7.119],[80.0495,7.1194],[80.042,7.1121],[80.042,7.1184],[80.036,7.117],[80.0327,7.1122],[80.0203,7.1147],[80.0203,7.1089],[80.0192,7.1113],[80.0164,7.1095],[80.0173,7.1053],[80.0107,7.1036],[80.0066,7.1067]]]}},{"type":"Feature","properties":{"n":"Ja Ela","d":"Gampaha","c":[79.9069,7.0721]},"geometry":{"type":"Polygon","coordinates":[[[79.9255,7.1138],[79.9236,7.1122],[79.9186,7.1171],[79.9106,7.1166],[79.9106,7.1243],[79.9032,7.1268],[79.8958,7.123],[79.8912,7.1075],[79.8849,7.1073],[79.8824,7.1104],[79.8765,7.1067],[79.8706,7.1069],[79.8686,7.1096],[79.8586,7.108],[79.8574,7.1046],[79.8614,7.1043],[79.8659,7.0973],[79.8766,7.0954],[79.8748,7.0644],[79.8854,7.0352],[79.8993,7.0354],[79.9031,7.033],[79.9033,7.0358],[79.9064,7.0355],[79.9113,7.0312],[79.9106,7.0276],[79.9141,7.0273],[79.9161,7.022],[79.9142,7.0186],[79.9261,7.0228],[79.9317,7.0205],[79.9385,7.0237],[79.9357,7.0253],[79.9376,7.0327],[79.935,7.0346],[79.9393,7.0342],[79.9424,7.0384],[79.9437,7.0487],[79.9484,7.0521],[79.9496,7.0571],[79.9432,7.06],[79.9432,7.0629],[79.9361,7.0612],[79.93,7.0628],[79.9277,7.0602],[79.9233,7.0623],[79.924,7.0655],[79.9208,7.071],[79.9323,7.0764],[79.938,7.0856],[79.9375,7.0896],[79.9413,7.0906],[79.9373,7.0964],[79.9302,7.0967],[79.9215,7.1032],[79.923,7.1066],[79.921,7.1088],[79.9255,7.1138]]]}},{"type":"Feature","properties":{"n":"Katana","d":"Gampaha","c":[79.8874,7.1936]},"geometry":{"type":"Polygon","coordinates":[[[79.8716,7.2823],[79.8684,7.28],[79.8651,7.2712],[79.8588,7.2697],[79.8608,7.2622],[79.8543,7.2596],[79.8528,7.2533],[79.8589,7.24],[79.8551,7.2372],[79.8566,7.2342],[79.862,7.237],[79.8649,7.2328],[79.8613,7.231],[79.8631,7.225],[79.8498,7.2224],[79.8663,7.1834],[79.8555,7.1808],[79.8656,7.1623],[79.8662,7.153],[79.8642,7.1565],[79.8638,7.1538],[79.8689,7.1311],[79.8674,7.1227],[79.87,7.1213],[79.8645,7.1108],[79.8603,7.1164],[79.8604,7.1258],[79.8561,7.1163],[79.8575,7.112],[79.8538,7.1121],[79.8542,7.1091],[79.8509,7.1062],[79.8547,7.1033],[79.8586,7.108],[79.8686,7.1096],[79.8706,7.1069],[79.8765,7.1067],[79.8824,7.1104],[79.8849,7.1073],[79.8912,7.1075],[79.8958,7.123],[79.9032,7.1268],[79.9106,7.1243],[79.9106,7.1166],[79.9186,7.1171],[79.9222,7.1221],[79.9154,7.1277],[79.917,7.1295],[79.9148,7.1345],[79.9168,7.1393],[79.9152,7.1427],[79.9272,7.1419],[79.9306,7.1495],[79.9276,7.1493],[79.9296,7.1519],[79.9287,7.1553],[79.9224,7.1566],[79.9201,7.1593],[79.9147,7.1568],[79.9123,7.1595],[79.9109,7.1584],[79.9144,7.1645],[79.9107,7.1638],[79.9097,7.1657],[79.9156,7.1802],[79.9209,7.1859],[79.9189,7.1901],[79.9208,7.1918],[79.925,7.1902],[79.9253,7.1924],[79.9375,7.1988],[79.9358,7.2004],[79.9308,7.1975],[79.9283,7.2003],[79.9201,7.2],[79.9066,7.2304],[79.9062,7.2412],[79.902,7.245],[79.9016,7.2492],[79.9143,7.2565],[79.9104,7.2675],[79.906,7.2649],[79.9032,7.2666],[79.9071,7.2754],[79.9059,7.2799],[79.9038,7.2743],[79.9006,7.2747],[79.8972,7.2811],[79.8954,7.2745],[79.8831,7.2734],[79.8784,7.2803],[79.8716,7.2823]]]}},{"type":"Feature","properties":{"n":"Kelaniya","d":"Gampaha","c":[79.9081,6.9702]},"geometry":{"type":"Polygon","coordinates":[[[79.9369,6.9908],[79.9272,6.9927],[79.9207,6.9884],[79.9212,6.986],[79.916,6.986],[79.9136,6.9894],[79.907,6.9894],[79.9054,6.9952],[79.9015,6.9968],[79.9002,6.9932],[79.8947,6.9913],[79.8953,6.9867],[79.893,6.9844],[79.8966,6.9805],[79.8907,6.9789],[79.8917,6.9704],[79.8856,6.9716],[79.886,6.9697],[79.8828,6.9743],[79.8765,6.9635],[79.8771,6.9581],[79.8817,6.9539],[79.8975,6.9557],[79.898,6.9536],[79.8942,6.9508],[79.8976,6.9471],[79.9083,6.9501],[79.91,6.9469],[79.9146,6.9454],[79.9203,6.9522],[79.9237,6.9491],[79.9272,6.9495],[79.925,6.951],[79.9269,6.9647],[79.9244,6.9697],[79.9361,6.9775],[79.9369,6.9908]]]}},{"type":"Feature","properties":{"n":"Mahara","d":"Gampaha","c":[79.9458,7.0003]},"geometry":{"type":"Polygon","coordinates":[[[80.041,7.0774],[80.0379,7.0724],[80.0255,7.0729],[80.0215,7.0687],[80.027,7.0595],[80.0268,7.0574],[80.0217,7.0568],[80.0204,7.0517],[80.0261,7.049],[80.0279,7.0441],[80.0336,7.0416],[80.0342,7.0368],[80.0376,7.0362],[80.0368,7.0334],[80.0322,7.0348],[80.0322,7.0324],[80.0272,7.0302],[80.0292,7.0279],[80.0248,7.0269],[80.0236,7.02],[80.0258,7.0166],[80.0062,7.0107],[80.0037,7.0139],[80.001,7.0133],[80.004,7.0234],[79.9988,7.0305],[79.988,7.03],[79.9822,7.0342],[79.9756,7.0297],[79.9735,7.0254],[79.9705,7.0291],[79.9682,7.0286],[79.9669,7.0328],[79.9575,7.038],[79.9603,7.0491],[79.9564,7.0546],[79.9569,7.0589],[79.9534,7.059],[79.9437,7.0487],[79.9424,7.0384],[79.9393,7.0342],[79.935,7.0346],[79.9376,7.0327],[79.9357,7.0253],[79.9385,7.0237],[79.9317,7.0205],[79.9342,7.0102],[79.937,7.0093],[79.9324,7.0036],[79.9278,7.001],[79.9151,7.0066],[79.9015,7.0057],[79.8982,7.0099],[79.8967,7.0058],[79.9026,7.0005],[79.907,6.9894],[79.9136,6.9894],[79.916,6.986],[79.9212,6.986],[79.9207,6.9884],[79.9272,6.9927],[79.9369,6.9908],[79.9441,6.9951],[79.9458,7.0003],[79.9538,7.0029],[79.9581,7.007],[79.959,7.0014],[79.9621,6.9987],[79.9787,6.9908],[79.9857,6.9941],[79.9906,6.9884],[79.9915,6.992],[79.9957,6.9937],[80.0032,6.9911],[80.0012,6.9945],[80.0029,6.9956],[80.0054,6.9942],[80.0068,6.9866],[80.0123,6.9921],[80.018,6.9913],[80.0193,6.9989],[80.0277,6.9967],[80.026,6.9913],[80.0283,6.9881],[80.0372,6.9887],[80.0504,6.9959],[80.0496,6.9993],[80.0445,6.997],[80.0401,6.9987],[80.0414,7.0005],[80.037,7.0],[80.0381,7.0061],[80.0437,7.0025],[80.0438,7.0083],[80.0413,7.0093],[80.0437,7.0093],[80.0522,7.0184],[80.076,7.0133],[80.0787,7.0221],[80.0819,7.022],[80.0826,7.0245],[80.0792,7.0272],[80.0782,7.0334],[80.0827,7.0377],[80.0835,7.034],[80.0875,7.034],[80.0902,7.041],[80.0849,7.049],[80.081,7.0511],[80.0805,7.0549],[80.0832,7.0564],[80.083,7.0608],[80.0811,7.0609],[80.0824,7.0635],[80.0912,7.0698],[80.085,7.0779],[80.0875,7.0805],[80.0841,7.0779],[80.0793,7.0829],[80.0722,7.0856],[80.0724,7.0875],[80.0626,7.0847],[80.0581,7.0797],[80.049,7.0778],[80.0469,7.0705],[80.041,7.0774]]]}},{"type":"Feature","properties":{"n":"Minuwangoda","d":"Gampaha","c":[79.9767,7.1549]},"geometry":{"type":"Polygon","coordinates":[[[80.0394,7.17],[80.0354,7.175],[80.0382,7.1798],[80.038,7.1871],[80.047,7.1894],[80.048,7.1957],[80.0453,7.1988],[80.0382,7.1974],[80.0311,7.201],[80.0328,7.2095],[80.0223,7.2108],[80.0153,7.2173],[80.0154,7.2143],[80.0109,7.2136],[80.0123,7.2121],[80.0101,7.2097],[80.0045,7.2114],[79.9989,7.206],[80.0036,7.2047],[80.0064,7.2006],[80.0052,7.1984],[80.0001,7.2003],[79.9995,7.1976],[79.9952,7.2015],[79.9785,7.1929],[79.9766,7.1962],[79.9773,7.1945],[79.9682,7.1887],[79.9612,7.1987],[79.956,7.202],[79.9547,7.2003],[79.953,7.2041],[79.9474,7.2029],[79.9447,7.2054],[79.9401,7.1974],[79.9375,7.1988],[79.9253,7.1924],[79.925,7.1902],[79.9208,7.1918],[79.9189,7.1901],[79.9209,7.1859],[79.9156,7.1802],[79.9097,7.1657],[79.9107,7.1638],[79.9144,7.1645],[79.9109,7.1584],[79.9123,7.1595],[79.9147,7.1568],[79.9201,7.1593],[79.9224,7.1566],[79.9287,7.1553],[79.9296,7.1519],[79.9276,7.1493],[79.9306,7.1495],[79.9272,7.1419],[79.9152,7.1427],[79.9168,7.1393],[79.9148,7.1345],[79.917,7.1295],[79.9154,7.1277],[79.9222,7.1221],[79.919,7.1152],[79.9236,7.1122],[79.9255,7.1138],[79.9276,7.1104],[79.9439,7.1082],[79.9482,7.1053],[79.9497,7.0993],[79.9577,7.0951],[79.9612,7.0966],[79.9695,7.0922],[79.9771,7.0994],[79.9843,7.0947],[79.9911,7.0979],[79.9945,7.1031],[80.0,7.1054],[80.0036,7.1041],[80.0066,7.1067],[80.0034,7.1105],[80.009,7.1128],[80.013,7.1236],[80.0179,7.1292],[80.0195,7.1241],[80.0246,7.1305],[80.0307,7.1409],[80.0319,7.1499],[80.0266,7.1537],[80.0361,7.1552],[80.0345,7.1636],[80.0394,7.17]]]}},{"type":"Feature","properties":{"n":"Mirigama","d":"Gampaha","c":[80.1209,7.2247]},"geometry":{"type":"Polygon","coordinates":[[[80.1461,7.3133],[80.1368,7.3231],[80.1214,7.3299],[80.1161,7.3251],[80.1056,7.3208],[80.1007,7.3132],[80.0927,7.3073],[80.1027,7.3034],[80.1001,7.2989],[80.1034,7.2949],[80.0987,7.2876],[80.0985,7.2802],[80.1091,7.2778],[80.111,7.2708],[80.1153,7.2688],[80.1169,7.262],[80.1118,7.259],[80.1116,7.2565],[80.1166,7.245],[80.1091,7.2341],[80.1069,7.2382],[80.102,7.2369],[80.1023,7.239],[80.0983,7.2383],[80.0972,7.2401],[80.0932,7.2376],[80.096,7.2347],[80.0948,7.2291],[80.087,7.2317],[80.0846,7.2353],[80.0778,7.2354],[80.0767,7.2385],[80.071,7.2316],[80.0661,7.2314],[80.0645,7.2355],[80.0618,7.2342],[80.058,7.2361],[80.0607,7.2293],[80.057,7.2281],[80.0511,7.2286],[80.0463,7.2325],[80.0415,7.2301],[80.0472,7.2206],[80.0439,7.2063],[80.035,7.2111],[80.0312,7.2101],[80.0328,7.2095],[80.0306,7.2052],[80.0311,7.201],[80.0382,7.1974],[80.0453,7.1988],[80.048,7.1957],[80.047,7.1894],[80.038,7.1871],[80.0382,7.1798],[80.0354,7.175],[80.0464,7.164],[80.0505,7.1671],[80.0502,7.1647],[80.0548,7.1624],[80.0594,7.164],[80.0633,7.1621],[80.0669,7.1646],[80.0721,7.1574],[80.0725,7.1598],[80.0779,7.16],[80.0851,7.1672],[80.0922,7.1608],[80.0953,7.1619],[80.0996,7.1595],[80.1002,7.1633],[80.108,7.1617],[80.1066,7.1662],[80.1172,7.162],[80.1218,7.1652],[80.1248,7.1603],[80.125,7.1507],[80.1278,7.1513],[80.1324,7.1416],[80.1353,7.1436],[80.1394,7.1376],[80.1445,7.1373],[80.1448,7.1353],[80.1568,7.1361],[80.1518,7.1504],[80.1552,7.1667],[80.1518,7.1829],[80.1441,7.1886],[80.1509,7.1924],[80.1538,7.1851],[80.1567,7.1841],[80.1609,7.1939],[80.1643,7.1916],[80.1669,7.1943],[80.1798,7.1933],[80.1823,7.1958],[80.1814,7.1992],[80.1841,7.2047],[80.1825,7.2118],[80.1873,7.2269],[80.1846,7.2349],[80.1986,7.2454],[80.1984,7.2508],[80.188,7.2635],[80.1824,7.2611],[80.1805,7.2672],[80.1677,7.2806],[80.1659,7.2859],[80.1563,7.2904],[80.1415,7.3034],[80.1409,7.3059],[80.1465,7.3105],[80.1461,7.3133]],[[80.1578,7.2011],[80.1621,7.2029],[80.1651,7.2003],[80.1588,7.198],[80.1578,7.2011]]]}},{"type":"Feature","properties":{"n":"Negombo","d":"Gampaha","c":[79.8424,7.213]},"geometry":{"type":"Polygon","coordinates":[[[79.8588,7.2697],[79.852,7.2767],[79.8484,7.272],[79.8389,7.2726],[79.8374,7.2256],[79.8339,7.215],[79.8264,7.2095],[79.8265,7.2058],[79.8327,7.2079],[79.828,7.2053],[79.8315,7.199],[79.8279,7.1983],[79.8285,7.2012],[79.8237,7.208],[79.8175,7.207],[79.8147,7.2032],[79.8263,7.1528],[79.8402,7.1117],[79.843,7.1129],[79.8414,7.1163],[79.8453,7.1197],[79.8365,7.1303],[79.8368,7.1459],[79.83,7.1515],[79.8305,7.1582],[79.8259,7.165],[79.8236,7.1796],[79.821,7.1822],[79.822,7.1887],[79.8245,7.1895],[79.8254,7.1861],[79.8307,7.1845],[79.8361,7.1898],[79.8341,7.1944],[79.8427,7.1954],[79.8461,7.199],[79.8507,7.1944],[79.8555,7.1808],[79.8663,7.1834],[79.8498,7.2224],[79.8631,7.225],[79.8613,7.231],[79.8649,7.2328],[79.862,7.237],[79.8566,7.2342],[79.8551,7.2372],[79.8589,7.24],[79.8528,7.2533],[79.8543,7.2596],[79.8608,7.2622],[79.8588,7.2697]]]}},{"type":"Feature","properties":{"n":"Wattala","d":"Gampaha","c":[79.8791,7.0345]},"geometry":{"type":"Polygon","coordinates":[[[79.8828,6.9743],[79.886,6.9697],[79.8856,6.9716],[79.8917,6.9704],[79.8907,6.9789],[79.8966,6.9805],[79.893,6.9844],[79.8953,6.9867],[79.8947,6.9913],[79.9002,6.9932],[79.903,6.9973],[79.9026,7.0005],[79.8967,7.0058],[79.8982,7.0099],[79.9015,7.0057],[79.9151,7.0066],[79.9278,7.001],[79.937,7.0093],[79.9342,7.0102],[79.9317,7.0205],[79.9261,7.0228],[79.9142,7.0186],[79.9161,7.022],[79.9141,7.0273],[79.9106,7.0276],[79.9113,7.0312],[79.9064,7.0355],[79.9033,7.0358],[79.9031,7.033],[79.8993,7.0354],[79.8854,7.0352],[79.8748,7.0644],[79.8766,7.0954],[79.8659,7.0973],[79.8614,7.1043],[79.8547,7.1033],[79.8444,7.109],[79.8448,7.1115],[79.8402,7.1117],[79.866,7.0006],[79.867,6.9778],[79.8781,6.9807],[79.8828,6.9743]]]}},{"type":"Feature","properties":{"n":"Ambalantota","d":"Hambantota","c":[80.9608,6.1604]},"geometry":{"type":"Polygon","coordinates":[[[81.0281,6.1931],[81.0205,6.1966],[81.0143,6.1944],[81.0128,6.1958],[81.0107,6.2016],[81.0125,6.1993],[81.0151,6.2084],[81.0135,6.2173],[81.0067,6.2189],[81.0082,6.229],[81.0032,6.2302],[80.9942,6.2429],[80.9813,6.2469],[80.9748,6.2517],[80.9743,6.2485],[80.9698,6.2483],[80.9671,6.2441],[80.9611,6.2457],[80.9578,6.2409],[80.9541,6.2421],[80.9505,6.2401],[80.9504,6.2353],[80.9443,6.2361],[80.938,6.2284],[80.9323,6.2316],[80.9304,6.2393],[80.9072,6.2382],[80.9126,6.2281],[80.9115,6.2207],[80.9159,6.2119],[80.913,6.2007],[80.9053,6.1948],[80.9108,6.1794],[80.909,6.1773],[80.9117,6.1718],[80.9104,6.1629],[80.9073,6.1587],[80.8947,6.1522],[80.8901,6.1212],[80.893,6.1186],[80.8967,6.1001],[80.9181,6.0858],[80.9235,6.0846],[80.9306,6.0752],[80.9344,6.0748],[80.9346,6.0796],[80.94,6.0831],[80.9751,6.0867],[80.9839,6.0923],[80.9875,6.0922],[80.9933,6.099],[81.0138,6.1035],[81.0321,6.1105],[81.0266,6.1157],[81.027,6.121],[81.0242,6.1254],[81.028,6.1275],[81.0213,6.1379],[81.0244,6.1394],[81.0359,6.1367],[81.0354,6.1401],[81.0292,6.1441],[81.0279,6.1502],[81.0228,6.1516],[81.0233,6.1564],[81.0203,6.1587],[81.022,6.163],[81.0168,6.1615],[81.0124,6.1671],[81.031,6.1891],[81.0314,6.1926],[81.0281,6.1931]]]}},{"type":"Feature","properties":{"n":"Angunakolapelessa","d":"Hambantota","c":[80.8491,6.1925]},"geometry":{"type":"Polygon","coordinates":[[[80.9072,6.2382],[80.8885,6.2503],[80.8797,6.2458],[80.876,6.2541],[80.8685,6.2624],[80.8529,6.2718],[80.8423,6.2682],[80.8399,6.2705],[80.8386,6.2682],[80.8312,6.2682],[80.8245,6.2649],[80.8047,6.267],[80.8043,6.2557],[80.7971,6.247],[80.7935,6.2296],[80.8003,6.2307],[80.8036,6.2244],[80.8093,6.223],[80.8049,6.2188],[80.8058,6.2174],[80.83,6.217],[80.8375,6.2071],[80.8407,6.206],[80.8385,6.203],[80.841,6.1965],[80.8372,6.1969],[80.8346,6.1906],[80.826,6.1912],[80.8188,6.1823],[80.8143,6.1831],[80.8113,6.1869],[80.81,6.1805],[80.8014,6.1741],[80.7973,6.1811],[80.794,6.178],[80.7901,6.1804],[80.7878,6.1875],[80.784,6.1907],[80.7809,6.1839],[80.7769,6.1821],[80.7795,6.1758],[80.7772,6.1633],[80.7801,6.1592],[80.7826,6.1451],[80.7887,6.1447],[80.7822,6.1331],[80.7912,6.1242],[80.8008,6.1244],[80.8106,6.1201],[80.8209,6.1198],[80.8277,6.1261],[80.8542,6.127],[80.8632,6.1298],[80.8684,6.1279],[80.8682,6.1367],[80.8824,6.1341],[80.8924,6.1369],[80.8947,6.1522],[80.9073,6.1587],[80.9117,6.1687],[80.909,6.1773],[80.9108,6.1794],[80.9096,6.1849],[80.908,6.1916],[80.9052,6.191],[80.9053,6.1948],[80.913,6.2007],[80.9159,6.2119],[80.9115,6.2207],[80.9126,6.2281],[80.9072,6.2382]]]}},{"type":"Feature","properties":{"n":"Beliatta","d":"Hambantota","c":[80.7183,6.0505]},"geometry":{"type":"Polygon","coordinates":[[[80.7678,6.0951],[80.7594,6.0977],[80.7506,6.1041],[80.7503,6.108],[80.7544,6.1149],[80.7445,6.1143],[80.7431,6.1162],[80.7384,6.1159],[80.7315,6.1113],[80.7316,6.1086],[80.7293,6.1089],[80.7204,6.0968],[80.7146,6.0973],[80.7138,6.0957],[80.7106,6.0978],[80.7072,6.0948],[80.6969,6.0965],[80.6968,6.0993],[80.693,6.099],[80.6949,6.0941],[80.6926,6.0916],[80.6898,6.0956],[80.6796,6.0944],[80.6803,6.0874],[80.6901,6.077],[80.691,6.0687],[80.6888,6.0631],[80.6762,6.061],[80.6737,6.0546],[80.6604,6.05],[80.653,6.0403],[80.6591,6.0375],[80.6638,6.0243],[80.6928,6.0231],[80.6969,6.0172],[80.6846,6.006],[80.6871,5.9924],[80.6906,5.9886],[80.6957,5.9937],[80.7015,5.9938],[80.7074,5.9905],[80.7097,5.9937],[80.7126,5.9923],[80.7233,5.9957],[80.7249,5.9944],[80.733,6.0043],[80.7376,6.007],[80.7416,6.0057],[80.7406,6.01],[80.7578,6.0251],[80.7668,6.025],[80.7719,6.0273],[80.7743,6.0416],[80.7719,6.0473],[80.7697,6.0471],[80.7675,6.0509],[80.7481,6.0554],[80.7498,6.065],[80.7553,6.0653],[80.7569,6.0856],[80.7632,6.0933],[80.7678,6.0951]]]}},{"type":"Feature","properties":{"n":"Hambantota","d":"Hambantota","c":[81.1209,6.205]},"geometry":{"type":"Polygon","coordinates":[[[81.0138,6.1035],[81.0489,6.1061],[81.0537,6.1106],[81.0683,6.1093],[81.0941,6.1143],[81.102,6.1123],[81.0948,6.1144],[81.0997,6.119],[81.104,6.119],[81.1043,6.1164],[81.106,6.1193],[81.1254,6.1196],[81.1288,6.121],[81.125,6.1268],[81.1295,6.1326],[81.1423,6.1353],[81.1487,6.1419],[81.1665,6.145],[81.1789,6.1564],[81.2084,6.1641],[81.2242,6.1638],[81.224,6.1697],[81.2304,6.1726],[81.2305,6.1764],[81.2341,6.179],[81.2696,6.1848],[81.2778,6.1905],[81.2893,6.1926],[81.2933,6.1962],[81.2932,6.1991],[81.2988,6.2003],[81.2977,6.2031],[81.2931,6.2028],[81.2902,6.2055],[81.294,6.2072],[81.293,6.2119],[81.2952,6.2144],[81.2932,6.2159],[81.2904,6.2133],[81.2708,6.2139],[81.2628,6.2241],[81.2602,6.2257],[81.2557,6.2219],[81.2524,6.2258],[81.2482,6.2247],[81.2431,6.2175],[81.2258,6.2147],[81.2196,6.2089],[81.2225,6.2014],[81.2037,6.1973],[81.1977,6.1921],[81.1886,6.1967],[81.187,6.1955],[81.1856,6.203],[81.1805,6.2059],[81.1827,6.2131],[81.1813,6.2168],[81.1689,6.2225],[81.1707,6.2261],[81.1671,6.2296],[81.169,6.2359],[81.1659,6.2406],[81.1734,6.2497],[81.1754,6.2476],[81.1775,6.2542],[81.182,6.2561],[81.1813,6.2585],[81.1851,6.261],[81.185,6.2665],[81.1823,6.2682],[81.1814,6.2729],[81.1813,6.2837],[81.1655,6.2809],[81.1579,6.2879],[81.1406,6.2905],[81.12,6.2745],[81.1188,6.2867],[81.1143,6.2973],[81.1106,6.2984],[81.0944,6.2948],[81.0929,6.3],[81.0969,6.3119],[81.0864,6.3254],[81.0873,6.3299],[81.0832,6.336],[81.0739,6.3408],[81.0654,6.3355],[81.0649,6.3376],[81.0596,6.3384],[81.0551,6.3299],[81.0488,6.3284],[81.0455,6.3206],[81.0548,6.3033],[81.0608,6.2795],[81.069,6.2673],[81.0614,6.2646],[81.0636,6.2636],[81.0707,6.2446],[81.0679,6.2416],[81.0722,6.2298],[81.0701,6.2272],[81.0642,6.2273],[81.0667,6.2227],[81.0646,6.2212],[81.0607,6.2196],[81.0569,6.2215],[81.0522,6.215],[81.0379,6.2078],[81.0281,6.1931],[81.0314,6.1926],[81.031,6.1891],[81.0124,6.1671],[81.0168,6.1615],[81.022,6.163],[81.0203,6.1587],[81.0233,6.1564],[81.0228,6.1516],[81.0279,6.1502],[81.0292,6.1441],[81.0354,6.1401],[81.0359,6.1367],[81.0244,6.1394],[81.0213,6.1379],[81.028,6.1275],[81.0242,6.1254],[81.027,6.121],[81.0266,6.1157],[81.0321,6.1105],[81.0138,6.1035]]]}},{"type":"Feature","properties":{"n":"Katuwana","d":"Hambantota","c":[80.7133,6.2633]},"geometry":{"type":"Polygon","coordinates":[[[80.8047,6.267],[80.792,6.2663],[80.7932,6.2683],[80.7857,6.2698],[80.7816,6.274],[80.7407,6.2884],[80.7313,6.2957],[80.7179,6.2997],[80.7091,6.2995],[80.7014,6.3064],[80.6871,6.3078],[80.6552,6.303],[80.6551,6.2995],[80.6613,6.2893],[80.6576,6.281],[80.6497,6.2722],[80.6599,6.2596],[80.6469,6.2562],[80.6482,6.2502],[80.6439,6.2462],[80.6434,6.2396],[80.6475,6.2376],[80.6484,6.2312],[80.6521,6.2275],[80.6563,6.2272],[80.6617,6.2294],[80.6652,6.2381],[80.6704,6.2399],[80.6731,6.2372],[80.6716,6.2239],[80.6654,6.2147],[80.6701,6.2133],[80.6815,6.2155],[80.6849,6.2234],[80.706,6.2293],[80.7067,6.2333],[80.7091,6.2303],[80.7128,6.2301],[80.7192,6.243],[80.7351,6.2424],[80.7462,6.237],[80.7488,6.2377],[80.7532,6.2483],[80.7676,6.2432],[80.7748,6.2366],[80.7837,6.2349],[80.7935,6.2296],[80.7971,6.247],[80.8043,6.2557],[80.8047,6.267]]]}},{"type":"Feature","properties":{"n":"Lunugamwehera","d":"Hambantota","c":[81.153,6.3316]},"geometry":{"type":"MultiPolygon","coordinates":[[[[81.2727,6.3625],[81.269,6.3538],[81.2523,6.344],[81.2492,6.3398],[81.2522,6.3383],[81.2566,6.3268],[81.266,6.3238],[81.266,6.317],[81.2802,6.3021],[81.2803,6.2983],[81.2852,6.2993],[81.2881,6.2968],[81.2887,6.3101],[81.2831,6.3148],[81.2857,6.3154],[81.2886,6.3324],[81.294,6.3332],[81.2978,6.3396],[81.2913,6.3437],[81.2821,6.3448],[81.2762,6.3664],[81.2727,6.3625]]],[[[81.2196,6.2089],[81.2088,6.2108],[81.2075,6.2152],[81.2152,6.2206],[81.2255,6.2331],[81.224,6.2653],[81.2313,6.2874],[81.2218,6.2981],[81.2187,6.3066],[81.2215,6.3164],[81.2408,6.3341],[81.241,6.3401],[81.2378,6.3417],[81.233,6.3396],[81.2278,6.3439],[81.223,6.3437],[81.2192,6.3497],[81.2222,6.358],[81.1894,6.4016],[81.1828,6.4061],[81.1677,6.3986],[81.1638,6.3925],[81.1538,6.3928],[81.1498,6.3991],[81.1433,6.3972],[81.1415,6.4096],[81.1367,6.4151],[81.137,6.4203],[81.1088,6.4193],[81.1,6.417],[81.0865,6.4225],[81.0712,6.4223],[81.0657,6.4127],[81.0606,6.4097],[81.0484,6.4202],[81.0502,6.4148],[81.0485,6.4047],[81.0441,6.3978],[81.0562,6.3759],[81.0586,6.3756],[81.0589,6.3685],[81.0638,6.3609],[81.0766,6.3606],[81.0798,6.3363],[81.0857,6.3328],[81.0864,6.3254],[81.0969,6.3119],[81.0929,6.3],[81.0944,6.2948],[81.1106,6.2984],[81.1143,6.2973],[81.1188,6.2867],[81.12,6.2745],[81.1406,6.2905],[81.1579,6.2879],[81.1655,6.2809],[81.1813,6.2837],[81.1814,6.2729],[81.1823,6.2682],[81.185,6.2665],[81.1851,6.261],[81.1813,6.2585],[81.182,6.2561],[81.1775,6.2542],[81.1754,6.2476],[81.1734,6.2497],[81.1659,6.2406],[81.169,6.2359],[81.1671,6.2296],[81.1707,6.2261],[81.1689,6.2225],[81.1813,6.2168],[81.1827,6.2131],[81.1805,6.2059],[81.1856,6.203],[81.187,6.1955],[81.1886,6.1967],[81.1977,6.1921],[81.2037,6.1973],[81.2225,6.2014],[81.2196,6.2089]]]]}},{"type":"Feature","properties":{"n":"Okewela","d":"Hambantota","c":[80.7082,6.1194]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.7384,6.1159],[80.7297,6.1174],[80.7239,6.1296],[80.7293,6.1411],[80.722,6.1421],[80.7178,6.1486],[80.7052,6.1526],[80.6943,6.1448],[80.6999,6.134],[80.6983,6.1318],[80.7016,6.1235],[80.693,6.1219],[80.6913,6.1185],[80.693,6.1138],[80.6812,6.1074],[80.6772,6.1017],[80.6796,6.0944],[80.6898,6.0956],[80.6926,6.0916],[80.6949,6.0941],[80.693,6.099],[80.7072,6.0948],[80.7106,6.0978],[80.7138,6.0957],[80.7146,6.0973],[80.7204,6.0968],[80.7293,6.1089],[80.7316,6.1086],[80.7315,6.1113],[80.7384,6.1159]]],[[[80.69,6.1242],[80.6884,6.133],[80.6932,6.1388],[80.6895,6.1439],[80.6936,6.1449],[80.6884,6.152],[80.6892,6.1609],[80.6872,6.1635],[80.6843,6.1653],[80.6794,6.1614],[80.6733,6.1608],[80.6701,6.1615],[80.6688,6.1647],[80.6585,6.1614],[80.654,6.1568],[80.6534,6.1486],[80.6435,6.138],[80.645,6.1331],[80.6575,6.1281],[80.6609,6.1181],[80.69,6.1242]]]]}},{"type":"Feature","properties":{"n":"Sooriyawewa","d":"Hambantota","c":[81.0126,6.2919]},"geometry":{"type":"Polygon","coordinates":[[[81.0281,6.1931],[81.0379,6.2078],[81.0522,6.215],[81.0569,6.2215],[81.0607,6.2196],[81.0646,6.2212],[81.0667,6.2227],[81.0642,6.2273],[81.0701,6.2272],[81.0722,6.2298],[81.0679,6.2416],[81.0707,6.2446],[81.0636,6.2636],[81.0614,6.2646],[81.069,6.2673],[81.0608,6.2795],[81.0548,6.3033],[81.0455,6.3206],[81.0488,6.3284],[81.0551,6.3299],[81.0596,6.3384],[81.0649,6.3376],[81.0654,6.3355],[81.0705,6.337],[81.0724,6.3405],[81.08,6.3373],[81.0806,6.3402],[81.0778,6.3451],[81.0766,6.3606],[81.0638,6.3609],[81.0589,6.3685],[81.0586,6.3756],[81.0562,6.3759],[81.0441,6.3978],[81.0358,6.3905],[81.0112,6.3944],[81.0055,6.3771],[81.0057,6.3691],[81.0074,6.3668],[81.0151,6.3657],[81.0199,6.3591],[81.0172,6.3452],[81.0064,6.3372],[80.9923,6.3341],[80.9793,6.3264],[80.969,6.3259],[80.9645,6.3167],[80.9548,6.3164],[80.9404,6.3078],[80.9391,6.3041],[80.9292,6.3003],[80.9278,6.3045],[80.9185,6.2976],[80.9294,6.2875],[80.9322,6.2802],[80.9315,6.2734],[80.9391,6.2701],[80.9395,6.2591],[80.9449,6.2528],[80.947,6.2427],[80.9505,6.2401],[80.9541,6.2421],[80.9578,6.2409],[80.9611,6.2457],[80.9671,6.2441],[80.9698,6.2483],[80.9743,6.2485],[80.9748,6.2517],[80.9813,6.2469],[80.9942,6.2429],[81.0032,6.2302],[81.0082,6.229],[81.0067,6.2189],[81.0135,6.2173],[81.0149,6.2045],[81.0125,6.1993],[81.0107,6.2016],[81.0128,6.1958],[81.0143,6.1944],[81.0205,6.1966],[81.0281,6.1931]]]}},{"type":"Feature","properties":{"n":"Tangalle","d":"Hambantota","c":[80.8239,6.0717]},"geometry":{"type":"Polygon","coordinates":[[[80.8924,6.1369],[80.8824,6.1341],[80.8682,6.1367],[80.8684,6.1279],[80.8632,6.1298],[80.8542,6.127],[80.8277,6.1261],[80.8209,6.1198],[80.8034,6.1225],[80.8057,6.118],[80.8045,6.1096],[80.7991,6.1084],[80.7834,6.0968],[80.7785,6.0975],[80.7632,6.0933],[80.7554,6.0815],[80.7553,6.0653],[80.7498,6.065],[80.7481,6.0554],[80.7675,6.0509],[80.7697,6.0471],[80.7719,6.0473],[80.7743,6.0416],[80.7719,6.0273],[80.7668,6.025],[80.7578,6.0251],[80.7406,6.01],[80.7416,6.0057],[80.7376,6.007],[80.733,6.0043],[80.7249,5.9944],[80.7233,5.9957],[80.7126,5.9923],[80.7097,5.9937],[80.7074,5.9905],[80.7231,5.9793],[80.7334,5.9761],[80.7329,5.9723],[80.7354,5.9715],[80.737,5.9778],[80.734,5.9802],[80.7366,5.9855],[80.7482,5.9888],[80.743,5.9903],[80.7467,5.9984],[80.7544,6.0011],[80.7626,6.0003],[80.7652,6.0045],[80.7683,6.0022],[80.7717,6.0058],[80.7793,6.006],[80.7786,6.0086],[80.785,6.0121],[80.7844,6.0148],[80.7879,6.0156],[80.7879,6.018],[80.7978,6.0201],[80.7991,6.0223],[80.7975,6.0251],[80.7967,6.0233],[80.7963,6.0282],[80.8042,6.0366],[80.817,6.0411],[80.8453,6.0451],[80.8534,6.0448],[80.8589,6.0419],[80.8647,6.0467],[80.8643,6.0515],[80.87,6.0583],[80.8839,6.0623],[80.9007,6.0631],[80.9306,6.0752],[80.9235,6.0846],[80.9181,6.0858],[80.8967,6.1001],[80.893,6.1186],[80.8901,6.1212],[80.8924,6.1369]]]}},{"type":"Feature","properties":{"n":"Thissamaharama","d":"Hambantota","c":[81.45,6.3796]},"geometry":{"type":"Polygon","coordinates":[[[81.2911,6.1944],[81.3223,6.1984],[81.3247,6.2059],[81.3377,6.214],[81.3361,6.2154],[81.3384,6.2192],[81.3345,6.2173],[81.3393,6.2232],[81.3714,6.2348],[81.3718,6.2402],[81.3797,6.245],[81.3927,6.2464],[81.3995,6.25],[81.4022,6.2557],[81.4145,6.2644],[81.4182,6.2734],[81.4254,6.2772],[81.4264,6.2842],[81.4334,6.2882],[81.4374,6.2939],[81.4476,6.2976],[81.4523,6.3018],[81.4794,6.3103],[81.483,6.3186],[81.4817,6.3221],[81.4932,6.3284],[81.493,6.3312],[81.499,6.3375],[81.4958,6.3397],[81.496,6.3437],[81.5069,6.3531],[81.5279,6.3623],[81.5546,6.3666],[81.5646,6.3722],[81.5616,6.3744],[81.5631,6.3738],[81.5618,6.3764],[81.5645,6.3807],[81.5979,6.3993],[81.6027,6.4061],[81.6166,6.4163],[81.6176,6.4185],[81.6125,6.4225],[81.6164,6.4307],[81.6473,6.4454],[81.6565,6.4542],[81.6591,6.4634],[81.6912,6.4861],[81.7027,6.5009],[81.7051,6.5103],[81.6971,6.5145],[81.6859,6.5137],[81.6726,6.5206],[81.6667,6.5335],[81.6606,6.5404],[81.6552,6.54],[81.6489,6.545],[81.6412,6.5414],[81.6367,6.5418],[81.6297,6.5541],[81.6193,6.565],[81.619,6.5712],[81.6135,6.5724],[81.6066,6.5798],[81.6032,6.5674],[81.5981,6.5602],[81.5919,6.5617],[81.5877,6.5602],[81.58,6.5504],[81.5639,6.554],[81.5453,6.5363],[81.5372,6.5378],[81.5315,6.536],[81.5222,6.5194],[81.4888,6.5041],[81.485,6.498],[81.4792,6.4951],[81.4764,6.4847],[81.4791,6.4784],[81.4776,6.4718],[81.4849,6.4657],[81.4847,6.4629],[81.4742,6.449],[81.4758,6.4398],[81.4743,6.4355],[81.4786,6.4187],[81.4735,6.4082],[81.4654,6.4071],[81.4605,6.4133],[81.4471,6.4136],[81.4435,6.4194],[81.436,6.42],[81.4332,6.4156],[81.4255,6.4182],[81.4229,6.4125],[81.4182,6.4118],[81.418,6.4083],[81.4136,6.4097],[81.4002,6.4065],[81.3992,6.4148],[81.3925,6.4166],[81.38,6.3967],[81.3714,6.3976],[81.3652,6.3906],[81.3495,6.39],[81.3396,6.3824],[81.3303,6.3796],[81.3251,6.3824],[81.3195,6.3798],[81.3107,6.3806],[81.2762,6.3664],[81.2821,6.3448],[81.2913,6.3437],[81.2978,6.3396],[81.294,6.3332],[81.2886,6.3324],[81.2857,6.3154],[81.2831,6.3148],[81.2887,6.3101],[81.2881,6.2968],[81.2852,6.2993],[81.2803,6.2983],[81.2802,6.3021],[81.266,6.317],[81.266,6.3238],[81.2566,6.3268],[81.2522,6.3383],[81.243,6.3419],[81.2408,6.3341],[81.2215,6.3164],[81.2187,6.3066],[81.2218,6.2981],[81.2313,6.2874],[81.224,6.2653],[81.2255,6.2331],[81.2152,6.2206],[81.2075,6.2152],[81.2088,6.2108],[81.2196,6.2089],[81.2258,6.2147],[81.2431,6.2175],[81.2482,6.2247],[81.2524,6.2258],[81.2557,6.2219],[81.2602,6.2257],[81.2708,6.2139],[81.2904,6.2133],[81.2932,6.2159],[81.2952,6.2144],[81.293,6.2119],[81.294,6.2072],[81.2902,6.2055],[81.2931,6.2028],[81.2977,6.2031],[81.2988,6.2003],[81.2932,6.1991],[81.2911,6.1944]]]}},{"type":"Feature","properties":{"n":"Walasmulla","d":"Hambantota","c":[80.6801,6.1987]},"geometry":{"type":"Polygon","coordinates":[[[80.6913,6.1185],[80.693,6.1219],[80.7016,6.1235],[80.6983,6.1318],[80.6999,6.134],[80.6943,6.1448],[80.7052,6.1526],[80.7178,6.1486],[80.7194,6.1717],[80.7218,6.1738],[80.7282,6.1737],[80.7315,6.1773],[80.7306,6.1831],[80.7337,6.1857],[80.736,6.1951],[80.7409,6.2001],[80.7464,6.2014],[80.7465,6.2059],[80.7381,6.21],[80.7493,6.2172],[80.7462,6.237],[80.7351,6.2424],[80.7192,6.243],[80.7128,6.2301],[80.7091,6.2303],[80.7067,6.2333],[80.706,6.2293],[80.6849,6.2234],[80.6815,6.2155],[80.6701,6.2133],[80.6654,6.2147],[80.6716,6.2239],[80.6731,6.2372],[80.6704,6.2399],[80.6652,6.2381],[80.6617,6.2294],[80.6521,6.2275],[80.6484,6.2312],[80.6475,6.2376],[80.6434,6.2396],[80.6439,6.2462],[80.6486,6.2529],[80.6469,6.2562],[80.6413,6.2553],[80.6272,6.2402],[80.6226,6.2232],[80.6107,6.209],[80.6059,6.1986],[80.6091,6.1874],[80.6169,6.1823],[80.6253,6.1819],[80.6333,6.1762],[80.6335,6.1702],[80.6499,6.1683],[80.6582,6.173],[80.6601,6.1706],[80.6585,6.1614],[80.6688,6.1647],[80.6701,6.1615],[80.6733,6.1608],[80.6794,6.1614],[80.6843,6.1653],[80.6872,6.1635],[80.6892,6.1609],[80.6884,6.152],[80.6936,6.1449],[80.6895,6.1439],[80.6932,6.1388],[80.6884,6.133],[80.6913,6.1185]]]}},{"type":"Feature","properties":{"n":"Weeraketiya","d":"Hambantota","c":[80.7698,6.1721]},"geometry":{"type":"Polygon","coordinates":[[[80.7935,6.2296],[80.7837,6.2349],[80.7748,6.2366],[80.7676,6.2432],[80.7532,6.2483],[80.7488,6.2377],[80.7462,6.237],[80.7493,6.2172],[80.7381,6.21],[80.7465,6.2059],[80.7464,6.2014],[80.7409,6.2001],[80.736,6.1951],[80.7337,6.1857],[80.7306,6.1831],[80.7315,6.1773],[80.7282,6.1737],[80.7218,6.1738],[80.7194,6.1717],[80.7178,6.1486],[80.722,6.1421],[80.7293,6.1411],[80.7239,6.1296],[80.7297,6.1174],[80.7393,6.115],[80.7431,6.1162],[80.7445,6.1143],[80.7544,6.1149],[80.7503,6.108],[80.7506,6.1041],[80.7594,6.0977],[80.7678,6.0951],[80.7834,6.0968],[80.7991,6.1084],[80.8045,6.1096],[80.8057,6.118],[80.8008,6.1244],[80.7912,6.1242],[80.7822,6.1331],[80.7887,6.1447],[80.7826,6.1451],[80.7801,6.1592],[80.7772,6.1633],[80.7795,6.1758],[80.7769,6.1821],[80.7809,6.1839],[80.7851,6.1905],[80.7901,6.1804],[80.794,6.178],[80.7973,6.1811],[80.8014,6.1741],[80.81,6.1805],[80.8113,6.1869],[80.8143,6.1831],[80.8188,6.1823],[80.826,6.1912],[80.8346,6.1906],[80.8372,6.1969],[80.841,6.1965],[80.8385,6.203],[80.8407,6.206],[80.8375,6.2071],[80.83,6.217],[80.8058,6.2174],[80.8049,6.2188],[80.8093,6.223],[80.8036,6.2244],[80.8003,6.2307],[80.7935,6.2296]]]}},{"type":"Feature","properties":{"n":"Delft","d":"Jaffna","c":[79.6883,9.5122]},"geometry":{"type":"MultiPolygon","coordinates":[[[[79.5261,9.3831],[79.5278,9.3886],[79.5237,9.393],[79.5209,9.393],[79.5197,9.3874],[79.5261,9.3831]]],[[[79.6585,9.5559],[79.6536,9.5537],[79.6487,9.5464],[79.6527,9.505],[79.7024,9.4757],[79.7179,9.4746],[79.7213,9.4763],[79.7272,9.483],[79.7294,9.492],[79.7216,9.5268],[79.7128,9.5297],[79.6976,9.5288],[79.6906,9.531],[79.6853,9.537],[79.6828,9.5363],[79.682,9.5392],[79.6781,9.5396],[79.67,9.5527],[79.6615,9.554],[79.6615,9.5521],[79.6585,9.5559]]]]}},{"type":"Feature","properties":{"n":"Islands North (Kayts)","d":"Jaffna","c":[79.8686,9.6758]},"geometry":{"type":"MultiPolygon","coordinates":[[[[79.7813,9.6867],[79.7759,9.684],[79.7691,9.6752],[79.7615,9.6584],[79.763,9.653],[79.7678,9.6509],[79.7713,9.652],[79.7692,9.6468],[79.7727,9.6439],[79.7762,9.6463],[79.775,9.6508],[79.7715,9.6532],[79.7777,9.6553],[79.7775,9.6586],[79.7848,9.6656],[79.7813,9.6697],[79.7813,9.6867]]],[[[79.7914,9.6781],[79.7906,9.689],[79.7889,9.6849],[79.7914,9.6781]]],[[[79.8947,9.6752],[79.8983,9.6784],[79.8979,9.6837],[79.8917,9.6878],[79.8886,9.6965],[79.884,9.6993],[79.8813,9.7],[79.8769,9.6946],[79.8704,9.6929],[79.866,9.6953],[79.8617,9.7031],[79.8565,9.7048],[79.8512,9.7008],[79.8387,9.7027],[79.8393,9.6977],[79.8482,9.6916],[79.8481,9.6888],[79.8409,9.6859],[79.8447,9.6769],[79.8548,9.6623],[79.8623,9.658],[79.8624,9.6508],[79.8704,9.6347],[79.8733,9.6357],[79.885,9.6562],[79.8828,9.6676],[79.8947,9.6752]]],[[[79.8113,9.6892],[79.8095,9.7015],[79.8122,9.7159],[79.808,9.7096],[79.8055,9.6953],[79.8078,9.6866],[79.8108,9.6853],[79.8113,9.6892]]]]}},{"type":"Feature","properties":{"n":"Islands South (Velanai)","d":"Jaffna","c":[79.8949,9.6214]},"geometry":{"type":"MultiPolygon","coordinates":[[[[79.7694,9.6216],[79.7612,9.6146],[79.7595,9.6067],[79.7613,9.5896],[79.7716,9.5845],[79.7738,9.5924],[79.7709,9.598],[79.7712,9.6049],[79.7725,9.6123],[79.7745,9.6122],[79.7727,9.6127],[79.7727,9.6182],[79.7752,9.6185],[79.7694,9.6216]]],[[[79.9977,9.6347],[79.9963,9.6337],[80.0007,9.6297],[80.004,9.63],[80.0039,9.633],[79.9977,9.6347]]],[[[79.8535,9.6347],[79.8496,9.6333],[79.8533,9.625],[79.8516,9.6239],[79.8586,9.618],[79.861,9.6225],[79.8589,9.6233],[79.86,9.6265],[79.8557,9.6293],[79.8535,9.6347]]],[[[79.9854,9.6388],[79.9862,9.6414],[79.9825,9.6431],[79.9854,9.6388]]],[[[80.0017,9.6474],[80.0117,9.6413],[80.0052,9.6477],[80.0017,9.6474]]],[[[79.934,9.6687],[79.9357,9.6762],[79.9332,9.6781],[79.9321,9.6727],[79.9337,9.6649],[79.934,9.6687]]],[[[79.8733,9.6357],[79.8904,9.6235],[79.8603,9.607],[79.8422,9.6193],[79.8389,9.6145],[79.8321,9.6106],[79.827,9.6107],[79.8242,9.6139],[79.8201,9.6099],[79.8174,9.6183],[79.8185,9.6255],[79.8156,9.6241],[79.8163,9.6203],[79.8105,9.6268],[79.8052,9.6182],[79.8072,9.6164],[79.8048,9.6109],[79.8069,9.6056],[79.8031,9.6025],[79.8083,9.5989],[79.8057,9.5936],[79.8067,9.59],[79.7978,9.5889],[79.7939,9.5927],[79.7927,9.6],[79.7902,9.5976],[79.7877,9.601],[79.7901,9.5976],[79.7903,9.5893],[79.7944,9.5921],[79.7935,9.5891],[79.7901,9.5888],[79.7897,9.5838],[79.7926,9.5833],[79.7935,9.5805],[79.7975,9.5791],[79.8009,9.5889],[79.7997,9.5806],[79.8016,9.5766],[79.8409,9.5674],[79.8552,9.5681],[79.8594,9.571],[79.8569,9.5774],[79.86,9.5855],[79.8565,9.5843],[79.8574,9.5882],[79.859,9.5863],[79.8563,9.5949],[79.862,9.6032],[79.8601,9.6068],[79.8899,9.6231],[79.898,9.6163],[79.9036,9.616],[79.9095,9.6224],[79.9122,9.6307],[79.9177,9.633],[79.9467,9.6258],[79.9597,9.6144],[79.9677,9.6125],[79.9744,9.6135],[79.973,9.6157],[79.9789,9.6215],[79.9809,9.6209],[79.9805,9.6152],[79.9831,9.6136],[79.9802,9.6125],[79.9791,9.6144],[79.9757,9.6052],[79.9657,9.6056],[79.9639,9.6113],[79.9627,9.6082],[79.9731,9.6],[79.9857,9.5971],[79.9989,9.6035],[80.0041,9.615],[80.0019,9.6123],[80.0021,9.6162],[80.0009,9.6137],[80.0001,9.6163],[80.0055,9.6304],[80.0006,9.6278],[79.9958,9.6333],[79.9956,9.6361],[79.9982,9.6364],[79.9955,9.6396],[80.0038,9.6388],[80.0008,9.6417],[79.9954,9.6414],[80.0006,9.6423],[79.9984,9.6441],[79.9953,9.6429],[79.9968,9.6449],[79.9952,9.6456],[79.9975,9.6455],[79.9931,9.648],[79.9974,9.6542],[79.9839,9.6371],[79.9862,9.6287],[79.9813,9.6222],[79.9818,9.6196],[79.9787,9.622],[79.982,9.6249],[79.9823,9.6292],[79.9801,9.6296],[79.9824,9.6351],[79.9785,9.6309],[79.9815,9.6356],[79.978,9.6353],[79.9798,9.6333],[79.9783,9.632],[79.9643,9.633],[79.9471,9.6428],[79.942,9.6482],[79.9409,9.647],[79.9415,9.6486],[79.9242,9.6606],[79.922,9.6597],[79.9228,9.6612],[79.9203,9.6619],[79.9241,9.6638],[79.9319,9.6636],[79.9296,9.6648],[79.93,9.6726],[79.9331,9.6756],[79.9274,9.6794],[79.9283,9.6813],[79.9267,9.6794],[79.9164,9.6799],[79.9222,9.6772],[79.9115,9.6736],[79.9052,9.6748],[79.9077,9.6723],[79.9025,9.6735],[79.8974,9.6699],[79.8947,9.6752],[79.8841,9.6693],[79.882,9.6656],[79.885,9.6562],[79.8733,9.6357]]]]}},{"type":"Feature","properties":{"n":"Jaffna","d":"Jaffna","c":[80.0192,9.6633]},"geometry":{"type":"Polygon","coordinates":[[[79.9974,9.6542],[80.0031,9.6625],[80.012,9.6567],[80.0115,9.6539],[80.0166,9.6486],[80.0375,9.646],[80.0422,9.6505],[80.0514,9.6474],[80.0554,9.6544],[80.036,9.6593],[80.0345,9.6541],[80.0327,9.6549],[80.0318,9.6596],[80.0272,9.6606],[80.0319,9.6665],[80.0105,9.6734],[80.0113,9.6757],[80.0076,9.6768],[80.0059,9.6844],[79.998,9.6945],[79.9945,9.6888],[79.9981,9.6805],[79.9966,9.6713],[80.0032,9.6631],[79.9974,9.6542]]]}},{"type":"Feature","properties":{"n":"Karainagar","d":"Jaffna","c":[79.8734,9.7352]},"geometry":{"type":"Polygon","coordinates":[[[79.8967,9.7415],[79.892,9.7411],[79.893,9.7495],[79.8955,9.751],[79.892,9.7628],[79.8972,9.763],[79.896,9.7659],[79.8997,9.7667],[79.8775,9.761],[79.8613,9.762],[79.8527,9.7494],[79.859,9.7353],[79.8592,9.7263],[79.8479,9.7126],[79.8607,9.7093],[79.8637,9.7062],[79.8786,9.7042],[79.882,9.7088],[79.8902,9.7128],[79.8867,9.7286],[79.8917,9.7406],[79.8967,9.7415]]]}},{"type":"Feature","properties":{"n":"Nallur","d":"Jaffna","c":[80.0465,9.6687]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.0802,9.647],[80.0838,9.6426],[80.0903,9.6419],[80.0802,9.647]]],[[[80.0673,9.6637],[80.0597,9.6629],[80.0407,9.6728],[80.0409,9.6845],[80.0354,9.6851],[80.0409,9.6938],[80.0341,9.6964],[80.0431,9.7068],[80.0296,9.7128],[80.0316,9.7183],[80.0283,9.7194],[80.0239,9.7174],[80.0209,9.7186],[80.0171,9.7142],[80.0159,9.7052],[80.0127,9.7006],[80.0042,9.7027],[79.9999,9.6995],[79.9983,9.6932],[80.0059,9.6844],[80.0076,9.6768],[80.0113,9.6757],[80.0105,9.6734],[80.0319,9.6665],[80.0272,9.6606],[80.0318,9.6596],[80.0345,9.6541],[80.036,9.6593],[80.0554,9.6544],[80.0514,9.6474],[80.0694,9.638],[80.0964,9.6179],[80.1281,9.6065],[80.1325,9.6087],[80.1323,9.6104],[80.1304,9.6089],[80.1152,9.6141],[80.1099,9.6231],[80.098,9.6295],[80.0957,9.6348],[80.0753,9.6441],[80.0752,9.6466],[80.0794,9.648],[80.0753,9.6503],[80.0735,9.6461],[80.0745,9.6593],[80.0673,9.6615],[80.0673,9.6637]]]]}},{"type":"Feature","properties":{"n":"Thenmaradchi (Chavakachcheri)","d":"Jaffna","c":[80.1886,9.6777]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.2003,9.6274],[80.1967,9.6269],[80.1986,9.6253],[80.2003,9.6274]]],[[[80.1608,9.6392],[80.1591,9.6397],[80.1609,9.6365],[80.1639,9.638],[80.1608,9.6392]]],[[[80.1669,9.6465],[80.1622,9.6426],[80.1628,9.6394],[80.168,9.6398],[80.1712,9.6428],[80.1684,9.6425],[80.1669,9.6465]]],[[[80.1954,9.5968],[80.1944,9.5951],[80.1986,9.5941],[80.1954,9.5968]]],[[[80.1909,9.6005],[80.1878,9.6019],[80.1825,9.5959],[80.1905,9.5959],[80.1893,9.6004],[80.1909,9.6005]]],[[[80.1966,9.6015],[80.1926,9.602],[80.1922,9.5993],[80.1966,9.6015]]],[[[80.1887,9.6145],[80.1874,9.6177],[80.1849,9.6176],[80.181,9.6125],[80.1773,9.6123],[80.1764,9.6085],[80.1887,9.6145]]],[[[80.1792,9.6155],[80.178,9.6139],[80.1808,9.6138],[80.1792,9.6155]]],[[[80.1887,9.6136],[80.1831,9.6114],[80.1799,9.6065],[80.182,9.6105],[80.1769,9.6068],[80.1832,9.6046],[80.188,9.6068],[80.1911,9.6093],[80.1871,9.6077],[80.1903,9.613],[80.1887,9.6136]]],[[[80.2555,9.6131],[80.2663,9.6288],[80.2752,9.6505],[80.2818,9.6504],[80.2873,9.6564],[80.2974,9.6847],[80.2781,9.7039],[80.2678,9.7115],[80.2627,9.7118],[80.2612,9.7164],[80.2538,9.7225],[80.2457,9.7443],[80.2396,9.7503],[80.2373,9.7605],[80.2323,9.7628],[80.2229,9.7617],[80.219,9.7587],[80.2157,9.754],[80.2148,9.7431],[80.2112,9.7345],[80.2045,9.7267],[80.1906,9.7286],[80.1825,9.7232],[80.1694,9.726],[80.1629,9.7327],[80.1554,9.7298],[80.1423,9.7133],[80.1398,9.7152],[80.1368,9.7126],[80.1182,9.7099],[80.112,9.7029],[80.0978,9.7091],[80.081,9.6954],[80.0666,9.6725],[80.0673,9.6615],[80.0764,9.6586],[80.0772,9.6527],[80.0777,9.6548],[80.0806,9.6541],[80.0871,9.6488],[80.1407,9.6235],[80.1683,9.5985],[80.1982,9.5804],[80.1987,9.5832],[80.2031,9.5822],[80.2066,9.5835],[80.2064,9.5855],[80.1897,9.5883],[80.1908,9.5904],[80.1955,9.5898],[80.1836,9.5947],[80.1783,9.5927],[80.1822,9.5943],[80.1797,9.5951],[80.182,9.5956],[80.184,9.6023],[80.1704,9.6038],[80.1679,9.6084],[80.1766,9.6098],[80.1798,9.6229],[80.1755,9.624],[80.1706,9.621],[80.1729,9.6177],[80.1572,9.6241],[80.1699,9.6228],[80.1632,9.6257],[80.1699,9.6287],[80.1707,9.637],[80.1672,9.6387],[80.161,9.6365],[80.1614,9.6321],[80.158,9.6406],[80.1603,9.6425],[80.153,9.6459],[80.1597,9.6538],[80.1634,9.6524],[80.1601,9.6545],[80.1623,9.6563],[80.1696,9.6558],[80.1916,9.6441],[80.2057,9.6404],[80.2449,9.6203],[80.2554,9.6131],[80.2543,9.6115],[80.2555,9.6131]]]]}},{"type":"Feature","properties":{"n":"Vadamaradchchi East","d":"Jaffna","c":[80.4088,9.6114]},"geometry":{"type":"Polygon","coordinates":[[[80.2974,9.6847],[80.3195,9.6632],[80.3543,9.6356],[80.4072,9.5964],[80.4391,9.5782],[80.4399,9.571],[80.4369,9.5575],[80.4437,9.5341],[80.4502,9.5222],[80.4706,9.5183],[80.4895,9.5114],[80.529,9.4873],[80.5486,9.4719],[80.5615,9.4669],[80.6034,9.4579],[80.6152,9.4519],[80.6208,9.4587],[80.5532,9.5079],[80.3569,9.6673],[80.3173,9.714],[80.2692,9.7857],[80.2522,9.776],[80.2534,9.7739],[80.2497,9.7718],[80.2509,9.7697],[80.2437,9.7684],[80.2373,9.7605],[80.2396,9.7503],[80.2457,9.7443],[80.2538,9.7225],[80.2612,9.7164],[80.2627,9.7118],[80.2678,9.7115],[80.2781,9.7039],[80.2974,9.6847]]]}},{"type":"Feature","properties":{"n":"Vadamaradchchi South-West (Karaveddy)","d":"Jaffna","c":[80.1821,9.776]},"geometry":{"type":"Polygon","coordinates":[[[80.2373,9.7605],[80.2437,9.7684],[80.2316,9.7777],[80.2288,9.7842],[80.217,9.7903],[80.2239,9.8001],[80.2159,9.8032],[80.2185,9.8155],[80.2075,9.8207],[80.203,9.8217],[80.1994,9.815],[80.1936,9.8173],[80.1923,9.8145],[80.1885,9.8182],[80.1825,9.8134],[80.1802,9.8151],[80.1809,9.8177],[80.1726,9.8205],[80.159,9.821],[80.1518,9.8112],[80.1449,9.8102],[80.1339,9.802],[80.1291,9.8045],[80.1271,9.809],[80.1268,9.7989],[80.1297,9.7926],[80.1269,9.7854],[80.1385,9.7714],[80.1446,9.7527],[80.1598,9.75],[80.155,9.7468],[80.16,9.7441],[80.1588,9.7425],[80.1625,9.7394],[80.1629,9.7327],[80.1694,9.726],[80.1825,9.7232],[80.1906,9.7286],[80.2045,9.7267],[80.2112,9.7345],[80.2148,9.7431],[80.2157,9.754],[80.219,9.7587],[80.2269,9.7625],[80.2373,9.7605]]]}},{"type":"Feature","properties":{"n":"Vadamaradchi North (Point Pedro)","d":"Jaffna","c":[80.2172,9.8079]},"geometry":{"type":"Polygon","coordinates":[[[80.2692,9.7857],[80.2586,9.8045],[80.2517,9.8233],[80.2448,9.8284],[80.2332,9.8281],[80.2137,9.8353],[80.2076,9.8357],[80.1866,9.8276],[80.1668,9.8247],[80.1377,9.8252],[80.1318,9.8199],[80.1271,9.809],[80.1291,9.8045],[80.1339,9.802],[80.1449,9.8102],[80.1518,9.8112],[80.159,9.821],[80.1726,9.8205],[80.1809,9.8177],[80.1802,9.8151],[80.1825,9.8134],[80.1885,9.8182],[80.1923,9.8145],[80.1936,9.8173],[80.1994,9.815],[80.203,9.8217],[80.2185,9.8155],[80.2159,9.8032],[80.2239,9.8001],[80.217,9.7903],[80.2288,9.7842],[80.2316,9.7777],[80.2451,9.7673],[80.2509,9.7697],[80.2497,9.7718],[80.2534,9.7739],[80.2522,9.776],[80.2692,9.7857]]]}},{"type":"Feature","properties":{"n":"Valikamam East (Kopay)","d":"Jaffna","c":[80.0945,9.7368]},"geometry":{"type":"Polygon","coordinates":[[[80.1629,9.7327],[80.1625,9.7394],[80.1588,9.7425],[80.16,9.7441],[80.155,9.7468],[80.1598,9.75],[80.1446,9.7527],[80.1385,9.7714],[80.1269,9.7854],[80.1297,9.7926],[80.1268,9.7989],[80.1271,9.809],[80.1318,9.8199],[80.1274,9.8208],[80.1102,9.8109],[80.0979,9.8088],[80.0978,9.8064],[80.0939,9.8042],[80.0927,9.7957],[80.0982,9.7871],[80.0941,9.7815],[80.0914,9.7682],[80.0851,9.7643],[80.0811,9.7573],[80.0814,9.7527],[80.0428,9.7438],[80.0392,9.7357],[80.0363,9.7346],[80.0296,9.7128],[80.0431,9.7068],[80.0341,9.6964],[80.0409,9.6938],[80.0354,9.6851],[80.0409,9.6845],[80.0407,9.6728],[80.0597,9.6629],[80.0673,9.6637],[80.0666,9.6725],[80.0689,9.6777],[80.081,9.6954],[80.0978,9.7091],[80.112,9.7029],[80.1182,9.7099],[80.1368,9.7126],[80.1398,9.7152],[80.1423,9.7133],[80.1554,9.7298],[80.1629,9.7327]]]}},{"type":"Feature","properties":{"n":"Valikamam North (Thllippalai)","d":"Jaffna","c":[80.0395,9.7888]},"geometry":{"type":"Polygon","coordinates":[[[80.0979,9.8088],[80.0834,9.8092],[80.0683,9.8128],[80.0708,9.8122],[80.0691,9.811],[80.0533,9.8161],[80.042,9.8162],[80.0344,9.8179],[80.0281,9.8233],[80.0245,9.8227],[80.0286,9.8229],[80.034,9.8174],[80.0286,9.8153],[80.0173,9.8168],[79.9961,9.811],[79.9823,9.8099],[79.9808,9.8023],[79.9829,9.8002],[79.9862,9.8011],[79.9866,9.8062],[79.994,9.8057],[79.9915,9.7977],[79.9989,9.7873],[79.9988,9.7843],[79.9963,9.7846],[79.9976,9.78],[79.9957,9.7757],[79.9909,9.7765],[79.9872,9.7693],[79.9968,9.7624],[79.9998,9.7567],[80.018,9.7523],[80.0286,9.7539],[80.031,9.7662],[80.037,9.7703],[80.041,9.7694],[80.0451,9.7745],[80.0509,9.7699],[80.0544,9.7741],[80.0851,9.7643],[80.0914,9.7682],[80.0941,9.7815],[80.0982,9.7871],[80.0927,9.7957],[80.0939,9.8042],[80.0978,9.8064],[80.0979,9.8088]]]}},{"type":"Feature","properties":{"n":"Valikamam South (Uduvil)","d":"Jaffna","c":[80.032,9.7447]},"geometry":{"type":"Polygon","coordinates":[[[80.0316,9.7183],[80.0363,9.7346],[80.0392,9.7357],[80.0428,9.7438],[80.0814,9.7527],[80.0811,9.7573],[80.0851,9.7643],[80.0544,9.7741],[80.0509,9.7699],[80.0451,9.7745],[80.041,9.7694],[80.037,9.7703],[80.031,9.7662],[80.0286,9.7539],[80.018,9.7523],[80.0048,9.7553],[80.0038,9.7533],[79.9991,9.7537],[79.988,9.7409],[79.993,9.7344],[80.0023,9.7304],[80.0022,9.7209],[80.0077,9.7189],[80.0042,9.7027],[80.0127,9.7006],[80.0159,9.7052],[80.0171,9.7142],[80.0209,9.7186],[80.0316,9.7183]]]}},{"type":"Feature","properties":{"n":"Valikamam South West (Sandilipay)","d":"Jaffna","c":[79.9449,9.7741]},"geometry":{"type":"Polygon","coordinates":[[[79.9983,9.6932],[79.9999,9.6995],[80.0016,9.6989],[80.0054,9.705],[80.0077,9.7189],[80.0022,9.7209],[80.0023,9.7304],[79.993,9.7344],[79.988,9.7409],[79.9991,9.7537],[80.0038,9.7533],[80.0048,9.7553],[79.9998,9.7567],[79.9968,9.7624],[79.9872,9.7693],[79.9909,9.7765],[79.9957,9.7757],[79.9976,9.78],[79.9963,9.7846],[79.9988,9.7843],[79.9989,9.7873],[79.9915,9.7977],[79.994,9.8057],[79.9866,9.8062],[79.9862,9.8011],[79.9829,9.8002],[79.9808,9.8023],[79.9823,9.8099],[79.945,9.7947],[79.9405,9.7848],[79.9449,9.7741],[79.9563,9.7713],[79.9549,9.7662],[79.9574,9.7653],[79.9585,9.7594],[79.9644,9.7571],[79.9667,9.7605],[79.9752,9.7565],[79.9782,9.7625],[79.9797,9.7597],[79.9818,9.7666],[79.9861,9.7636],[79.9838,9.7541],[79.9779,9.7505],[79.9763,9.7451],[79.9708,9.7412],[79.973,9.7365],[79.9699,9.7296],[79.9725,9.7216],[79.9651,9.7148],[79.9658,9.7012],[79.9636,9.7],[79.9704,9.6919],[79.9775,9.6893],[79.9759,9.6878],[79.9789,9.6878],[79.9785,9.6845],[79.9828,9.685],[79.9862,9.6918],[79.9945,9.6888],[79.9983,9.6932]]]}},{"type":"Feature","properties":{"n":"Valikamam West (Chankanai)","d":"Jaffna","c":[79.9438,9.7411]},"geometry":{"type":"MultiPolygon","coordinates":[[[[79.9046,9.7514],[79.9015,9.7497],[79.9058,9.7453],[79.9077,9.7481],[79.9046,9.7514]]],[[[79.8967,9.7414],[79.9176,9.744],[79.9227,9.7396],[79.9214,9.7354],[79.9311,9.7221],[79.929,9.7135],[79.9355,9.7053],[79.9351,9.6992],[79.9392,9.6952],[79.9376,9.6928],[79.9427,9.694],[79.94,9.6921],[79.943,9.6892],[79.9472,9.6903],[79.9474,9.6935],[79.9517,9.689],[79.9575,9.699],[79.9631,9.7023],[79.9637,9.7062],[79.9651,9.705],[79.9651,9.7148],[79.9725,9.7216],[79.9699,9.7296],[79.973,9.7365],[79.9708,9.7412],[79.9763,9.7451],[79.9779,9.7505],[79.9838,9.7541],[79.9861,9.7636],[79.9818,9.7666],[79.9797,9.7597],[79.9782,9.7625],[79.9752,9.7565],[79.9667,9.7605],[79.9644,9.7571],[79.9585,9.7594],[79.9574,9.7653],[79.9549,9.7662],[79.9563,9.7713],[79.9449,9.7741],[79.9405,9.7859],[79.9262,9.7771],[79.9082,9.7746],[79.9042,9.7693],[79.9062,9.7668],[79.9037,9.7628],[79.9064,9.7654],[79.9035,9.7625],[79.9042,9.758],[79.9176,9.7469],[79.9179,9.7442],[79.8967,9.7414]]]]}},{"type":"Feature","properties":{"n":"Agalawatta","d":"Kalutara","c":[80.1676,6.4671]},"geometry":{"type":"Polygon","coordinates":[[[80.186,6.5801],[80.1827,6.5809],[80.1737,6.5725],[80.1659,6.5781],[80.156,6.5766],[80.1563,6.5784],[80.1494,6.5808],[80.1405,6.5721],[80.1379,6.5756],[80.1332,6.5657],[80.13,6.5698],[80.1211,6.5727],[80.1119,6.5645],[80.1151,6.5549],[80.1146,6.5511],[80.1104,6.5509],[80.1098,6.5476],[80.1119,6.543],[80.1184,6.5474],[80.1215,6.5468],[80.1232,6.5369],[80.1273,6.5402],[80.1312,6.5275],[80.1352,6.5258],[80.1311,6.5232],[80.1335,6.5168],[80.1387,6.5138],[80.1396,6.5103],[80.1445,6.5101],[80.1522,6.5053],[80.1542,6.4974],[80.1525,6.4946],[80.1585,6.4894],[80.1534,6.4856],[80.1514,6.4681],[80.1676,6.4671],[80.1801,6.4717],[80.1842,6.4584],[80.1902,6.4527],[80.2031,6.447],[80.205,6.4358],[80.2071,6.4349],[80.2096,6.438],[80.2141,6.4352],[80.2189,6.4363],[80.2141,6.4441],[80.2214,6.4444],[80.2245,6.4555],[80.222,6.4617],[80.2289,6.4636],[80.2329,6.4708],[80.2293,6.4804],[80.2207,6.4866],[80.212,6.488],[80.2033,6.5003],[80.1965,6.4977],[80.1931,6.5027],[80.1938,6.5072],[80.1916,6.5073],[80.1846,6.5185],[80.1798,6.5185],[80.1767,6.5146],[80.1716,6.5137],[80.1665,6.5208],[80.1653,6.5268],[80.1751,6.5292],[80.1779,6.542],[80.1931,6.5423],[80.1994,6.5537],[80.186,6.5801]]]}},{"type":"Feature","properties":{"n":"Bandaragama","d":"Kalutara","c":[79.9737,6.7181]},"geometry":{"type":"Polygon","coordinates":[[[79.97,6.7587],[79.9652,6.7604],[79.958,6.7575],[79.9518,6.7584],[79.9484,6.7631],[79.9438,6.7496],[79.9366,6.7476],[79.9477,6.7414],[79.9457,6.716],[79.9425,6.7138],[79.9363,6.7142],[79.9344,6.718],[79.9245,6.7191],[79.9152,6.7125],[79.916,6.711],[79.9215,6.7143],[79.9248,6.71],[79.9276,6.7132],[79.9288,6.7073],[79.9315,6.7065],[79.9313,6.6996],[79.9279,6.6988],[79.9329,6.6904],[79.9475,6.6872],[79.9583,6.6884],[79.9666,6.6909],[79.9699,6.6983],[79.9746,6.6878],[79.979,6.6858],[79.9806,6.682],[80.0011,6.6885],[80.0021,6.691],[80.0045,6.6868],[80.0074,6.6868],[80.0055,6.6909],[80.0094,6.6906],[80.0113,6.6934],[80.0089,6.701],[80.0099,6.7081],[80.0125,6.7111],[80.0155,6.7105],[80.0157,6.7175],[80.0207,6.7191],[80.0219,6.7275],[80.0201,6.7346],[80.0101,6.7339],[80.0076,6.736],[80.0094,6.7388],[80.0081,6.7441],[80.003,6.7472],[79.9958,6.7445],[79.9909,6.7389],[79.9834,6.7434],[79.9767,6.7434],[79.976,6.7465],[79.9712,6.7476],[79.97,6.7587]]]}},{"type":"Feature","properties":{"n":"Beruwala","d":"Kalutara","c":[80.0026,6.4883]},"geometry":{"type":"MultiPolygon","coordinates":[[[[79.9666,6.464],[79.9653,6.4624],[79.9672,6.4611],[79.9666,6.464]]],[[[80.0227,6.4273],[80.0264,6.428],[80.0302,6.4325],[80.0296,6.4361],[80.0348,6.4374],[80.0331,6.4473],[80.0392,6.454],[80.0361,6.4668],[80.0242,6.4708],[80.0282,6.4756],[80.0359,6.4757],[80.037,6.4784],[80.0298,6.4867],[80.0326,6.4872],[80.0319,6.5017],[80.0275,6.5031],[80.0253,6.5082],[80.0254,6.5178],[80.0204,6.518],[80.0211,6.526],[80.0198,6.5229],[80.0183,6.5259],[80.0202,6.5275],[80.0181,6.5262],[80.0175,6.5283],[80.0205,6.5303],[80.0169,6.5285],[80.0149,6.5336],[80.0155,6.5414],[80.0129,6.5441],[80.0182,6.549],[80.0126,6.545],[80.011,6.5465],[80.0111,6.5446],[80.0046,6.5433],[80.0064,6.5468],[80.0048,6.5477],[80.0034,6.5452],[80.0003,6.5538],[79.9997,6.5519],[79.9963,6.5556],[79.9867,6.5541],[79.9824,6.5484],[79.9674,6.5432],[79.9794,6.5101],[79.9781,6.5068],[79.9739,6.5054],[79.9798,6.4912],[79.9806,6.4786],[79.9712,6.4701],[79.9722,6.4596],[79.9776,6.4482],[79.9909,6.4379],[79.9957,6.4261],[80.002,6.428],[80.0034,6.4344],[80.0069,6.4368],[80.0184,6.4325],[80.0227,6.4273]]]]}},{"type":"Feature","properties":{"n":"Bulathsinhala","d":"Kalutara","c":[80.1724,6.648]},"geometry":{"type":"Polygon","coordinates":[[[80.186,6.5801],[80.1901,6.5829],[80.1946,6.5827],[80.1975,6.5769],[80.1965,6.5831],[80.2108,6.5811],[80.2127,6.5888],[80.211,6.5927],[80.2185,6.5899],[80.2265,6.5913],[80.2382,6.6037],[80.2461,6.6022],[80.2518,6.6091],[80.2475,6.6166],[80.2586,6.622],[80.2478,6.6354],[80.2468,6.642],[80.2495,6.6455],[80.2496,6.653],[80.2393,6.6703],[80.2235,6.6811],[80.2183,6.6911],[80.214,6.6911],[80.2078,6.7106],[80.2007,6.7201],[80.2026,6.7218],[80.1992,6.7262],[80.1792,6.7229],[80.1763,6.7247],[80.1618,6.7225],[80.1429,6.7235],[80.1436,6.7211],[80.1395,6.7152],[80.1352,6.7156],[80.1344,6.7113],[80.123,6.7003],[80.1177,6.6988],[80.1066,6.704],[80.0969,6.6865],[80.0888,6.6821],[80.0916,6.6758],[80.0873,6.6745],[80.0857,6.6684],[80.0925,6.6525],[80.0957,6.6523],[80.0962,6.6554],[80.1007,6.6498],[80.1029,6.6552],[80.106,6.6553],[80.1127,6.6423],[80.1185,6.641],[80.1361,6.6046],[80.1279,6.5982],[80.1304,6.5935],[80.1258,6.5931],[80.1231,6.5969],[80.1124,6.5933],[80.1105,6.5957],[80.1122,6.5922],[80.1115,6.5762],[80.1136,6.575],[80.1119,6.5645],[80.1211,6.5727],[80.13,6.5698],[80.1332,6.5657],[80.1379,6.5756],[80.1405,6.5721],[80.1494,6.5808],[80.1563,6.5784],[80.156,6.5766],[80.1659,6.5781],[80.1737,6.5725],[80.1827,6.5809],[80.186,6.5801]]]}},{"type":"Feature","properties":{"n":"Dodangoda","d":"Kalutara","c":[80.0425,6.571]},"geometry":{"type":"Polygon","coordinates":[[[80.0347,6.4823],[80.041,6.4829],[80.0446,6.4888],[80.0501,6.4893],[80.0485,6.4977],[80.0537,6.4998],[80.0494,6.504],[80.052,6.5034],[80.0536,6.5057],[80.0525,6.5072],[80.0483,6.5051],[80.0497,6.5072],[80.047,6.5082],[80.0517,6.508],[80.0474,6.5101],[80.0513,6.5088],[80.0473,6.5167],[80.0538,6.5082],[80.0508,6.5164],[80.0534,6.5129],[80.0546,6.5146],[80.0543,6.5115],[80.0574,6.5151],[80.0536,6.5283],[80.0593,6.5358],[80.0631,6.5349],[80.0675,6.5396],[80.0661,6.5411],[80.0742,6.5415],[80.0754,6.5394],[80.0773,6.5409],[80.0755,6.5447],[80.078,6.5481],[80.0754,6.5519],[80.081,6.5544],[80.0854,6.5526],[80.0898,6.5542],[80.093,6.5665],[80.1001,6.567],[80.0993,6.5697],[80.1064,6.5757],[80.1066,6.5795],[80.0953,6.5991],[80.089,6.5977],[80.089,6.6058],[80.0861,6.612],[80.0882,6.6123],[80.0889,6.6176],[80.0862,6.6265],[80.0806,6.6324],[80.0596,6.6165],[80.0487,6.5883],[80.0464,6.5879],[80.0428,6.5918],[80.0405,6.5899],[80.0265,6.6014],[80.0248,6.6226],[80.0219,6.626],[80.0167,6.6261],[80.0077,6.6344],[80.0026,6.6279],[79.988,6.6271],[79.9868,6.6209],[79.981,6.6209],[79.9747,6.6097],[79.9842,6.6072],[79.9862,6.6016],[79.992,6.5988],[79.9915,6.6008],[79.9985,6.6053],[80.0021,6.5957],[79.9981,6.588],[79.9931,6.5857],[79.9932,6.583],[79.9958,6.5821],[79.9947,6.5791],[79.9989,6.576],[79.9921,6.5718],[79.9971,6.5721],[79.9982,6.5679],[80.0039,6.5636],[79.9993,6.5587],[80.002,6.5471],[80.0039,6.5474],[80.0034,6.5452],[80.0048,6.5477],[80.0064,6.5468],[80.0046,6.5433],[80.0111,6.5446],[80.011,6.5465],[80.0126,6.545],[80.0182,6.549],[80.0129,6.5441],[80.0155,6.5414],[80.0149,6.5336],[80.0169,6.5285],[80.0205,6.5303],[80.0175,6.5283],[80.0181,6.5262],[80.0202,6.5275],[80.0183,6.5259],[80.0198,6.5229],[80.0211,6.526],[80.0204,6.518],[80.0254,6.5178],[80.0253,6.5082],[80.0275,6.5031],[80.0319,6.5017],[80.0326,6.4872],[80.0298,6.4867],[80.0347,6.4823]]]}},{"type":"Feature","properties":{"n":"Horana","d":"Kalutara","c":[80.0535,6.7561]},"geometry":{"type":"Polygon","coordinates":[[[80.0214,6.7219],[80.0258,6.7188],[80.0271,6.7115],[80.0325,6.7127],[80.0397,6.7189],[80.0456,6.718],[80.0443,6.7128],[80.0477,6.7126],[80.0512,6.7086],[80.0536,6.6939],[80.0563,6.6919],[80.0621,6.6941],[80.0623,6.6987],[80.0728,6.7016],[80.0747,6.7081],[80.0824,6.7082],[80.0864,6.7214],[80.0892,6.7207],[80.0887,6.7233],[80.0926,6.7222],[80.0968,6.726],[80.1065,6.7206],[80.1098,6.7283],[80.1045,6.7482],[80.1114,6.7592],[80.1082,6.7703],[80.1007,6.7811],[80.0993,6.7894],[80.0958,6.7946],[80.0957,6.8039],[80.0888,6.8084],[80.0876,6.815],[80.083,6.8125],[80.0783,6.8165],[80.074,6.8154],[80.0652,6.7956],[80.0596,6.7901],[80.0479,6.7974],[80.0412,6.7978],[80.0393,6.8042],[80.0339,6.8059],[80.0259,6.7926],[80.0126,6.787],[80.0136,6.7841],[80.0068,6.7775],[80.0023,6.7778],[80.0008,6.7706],[79.9899,6.7675],[79.9859,6.7619],[79.9819,6.7625],[79.9763,6.758],[79.97,6.7587],[79.9712,6.7476],[79.976,6.7465],[79.9767,6.7434],[79.9834,6.7434],[79.9909,6.7389],[79.9958,6.7445],[80.003,6.7472],[80.0081,6.7441],[80.0094,6.7388],[80.0076,6.736],[80.0101,6.7339],[80.0201,6.7346],[80.0214,6.7219]]]}},{"type":"Feature","properties":{"n":"Ingiriya","d":"Kalutara","c":[80.1499,6.7624]},"geometry":{"type":"Polygon","coordinates":[[[80.2032,6.7301],[80.2014,6.7401],[80.1905,6.7605],[80.1888,6.7706],[80.1917,6.7779],[80.1909,6.7823],[80.1848,6.7873],[80.1842,6.793],[80.181,6.7947],[80.175,6.8187],[80.1726,6.8212],[80.1647,6.8162],[80.1572,6.823],[80.1468,6.8261],[80.1426,6.8234],[80.1411,6.8192],[80.1312,6.8159],[80.1219,6.8073],[80.1143,6.805],[80.1154,6.7982],[80.1241,6.7819],[80.1239,6.7738],[80.1213,6.7705],[80.1082,6.7703],[80.1114,6.7592],[80.1045,6.7482],[80.1098,6.7283],[80.1098,6.7253],[80.1062,6.7227],[80.1091,6.7052],[80.1066,6.704],[80.1177,6.6988],[80.123,6.7003],[80.1344,6.7113],[80.1352,6.7156],[80.1395,6.7152],[80.1436,6.7211],[80.1429,6.7235],[80.1618,6.7225],[80.1763,6.7247],[80.1792,6.7229],[80.196,6.7249],[80.1971,6.731],[80.2032,6.7301]]]}},{"type":"Feature","properties":{"n":"Kalutara","d":"Kalutara","c":[79.9691,6.6197]},"geometry":{"type":"Polygon","coordinates":[[[79.9529,6.6884],[79.9545,6.6823],[79.9493,6.6727],[79.944,6.6726],[79.9379,6.6687],[79.9407,6.6547],[79.9497,6.6549],[79.9462,6.648],[79.9402,6.6503],[79.9297,6.6494],[79.9482,6.6016],[79.9575,6.5678],[79.9674,6.5432],[79.9824,6.5484],[79.9867,6.5541],[79.9963,6.5556],[79.9997,6.5519],[79.9993,6.5587],[80.0039,6.5636],[79.9982,6.5679],[79.9971,6.5721],[79.9921,6.5718],[79.9989,6.576],[79.9947,6.5791],[79.9958,6.5821],[79.9932,6.583],[79.9931,6.5857],[79.9981,6.588],[80.0021,6.5957],[79.9985,6.6053],[79.9915,6.6008],[79.992,6.5988],[79.9862,6.6016],[79.9842,6.6072],[79.9747,6.6097],[79.981,6.6209],[79.9868,6.6209],[79.988,6.6271],[80.0026,6.6279],[80.0077,6.6344],[80.007,6.6388],[80.0006,6.6373],[79.9948,6.6401],[79.9918,6.6446],[79.9846,6.6611],[79.9835,6.6751],[79.979,6.6858],[79.9746,6.6878],[79.9703,6.6944],[79.9699,6.6983],[79.9666,6.6909],[79.9529,6.6884]]]}},{"type":"Feature","properties":{"n":"Madurawala","d":"Kalutara","c":[80.0915,6.6516]},"geometry":{"type":"Polygon","coordinates":[[[80.1066,6.704],[80.1091,6.7052],[80.1065,6.7206],[80.0968,6.726],[80.0926,6.7222],[80.0887,6.7233],[80.0892,6.7207],[80.0864,6.7214],[80.0824,6.7082],[80.0747,6.7081],[80.0728,6.7016],[80.0623,6.6987],[80.0598,6.6923],[80.0536,6.6939],[80.0539,6.6894],[80.0604,6.6847],[80.0591,6.6807],[80.0621,6.6713],[80.053,6.6656],[80.0566,6.662],[80.0546,6.6609],[80.0538,6.652],[80.0461,6.6451],[80.0499,6.6437],[80.0514,6.6491],[80.0544,6.6445],[80.0583,6.6466],[80.0648,6.6451],[80.0691,6.6396],[80.0708,6.6334],[80.0677,6.6307],[80.0714,6.6243],[80.0753,6.6265],[80.0781,6.6323],[80.0806,6.6324],[80.0862,6.6265],[80.0889,6.6176],[80.0882,6.6123],[80.0861,6.612],[80.089,6.6058],[80.089,6.5977],[80.0953,6.5991],[80.1066,6.5795],[80.1121,6.5821],[80.1105,6.5957],[80.1124,6.5933],[80.1231,6.5969],[80.1258,6.5931],[80.1304,6.5935],[80.1279,6.5982],[80.1361,6.6046],[80.1185,6.641],[80.1127,6.6423],[80.106,6.6553],[80.1029,6.6552],[80.1007,6.6498],[80.0962,6.6554],[80.0957,6.6523],[80.0925,6.6525],[80.0857,6.6684],[80.0873,6.6745],[80.0916,6.6758],[80.0888,6.6821],[80.0969,6.6865],[80.1066,6.704]]]}},{"type":"Feature","properties":{"n":"Matugama","d":"Kalutara","c":[80.089,6.488]},"geometry":{"type":"Polygon","coordinates":[[[80.1119,6.5645],[80.1136,6.575],[80.1115,6.5762],[80.1121,6.5821],[80.1066,6.5795],[80.1064,6.5757],[80.0993,6.5697],[80.1001,6.567],[80.093,6.5665],[80.0898,6.5542],[80.0854,6.5526],[80.081,6.5544],[80.0754,6.5519],[80.078,6.5481],[80.0755,6.5447],[80.0773,6.5409],[80.0754,6.5394],[80.0742,6.5415],[80.0661,6.5411],[80.0663,6.5374],[80.0631,6.5349],[80.0593,6.5358],[80.0536,6.5283],[80.0574,6.5151],[80.0543,6.5115],[80.0546,6.5146],[80.0534,6.5129],[80.0514,6.518],[80.0538,6.5082],[80.0473,6.5167],[80.0513,6.5088],[80.0474,6.5101],[80.0517,6.508],[80.047,6.5082],[80.0497,6.5072],[80.0483,6.5051],[80.0525,6.5072],[80.0536,6.5057],[80.052,6.5034],[80.0494,6.504],[80.0537,6.4998],[80.0485,6.4977],[80.0501,6.4893],[80.0446,6.4888],[80.041,6.4829],[80.0347,6.4823],[80.0359,6.4757],[80.0282,6.4756],[80.0242,6.4708],[80.0361,6.4668],[80.0392,6.454],[80.0331,6.4473],[80.0348,6.4374],[80.0296,6.4361],[80.0302,6.4325],[80.0264,6.428],[80.0227,6.4273],[80.0275,6.4193],[80.0361,6.4189],[80.0402,6.4154],[80.0474,6.4138],[80.0535,6.4082],[80.0575,6.4082],[80.0586,6.4116],[80.0638,6.4127],[80.0704,6.4204],[80.0802,6.4377],[80.0845,6.439],[80.0799,6.4424],[80.0941,6.4521],[80.1028,6.4451],[80.1292,6.4605],[80.1343,6.4565],[80.1384,6.4583],[80.1485,6.456],[80.1534,6.4856],[80.1585,6.4894],[80.1525,6.4946],[80.1542,6.4974],[80.1507,6.507],[80.1396,6.5103],[80.1387,6.5138],[80.1335,6.5168],[80.1311,6.5232],[80.1352,6.5258],[80.1312,6.5275],[80.1273,6.5402],[80.1232,6.5369],[80.1215,6.5468],[80.1184,6.5474],[80.1119,6.543],[80.1104,6.5509],[80.1146,6.5511],[80.1151,6.5549],[80.1119,6.5645]]]}},{"type":"Feature","properties":{"n":"Millaniya","d":"Kalutara","c":[80.0295,6.6583]},"geometry":{"type":"Polygon","coordinates":[[[79.9806,6.682],[79.9851,6.6689],[79.9846,6.6611],[79.9948,6.6401],[80.0006,6.6373],[80.007,6.6388],[80.0077,6.6344],[80.0167,6.6261],[80.0219,6.626],[80.0248,6.6226],[80.0265,6.6014],[80.0405,6.5899],[80.0428,6.5918],[80.0464,6.5879],[80.0487,6.5883],[80.0596,6.6165],[80.0714,6.6243],[80.0677,6.6307],[80.0708,6.6334],[80.0691,6.6396],[80.0648,6.6451],[80.0583,6.6466],[80.0544,6.6445],[80.0514,6.6491],[80.0499,6.6437],[80.0461,6.6451],[80.0538,6.652],[80.0546,6.6609],[80.0566,6.662],[80.053,6.6656],[80.0621,6.6713],[80.0591,6.6807],[80.0604,6.6847],[80.0539,6.6894],[80.0512,6.7086],[80.0477,6.7126],[80.0443,6.7128],[80.0456,6.718],[80.0397,6.7189],[80.0325,6.7127],[80.0271,6.7115],[80.0258,6.7188],[80.0214,6.7219],[80.0207,6.7191],[80.0157,6.7175],[80.0155,6.7105],[80.0125,6.7111],[80.0099,6.7081],[80.0089,6.701],[80.0113,6.6934],[80.0094,6.6906],[80.0055,6.6909],[80.0074,6.6868],[80.0045,6.6868],[80.0021,6.691],[80.0011,6.6885],[79.9806,6.682]]]}},{"type":"Feature","properties":{"n":"Palindanuwara","d":"Kalutara","c":[80.2716,6.5059]},"geometry":{"type":"Polygon","coordinates":[[[80.2214,6.4444],[80.2305,6.4409],[80.2348,6.4418],[80.2411,6.4322],[80.2468,6.4293],[80.258,6.4361],[80.2609,6.4304],[80.2646,6.4306],[80.2709,6.4366],[80.296,6.4005],[80.2992,6.3995],[80.2982,6.3965],[80.3034,6.3955],[80.3108,6.3963],[80.3281,6.4082],[80.3505,6.4193],[80.3543,6.4173],[80.3664,6.4272],[80.3736,6.4288],[80.3768,6.4246],[80.3788,6.4257],[80.3767,6.4297],[80.3783,6.4345],[80.3598,6.4571],[80.3118,6.5317],[80.3037,6.5378],[80.3025,6.5456],[80.2932,6.5637],[80.2962,6.5662],[80.3044,6.5671],[80.3069,6.5703],[80.3124,6.5703],[80.302,6.5951],[80.296,6.5981],[80.2794,6.6181],[80.272,6.617],[80.2586,6.622],[80.2475,6.6166],[80.2518,6.6091],[80.2461,6.6022],[80.2382,6.6037],[80.2265,6.5913],[80.2185,6.5899],[80.211,6.5927],[80.2127,6.5888],[80.2108,6.5811],[80.1965,6.5831],[80.1975,6.5769],[80.1946,6.5827],[80.1901,6.5829],[80.186,6.5801],[80.1994,6.5537],[80.1931,6.5423],[80.1779,6.542],[80.1751,6.5292],[80.1653,6.5268],[80.1665,6.5208],[80.1716,6.5137],[80.1767,6.5146],[80.1798,6.5185],[80.1846,6.5185],[80.1916,6.5073],[80.1938,6.5072],[80.1931,6.5027],[80.1965,6.4977],[80.2033,6.5003],[80.212,6.488],[80.2207,6.4866],[80.2293,6.4804],[80.2329,6.4708],[80.2289,6.4636],[80.222,6.4617],[80.2245,6.4555],[80.2214,6.4444]]]}},{"type":"Feature","properties":{"n":"Panadura","d":"Kalutara","c":[79.9493,6.6727]},"geometry":{"type":"Polygon","coordinates":[[[79.9366,6.7476],[79.9181,6.7488],[79.9153,6.7515],[79.9182,6.7543],[79.9165,6.758],[79.9104,6.7647],[79.8913,6.7771],[79.8843,6.7729],[79.8903,6.7649],[79.8909,6.7542],[79.8995,6.7313],[79.9018,6.7188],[79.899,6.715],[79.9019,6.7059],[79.9297,6.6494],[79.9402,6.6503],[79.9462,6.648],[79.9497,6.6549],[79.9407,6.6547],[79.9379,6.6687],[79.944,6.6726],[79.9493,6.6727],[79.9545,6.6823],[79.9529,6.6884],[79.9475,6.6872],[79.9329,6.6904],[79.9279,6.6988],[79.9313,6.6996],[79.9315,6.7065],[79.9288,6.7073],[79.9276,6.7132],[79.9248,6.71],[79.9215,6.7143],[79.916,6.711],[79.9152,6.7125],[79.9245,6.7191],[79.9344,6.718],[79.9363,6.7142],[79.9425,6.7138],[79.9457,6.716],[79.9477,6.7414],[79.9366,6.7476]]]}},{"type":"Feature","properties":{"n":"Walallawita","d":"Kalutara","c":[80.1848,6.4065]},"geometry":{"type":"Polygon","coordinates":[[[80.1514,6.4681],[80.1485,6.456],[80.1384,6.4583],[80.1343,6.4565],[80.1292,6.4605],[80.1201,6.4569],[80.117,6.452],[80.1085,6.4494],[80.1053,6.4455],[80.1028,6.4451],[80.0941,6.4521],[80.0844,6.4464],[80.0799,6.4424],[80.0845,6.439],[80.0802,6.4377],[80.0777,6.4308],[80.0638,6.4127],[80.0586,6.4116],[80.0575,6.4082],[80.0607,6.4069],[80.0639,6.4005],[80.0723,6.3975],[80.0777,6.4012],[80.0832,6.4016],[80.1063,6.3887],[80.1148,6.3815],[80.1208,6.3701],[80.1261,6.3693],[80.1293,6.3654],[80.1302,6.3676],[80.1339,6.3659],[80.1524,6.3674],[80.1681,6.3595],[80.1843,6.3579],[80.1877,6.3542],[80.2057,6.3597],[80.2043,6.3721],[80.2101,6.3711],[80.2151,6.3796],[80.2369,6.3766],[80.2433,6.3723],[80.2453,6.3668],[80.2519,6.3645],[80.2653,6.3505],[80.2735,6.3485],[80.2929,6.3246],[80.297,6.3255],[80.299,6.3356],[80.2883,6.37],[80.2873,6.3893],[80.2896,6.3939],[80.2982,6.3965],[80.2992,6.3995],[80.296,6.4005],[80.2709,6.4366],[80.2646,6.4306],[80.2609,6.4304],[80.258,6.4361],[80.2468,6.4293],[80.2411,6.4322],[80.2348,6.4418],[80.2305,6.4409],[80.2152,6.4452],[80.2189,6.4363],[80.2141,6.4352],[80.2096,6.438],[80.2071,6.4349],[80.205,6.4358],[80.2031,6.447],[80.1902,6.4527],[80.1842,6.4584],[80.1801,6.4717],[80.1676,6.4671],[80.1514,6.4681]]]}},{"type":"Feature","properties":{"n":"Akurana","d":"Kandy","c":[80.6161,7.3916]},"geometry":{"type":"Polygon","coordinates":[[[80.6544,7.3845],[80.6383,7.398],[80.622,7.4031],[80.614,7.4136],[80.5983,7.4212],[80.5906,7.4305],[80.584,7.4301],[80.582,7.4269],[80.5823,7.4176],[80.5851,7.4059],[80.5931,7.3959],[80.5949,7.3901],[80.601,7.388],[80.6023,7.3823],[80.6064,7.3803],[80.6061,7.3717],[80.6031,7.3714],[80.5976,7.3775],[80.5947,7.3759],[80.6044,7.3659],[80.6048,7.3625],[80.6115,7.3627],[80.6194,7.358],[80.6271,7.3662],[80.634,7.3684],[80.6284,7.3732],[80.6304,7.3745],[80.6421,7.3733],[80.6516,7.3688],[80.6568,7.3719],[80.6597,7.371],[80.6608,7.3731],[80.6581,7.3741],[80.6544,7.3845]]]}},{"type":"Feature","properties":{"n":"Deltota","d":"Kandy","c":[80.6988,7.1823]},"geometry":{"type":"Polygon","coordinates":[[[80.7562,7.1852],[80.7462,7.188],[80.736,7.1857],[80.7365,7.1911],[80.731,7.1914],[80.7326,7.1996],[80.7252,7.1969],[80.7128,7.205],[80.7059,7.2012],[80.7061,7.197],[80.6948,7.187],[80.6946,7.2083],[80.6888,7.2066],[80.6846,7.2127],[80.6812,7.2118],[80.6805,7.2146],[80.677,7.2142],[80.6763,7.2172],[80.6708,7.2157],[80.6702,7.2183],[80.6674,7.2174],[80.6669,7.2211],[80.6628,7.223],[80.6578,7.2202],[80.6501,7.2223],[80.6391,7.2327],[80.6338,7.23],[80.6399,7.2233],[80.652,7.1991],[80.6655,7.1964],[80.6755,7.1846],[80.6757,7.1764],[80.6934,7.1591],[80.7011,7.1358],[80.7074,7.1253],[80.7125,7.1345],[80.7177,7.138],[80.7205,7.149],[80.7266,7.1582],[80.7364,7.1622],[80.7439,7.1739],[80.7562,7.1852]]]}},{"type":"Feature","properties":{"n":"Doluwa","d":"Kandy","c":[80.6443,7.1683]},"geometry":{"type":"Polygon","coordinates":[[[80.6338,7.23],[80.6266,7.2382],[80.6187,7.2392],[80.6154,7.2375],[80.6139,7.2349],[80.6173,7.235],[80.6182,7.231],[80.6161,7.2235],[80.6131,7.2202],[80.602,7.2175],[80.6053,7.2066],[80.6023,7.203],[80.6008,7.1935],[80.6034,7.1924],[80.6034,7.1897],[80.5979,7.1818],[80.5812,7.1769],[80.5737,7.1686],[80.5769,7.1618],[80.5864,7.1612],[80.5895,7.1565],[80.5961,7.155],[80.5952,7.153],[80.6088,7.1496],[80.6052,7.1445],[80.6068,7.1436],[80.6107,7.1445],[80.6124,7.1476],[80.6173,7.1464],[80.6178,7.1501],[80.6204,7.1472],[80.6212,7.1488],[80.629,7.1463],[80.633,7.1499],[80.656,7.1286],[80.6586,7.1288],[80.6654,7.1182],[80.6696,7.1185],[80.682,7.1096],[80.6841,7.1013],[80.6903,7.0958],[80.6948,7.1091],[80.7074,7.1253],[80.7011,7.1358],[80.6968,7.1517],[80.6897,7.1643],[80.6757,7.1764],[80.6755,7.1846],[80.6655,7.1964],[80.652,7.1991],[80.6399,7.2233],[80.6338,7.23]]]}},{"type":"Feature","properties":{"n":"Ganga Ihala Korale","d":"Kandy","c":[80.5114,7.1122]},"geometry":{"type":"Polygon","coordinates":[[[80.4577,7.0906],[80.462,7.0873],[80.462,7.0827],[80.4574,7.0791],[80.4639,7.0647],[80.4676,7.0665],[80.4703,7.0613],[80.475,7.0613],[80.4916,7.068],[80.4954,7.0671],[80.5122,7.0718],[80.5192,7.0773],[80.5195,7.0805],[80.5295,7.0911],[80.5513,7.0939],[80.5551,7.0926],[80.5611,7.0974],[80.5631,7.1042],[80.5681,7.1052],[80.573,7.1131],[80.5721,7.1238],[80.5776,7.1349],[80.5749,7.1511],[80.57,7.1612],[80.5577,7.1589],[80.5568,7.1555],[80.5525,7.1549],[80.5507,7.1569],[80.5483,7.1559],[80.5461,7.1607],[80.5376,7.16],[80.5356,7.1621],[80.5392,7.1651],[80.5302,7.1685],[80.5268,7.1654],[80.5258,7.16],[80.5301,7.1581],[80.5319,7.1532],[80.5277,7.1535],[80.5224,7.1475],[80.5183,7.1538],[80.5173,7.151],[80.5104,7.1498],[80.5085,7.148],[80.5087,7.1388],[80.5025,7.1342],[80.4993,7.1279],[80.4936,7.1286],[80.483,7.1245],[80.4768,7.1274],[80.4649,7.1222],[80.4593,7.1232],[80.4425,7.1146],[80.4437,7.109],[80.438,7.1119],[80.4332,7.1108],[80.4308,7.1053],[80.4332,7.0917],[80.4503,7.0921],[80.4536,7.0951],[80.4577,7.0906]],[[80.5611,7.1527],[80.5596,7.1567],[80.5657,7.1578],[80.5643,7.1551],[80.5683,7.151],[80.5665,7.1473],[80.5685,7.1478],[80.5704,7.1383],[80.5663,7.1372],[80.5659,7.1436],[80.5632,7.1454],[80.5643,7.1488],[80.5611,7.1527]]]}},{"type":"Feature","properties":{"n":"Gangawata Korale","d":"Kandy","c":[80.6367,7.2728]},"geometry":{"type":"Polygon","coordinates":[[[80.6266,7.2382],[80.6251,7.2466],[80.6272,7.2584],[80.6428,7.2642],[80.6461,7.2683],[80.6571,7.2595],[80.6764,7.2523],[80.6838,7.2564],[80.6817,7.2631],[80.6869,7.2617],[80.6885,7.2643],[80.7047,7.2555],[80.7124,7.2561],[80.7208,7.2513],[80.7285,7.2524],[80.7261,7.2549],[80.7283,7.2595],[80.7205,7.2656],[80.7,7.2677],[80.6666,7.2785],[80.6552,7.2931],[80.6425,7.3227],[80.6375,7.3296],[80.6259,7.3267],[80.6176,7.3216],[80.6214,7.3194],[80.6236,7.3214],[80.6196,7.3006],[80.6142,7.2934],[80.6073,7.2899],[80.6022,7.2807],[80.6045,7.2731],[80.5989,7.2678],[80.597,7.2742],[80.5904,7.2769],[80.5915,7.2639],[80.5903,7.2655],[80.5823,7.2651],[80.584,7.2549],[80.5915,7.256],[80.5936,7.2538],[80.5934,7.2458],[80.6007,7.2279],[80.602,7.2175],[80.6131,7.2202],[80.6161,7.2235],[80.6182,7.231],[80.6173,7.235],[80.6139,7.2349],[80.6154,7.2375],[80.6187,7.2392],[80.6266,7.2382]]]}},{"type":"Feature","properties":{"n":"Harispattuwa","d":"Kandy","c":[80.5861,7.3283]},"geometry":{"type":"Polygon","coordinates":[[[80.6236,7.3254],[80.6136,7.3476],[80.6089,7.3486],[80.6091,7.3513],[80.603,7.3496],[80.598,7.3512],[80.5963,7.3494],[80.5842,7.36],[80.5857,7.3631],[80.5819,7.3681],[80.5781,7.3653],[80.5724,7.3666],[80.5591,7.3764],[80.5538,7.3736],[80.5524,7.3525],[80.5575,7.351],[80.5622,7.354],[80.5703,7.3534],[80.5729,7.3484],[80.5682,7.3418],[80.5654,7.3439],[80.5491,7.3411],[80.5469,7.3336],[80.5406,7.3271],[80.545,7.3243],[80.5465,7.3167],[80.5567,7.3158],[80.5657,7.3193],[80.5687,7.3184],[80.5739,7.3138],[80.5735,7.3063],[80.5938,7.2881],[80.6039,7.2755],[80.6022,7.2807],[80.6073,7.2899],[80.6142,7.2934],[80.6196,7.3006],[80.6236,7.3214],[80.6214,7.3194],[80.6176,7.3216],[80.6214,7.3244],[80.6228,7.323],[80.6236,7.3254]]]}},{"type":"Feature","properties":{"n":"Hatharaliyadda","d":"Kandy","c":[80.4783,7.3315]},"geometry":{"type":"Polygon","coordinates":[[[80.5409,7.3293],[80.5339,7.331],[80.529,7.3234],[80.5214,7.3266],[80.5231,7.3352],[80.5208,7.3382],[80.5106,7.337],[80.5044,7.3336],[80.4964,7.3417],[80.4992,7.3514],[80.5015,7.3527],[80.4998,7.356],[80.4925,7.3602],[80.4834,7.3558],[80.4792,7.3628],[80.4727,7.364],[80.4718,7.3738],[80.4672,7.3773],[80.4633,7.3779],[80.4556,7.374],[80.4537,7.3659],[80.4492,7.3612],[80.4524,7.3563],[80.4558,7.3569],[80.4579,7.3526],[80.4565,7.3505],[80.4521,7.35],[80.4438,7.3571],[80.4341,7.3532],[80.4261,7.3597],[80.4214,7.3598],[80.4191,7.3559],[80.4213,7.339],[80.4249,7.3296],[80.4506,7.315],[80.4562,7.3064],[80.469,7.295],[80.4829,7.3003],[80.4848,7.3075],[80.4896,7.3091],[80.4983,7.3068],[80.4999,7.3083],[80.5073,7.3002],[80.5145,7.299],[80.5253,7.3059],[80.5315,7.3037],[80.5409,7.305],[80.5466,7.3145],[80.545,7.3243],[80.5406,7.3271],[80.5409,7.3293]]]}},{"type":"Feature","properties":{"n":"Kundasale","d":"Kandy","c":[80.7071,7.3048]},"geometry":{"type":"Polygon","coordinates":[[[80.7283,7.2595],[80.7426,7.2506],[80.7523,7.2517],[80.7533,7.2563],[80.7481,7.2716],[80.7543,7.2759],[80.7388,7.2985],[80.7475,7.3051],[80.747,7.3074],[80.7503,7.3071],[80.7465,7.3112],[80.7456,7.319],[80.7414,7.3232],[80.742,7.3294],[80.7326,7.3402],[80.7354,7.3523],[80.7342,7.3621],[80.7266,7.3601],[80.7238,7.3625],[80.7147,7.3619],[80.7089,7.3597],[80.7075,7.3548],[80.7037,7.3525],[80.6985,7.3532],[80.6963,7.3416],[80.6908,7.3413],[80.683,7.3325],[80.69,7.332],[80.6973,7.321],[80.6914,7.32],[80.6866,7.3151],[80.6856,7.3173],[80.6824,7.3167],[80.6853,7.3141],[80.686,7.3048],[80.6804,7.3157],[80.6763,7.3092],[80.6738,7.3107],[80.6751,7.3156],[80.6678,7.3157],[80.6675,7.3211],[80.6617,7.3209],[80.6633,7.3298],[80.658,7.3336],[80.6514,7.3298],[80.6513,7.3234],[80.6425,7.3227],[80.6552,7.2931],[80.6666,7.2785],[80.7,7.2677],[80.7205,7.2656],[80.7283,7.2595]]]}},{"type":"Feature","properties":{"n":"Medadumbara","d":"Kandy","c":[80.798,7.3026]},"geometry":{"type":"Polygon","coordinates":[[[80.8443,7.1915],[80.8484,7.1906],[80.8437,7.2114],[80.845,7.219],[80.8385,7.2275],[80.8434,7.239],[80.8413,7.2468],[80.842,7.2713],[80.8401,7.2724],[80.8437,7.2895],[80.8476,7.2941],[80.8481,7.3042],[80.8552,7.3126],[80.853,7.3285],[80.8432,7.3368],[80.8363,7.3476],[80.831,7.3664],[80.808,7.3876],[80.8084,7.3957],[80.7992,7.3943],[80.796,7.3867],[80.7828,7.3901],[80.7758,7.3884],[80.7727,7.3864],[80.7738,7.3808],[80.7665,7.3857],[80.7616,7.3842],[80.7457,7.3764],[80.7445,7.3721],[80.7475,7.3669],[80.7345,7.3607],[80.7338,7.3584],[80.7354,7.3523],[80.7326,7.3402],[80.742,7.3294],[80.7414,7.3232],[80.7456,7.319],[80.7465,7.3112],[80.7503,7.3071],[80.747,7.3074],[80.7475,7.3051],[80.7388,7.2985],[80.7543,7.2759],[80.7526,7.273],[80.7756,7.2495],[80.7814,7.2472],[80.7862,7.2372],[80.7942,7.2286],[80.7996,7.2266],[80.7994,7.206],[80.8014,7.2032],[80.8176,7.1958],[80.8349,7.1946],[80.8443,7.1915]]]}},{"type":"Feature","properties":{"n":"Minipe","d":"Kandy","c":[80.948,7.3471]},"geometry":{"type":"Polygon","coordinates":[[[81.0094,7.2218],[81.0144,7.2345],[80.9999,7.2897],[80.9864,7.3199],[80.9854,7.3353],[80.9739,7.3649],[80.9795,7.3959],[80.9747,7.4065],[80.9669,7.4133],[80.9719,7.4275],[80.972,7.45],[80.9692,7.4609],[80.9719,7.4881],[80.9573,7.4875],[80.954,7.4898],[80.941,7.4868],[80.9393,7.4893],[80.9294,7.4893],[80.9299,7.4808],[80.9257,7.4798],[80.9246,7.4749],[80.9208,7.4747],[80.9159,7.462],[80.9074,7.4645],[80.9049,7.4576],[80.9004,7.4635],[80.8971,7.4742],[80.8835,7.4723],[80.8833,7.4695],[80.8774,7.4666],[80.8782,7.4641],[80.8702,7.46],[80.8597,7.4427],[80.8603,7.4396],[80.8775,7.4359],[80.8809,7.4288],[80.8798,7.4212],[80.8862,7.4106],[80.8941,7.4085],[80.9055,7.3985],[80.9236,7.3934],[80.9261,7.3789],[80.9247,7.3771],[80.9209,7.3782],[80.9109,7.3629],[80.9144,7.3212],[80.9297,7.3257],[80.9285,7.3164],[80.9355,7.3163],[80.938,7.3099],[80.9407,7.3088],[80.9464,7.3128],[80.949,7.311],[80.9455,7.3035],[80.9457,7.2871],[80.9376,7.2656],[80.9384,7.2631],[80.9352,7.2637],[80.9254,7.2565],[80.9249,7.2168],[80.9209,7.2017],[80.9423,7.2025],[80.9595,7.196],[80.9644,7.1982],[80.9702,7.1968],[80.9782,7.2075],[80.9792,7.2128],[80.9982,7.2132],[81.0052,7.2156],[81.0094,7.2218]]]}},{"type":"Feature","properties":{"n":"Panvila","d":"Kandy","c":[80.7393,7.4093]},"geometry":{"type":"Polygon","coordinates":[[[80.7345,7.3607],[80.7475,7.3669],[80.7445,7.3721],[80.7457,7.3764],[80.7665,7.3857],[80.7738,7.3808],[80.7727,7.3864],[80.7828,7.3901],[80.796,7.3867],[80.7992,7.3943],[80.8084,7.3957],[80.8089,7.4009],[80.8037,7.4113],[80.7934,7.4178],[80.7876,7.4265],[80.7839,7.4293],[80.7763,7.4294],[80.7733,7.4352],[80.7613,7.4408],[80.7553,7.4492],[80.7501,7.4485],[80.7367,7.4644],[80.7305,7.4643],[80.7309,7.4719],[80.7279,7.4747],[80.7017,7.4606],[80.7001,7.4572],[80.7048,7.4398],[80.71,7.4343],[80.7123,7.4245],[80.7075,7.4243],[80.7082,7.4205],[80.7051,7.4151],[80.7054,7.3959],[80.6984,7.3919],[80.6955,7.3791],[80.6882,7.3712],[80.6854,7.3618],[80.6937,7.348],[80.6968,7.3475],[80.6991,7.3489],[80.6985,7.3532],[80.7037,7.3525],[80.7075,7.3548],[80.7089,7.3597],[80.7147,7.3619],[80.7345,7.3607]]]}},{"type":"Feature","properties":{"n":"Pasbagekorale","d":"Kandy","c":[80.5344,7.0181]},"geometry":{"type":"Polygon","coordinates":[[[80.5771,6.9446],[80.5731,6.9567],[80.5738,6.9617],[80.5848,6.9639],[80.5901,6.9728],[80.5905,6.9836],[80.5989,6.992],[80.5989,6.9967],[80.5868,7.0074],[80.5818,7.0179],[80.5723,7.0239],[80.5704,7.0288],[80.559,7.0386],[80.5596,7.0459],[80.556,7.0473],[80.558,7.0492],[80.5527,7.0599],[80.5475,7.0646],[80.5422,7.0593],[80.5397,7.0622],[80.5377,7.0582],[80.5362,7.0611],[80.5391,7.0728],[80.542,7.0763],[80.551,7.079],[80.5548,7.0852],[80.5551,7.0926],[80.5334,7.0925],[80.5247,7.0868],[80.5192,7.0773],[80.5122,7.0718],[80.4954,7.0671],[80.4916,7.068],[80.475,7.0613],[80.4703,7.0613],[80.4694,7.0637],[80.4641,7.0614],[80.4569,7.0452],[80.4552,7.033],[80.4612,7.0237],[80.4651,7.0219],[80.4667,7.0293],[80.4727,7.0364],[80.4872,7.0271],[80.4939,7.0274],[80.5036,7.0219],[80.5108,7.0022],[80.5111,6.9923],[80.5147,6.9814],[80.5274,6.9686],[80.5402,6.9603],[80.5408,6.9541],[80.545,6.9512],[80.5491,6.9412],[80.5616,6.94],[80.5652,6.946],[80.5771,6.9446]]]}},{"type":"Feature","properties":{"n":"Pathadumbara","d":"Kandy","c":[80.6593,7.3502]},"geometry":{"type":"Polygon","coordinates":[[[80.6155,7.3591],[80.6124,7.3489],[80.6236,7.3254],[80.6375,7.3296],[80.6425,7.3227],[80.6513,7.3234],[80.6514,7.3298],[80.658,7.3336],[80.6633,7.3298],[80.6617,7.3209],[80.6675,7.3211],[80.6678,7.3157],[80.6751,7.3156],[80.6738,7.3107],[80.6763,7.3092],[80.6804,7.3157],[80.686,7.3048],[80.6853,7.3141],[80.6824,7.3167],[80.6856,7.3173],[80.6866,7.3151],[80.6914,7.32],[80.6973,7.321],[80.69,7.332],[80.683,7.3325],[80.6908,7.3413],[80.6963,7.3416],[80.6975,7.3438],[80.6854,7.3618],[80.6882,7.3712],[80.6955,7.3791],[80.6971,7.3865],[80.6866,7.3876],[80.6688,7.384],[80.6544,7.3845],[80.6581,7.3741],[80.6608,7.3731],[80.6597,7.371],[80.6568,7.3719],[80.6516,7.3688],[80.6421,7.3733],[80.6304,7.3745],[80.6284,7.3732],[80.634,7.3684],[80.6271,7.3662],[80.6194,7.358],[80.6155,7.3591]]]}},{"type":"Feature","properties":{"n":"Pathahewaheta","d":"Kandy","c":[80.704,7.2294]},"geometry":{"type":"Polygon","coordinates":[[[80.7562,7.1852],[80.7694,7.2007],[80.764,7.2156],[80.7666,7.2168],[80.7668,7.2232],[80.7625,7.227],[80.7626,7.2336],[80.7653,7.2374],[80.7573,7.2417],[80.7523,7.2517],[80.7426,7.2506],[80.7283,7.2595],[80.7261,7.2549],[80.7285,7.2524],[80.7208,7.2513],[80.7124,7.2561],[80.7047,7.2555],[80.6885,7.2643],[80.6869,7.2617],[80.6817,7.2631],[80.6838,7.2564],[80.6764,7.2523],[80.6571,7.2595],[80.6479,7.2684],[80.6428,7.2642],[80.6272,7.2584],[80.6251,7.2466],[80.6266,7.2382],[80.6338,7.23],[80.6391,7.2327],[80.6501,7.2223],[80.6578,7.2202],[80.6628,7.223],[80.6669,7.2211],[80.6674,7.2174],[80.6702,7.2183],[80.6708,7.2157],[80.6763,7.2172],[80.677,7.2142],[80.6805,7.2146],[80.6812,7.2118],[80.6846,7.2127],[80.6888,7.2066],[80.6946,7.2083],[80.6948,7.187],[80.7061,7.197],[80.7059,7.2012],[80.7128,7.205],[80.7252,7.1969],[80.7326,7.1996],[80.731,7.1914],[80.7365,7.1911],[80.736,7.1857],[80.7462,7.188],[80.7562,7.1852]]]}},{"type":"Feature","properties":{"n":"Poojapitiya","d":"Kandy","c":[80.5638,7.4001]},"geometry":{"type":"Polygon","coordinates":[[[80.584,7.4301],[80.5772,7.4384],[80.5714,7.4402],[80.5678,7.4564],[80.5636,7.4581],[80.5552,7.4562],[80.553,7.4488],[80.541,7.4517],[80.5387,7.4491],[80.5419,7.4479],[80.5475,7.4396],[80.5449,7.439],[80.5442,7.4355],[80.546,7.4307],[80.5517,7.4259],[80.555,7.4192],[80.5465,7.414],[80.5368,7.421],[80.5359,7.4152],[80.5286,7.4186],[80.5266,7.4172],[80.5271,7.4119],[80.5153,7.4138],[80.5136,7.4059],[80.5176,7.3988],[80.5159,7.3951],[80.5124,7.3939],[80.5166,7.3921],[80.5172,7.3893],[80.5244,7.3898],[80.5303,7.387],[80.5388,7.3708],[80.5591,7.3764],[80.5724,7.3666],[80.5781,7.3653],[80.5819,7.3681],[80.5857,7.3631],[80.5842,7.36],[80.5963,7.3494],[80.598,7.3512],[80.603,7.3496],[80.6091,7.3513],[80.6089,7.3486],[80.6136,7.3476],[80.6128,7.3527],[80.6155,7.3591],[80.6115,7.3627],[80.6048,7.3625],[80.6044,7.3659],[80.5951,7.3738],[80.5947,7.3759],[80.5976,7.3775],[80.6031,7.3714],[80.6061,7.3717],[80.6064,7.3803],[80.6023,7.3823],[80.601,7.388],[80.5949,7.3901],[80.5931,7.3959],[80.5851,7.4059],[80.5823,7.4176],[80.582,7.4269],[80.584,7.4301]]]}},{"type":"Feature","properties":{"n":"Tumpane","d":"Kandy","c":[80.5126,7.3653]},"geometry":{"type":"Polygon","coordinates":[[[80.5538,7.3736],[80.5388,7.3708],[80.5303,7.387],[80.5244,7.3898],[80.5125,7.3887],[80.5091,7.3853],[80.5054,7.3855],[80.4911,7.3945],[80.4785,7.4067],[80.4713,7.4065],[80.4673,7.4132],[80.4597,7.4106],[80.4603,7.405],[80.4668,7.4029],[80.4671,7.3972],[80.4701,7.3939],[80.4633,7.3779],[80.4718,7.3738],[80.4727,7.364],[80.4792,7.3628],[80.4834,7.3558],[80.4925,7.3602],[80.4998,7.356],[80.5015,7.3527],[80.4992,7.3514],[80.4964,7.3417],[80.4983,7.3378],[80.5066,7.3335],[80.5106,7.337],[80.5227,7.3373],[80.5214,7.3266],[80.529,7.3234],[80.5339,7.331],[80.5409,7.3293],[80.5469,7.3336],[80.5491,7.3411],[80.5654,7.3439],[80.5682,7.3418],[80.5729,7.3484],[80.5703,7.3534],[80.5622,7.354],[80.5575,7.351],[80.5524,7.3525],[80.5538,7.3736]]]}},{"type":"Feature","properties":{"n":"Udapalatha","d":"Kandy","c":[80.6037,7.1246]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.5611,7.1527],[80.5643,7.1488],[80.5632,7.1454],[80.5659,7.1436],[80.5663,7.1372],[80.5704,7.1383],[80.5685,7.1478],[80.5665,7.1473],[80.5683,7.151],[80.5643,7.1551],[80.5657,7.1578],[80.5596,7.1567],[80.5611,7.1527]]],[[[80.6026,7.2165],[80.5982,7.2146],[80.6013,7.207],[80.5998,7.1959],[80.5942,7.1875],[80.5697,7.1902],[80.5729,7.1873],[80.5676,7.1831],[80.5632,7.1891],[80.5598,7.1874],[80.5515,7.1904],[80.5458,7.182],[80.5413,7.1808],[80.5466,7.1675],[80.5425,7.1684],[80.5411,7.1656],[80.5404,7.1675],[80.5356,7.1621],[80.5376,7.16],[80.5461,7.1607],[80.5483,7.1559],[80.5507,7.1569],[80.5525,7.1549],[80.5568,7.1555],[80.5577,7.1589],[80.57,7.1612],[80.5749,7.1511],[80.5776,7.1349],[80.5721,7.1238],[80.573,7.1131],[80.5681,7.1052],[80.5631,7.1042],[80.5611,7.0974],[80.5551,7.0926],[80.5526,7.0823],[80.5596,7.0771],[80.5682,7.0832],[80.5767,7.072],[80.5834,7.0763],[80.5909,7.0774],[80.5969,7.0753],[80.6076,7.081],[80.61,7.0792],[80.624,7.0805],[80.6283,7.0875],[80.6343,7.0868],[80.6381,7.1014],[80.648,7.1047],[80.6538,7.102],[80.6647,7.1024],[80.6758,7.093],[80.6889,7.0934],[80.6903,7.0958],[80.6841,7.1013],[80.682,7.1096],[80.6696,7.1185],[80.6654,7.1182],[80.6586,7.1288],[80.656,7.1286],[80.633,7.1499],[80.629,7.1463],[80.6212,7.1488],[80.6204,7.1472],[80.6178,7.1501],[80.6173,7.1464],[80.6124,7.1476],[80.6107,7.1445],[80.6068,7.1436],[80.6052,7.1445],[80.6088,7.1496],[80.5952,7.153],[80.5961,7.155],[80.5895,7.1565],[80.5864,7.1612],[80.5769,7.1618],[80.5742,7.1706],[80.5792,7.1728],[80.5812,7.1769],[80.5979,7.1818],[80.6034,7.1897],[80.6034,7.1924],[80.6008,7.1935],[80.6023,7.203],[80.6053,7.2066],[80.6026,7.2165]]]]}},{"type":"Feature","properties":{"n":"Ududumbara","d":"Kandy","c":[80.8734,7.3284]},"geometry":{"type":"Polygon","coordinates":[[[80.7876,7.4265],[80.7934,7.4178],[80.8037,7.4113],[80.8089,7.4009],[80.808,7.3876],[80.831,7.3664],[80.8363,7.3476],[80.8432,7.3368],[80.853,7.3285],[80.8552,7.3126],[80.8481,7.3042],[80.8476,7.2941],[80.8437,7.2895],[80.8401,7.2724],[80.842,7.2713],[80.8413,7.2468],[80.8434,7.239],[80.8385,7.2275],[80.845,7.219],[80.8437,7.2114],[80.8484,7.1906],[80.8577,7.1932],[80.8648,7.1918],[80.8741,7.1943],[80.8875,7.194],[80.9003,7.1996],[80.9209,7.2017],[80.9249,7.2168],[80.9254,7.2565],[80.9352,7.2637],[80.9384,7.2631],[80.9376,7.2656],[80.9457,7.2871],[80.9455,7.3035],[80.949,7.311],[80.9464,7.3128],[80.9407,7.3088],[80.938,7.3099],[80.9355,7.3163],[80.9285,7.3164],[80.9297,7.3257],[80.9144,7.3212],[80.9109,7.3629],[80.9209,7.3782],[80.9247,7.3771],[80.9261,7.3789],[80.9236,7.3934],[80.9055,7.3985],[80.8941,7.4085],[80.8862,7.4106],[80.8798,7.4212],[80.8809,7.4288],[80.8775,7.4359],[80.8603,7.4396],[80.8597,7.4427],[80.8702,7.46],[80.8782,7.4641],[80.8643,7.4739],[80.8497,7.4725],[80.84,7.4631],[80.8307,7.4594],[80.8191,7.461],[80.8059,7.4478],[80.8074,7.4401],[80.8017,7.4389],[80.7876,7.4265]]]}},{"type":"Feature","properties":{"n":"Udunuwara","d":"Kandy","c":[80.5575,7.2224]},"geometry":{"type":"Polygon","coordinates":[[[80.602,7.2175],[80.6007,7.2279],[80.5934,7.2458],[80.5936,7.2538],[80.5915,7.256],[80.5757,7.2547],[80.572,7.2632],[80.5647,7.2601],[80.5604,7.261],[80.5574,7.2573],[80.552,7.256],[80.5422,7.2552],[80.5358,7.2585],[80.5251,7.2531],[80.5155,7.2549],[80.51,7.2525],[80.5073,7.2472],[80.5164,7.2414],[80.5195,7.2349],[80.5187,7.222],[80.5099,7.2129],[80.5126,7.2064],[80.523,7.1998],[80.5339,7.1853],[80.5413,7.1808],[80.5458,7.182],[80.5515,7.1904],[80.5598,7.1874],[80.5632,7.1891],[80.5676,7.1831],[80.5729,7.1873],[80.5697,7.1902],[80.5942,7.1875],[80.5998,7.1959],[80.6013,7.207],[80.5982,7.2146],[80.602,7.2175]]]}},{"type":"Feature","properties":{"n":"Yatinuwara","d":"Kandy","c":[80.536,7.2826]},"geometry":{"type":"Polygon","coordinates":[[[80.6039,7.2755],[80.5938,7.2881],[80.5735,7.3063],[80.5739,7.3138],[80.5657,7.3193],[80.5567,7.3158],[80.5453,7.3166],[80.5466,7.3145],[80.5409,7.305],[80.5315,7.3037],[80.5253,7.3059],[80.5145,7.299],[80.5073,7.3002],[80.4999,7.3083],[80.4983,7.3068],[80.4896,7.3091],[80.4848,7.3075],[80.4829,7.3003],[80.469,7.295],[80.4806,7.2828],[80.4767,7.2678],[80.494,7.2583],[80.4998,7.2597],[80.5062,7.2547],[80.5073,7.2472],[80.51,7.2525],[80.5155,7.2549],[80.5251,7.2531],[80.5358,7.2585],[80.5422,7.2552],[80.552,7.256],[80.5574,7.2573],[80.5604,7.261],[80.5647,7.2601],[80.572,7.2632],[80.5757,7.2547],[80.584,7.2549],[80.5823,7.2651],[80.5903,7.2655],[80.5915,7.2639],[80.5904,7.2769],[80.597,7.2742],[80.5989,7.2678],[80.6045,7.2731],[80.6039,7.2755]]]}},{"type":"Feature","properties":{"n":"Aranayake","d":"Kegalle","c":[80.4415,7.167]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.3819,7.1766],[80.3743,7.1754],[80.3736,7.1713],[80.3793,7.168],[80.3811,7.1692],[80.3871,7.1607],[80.3898,7.1695],[80.3887,7.1733],[80.3824,7.1725],[80.3819,7.1766]]],[[[80.5085,7.148],[80.501,7.1538],[80.4955,7.1651],[80.4875,7.1639],[80.4859,7.1772],[80.4773,7.1821],[80.4781,7.186],[80.4713,7.1857],[80.464,7.1924],[80.4656,7.2023],[80.4771,7.2031],[80.4802,7.2089],[80.4779,7.2179],[80.4658,7.2216],[80.4623,7.2295],[80.4408,7.2231],[80.4421,7.2208],[80.4386,7.2166],[80.4412,7.2157],[80.441,7.212],[80.4298,7.2101],[80.4254,7.2173],[80.427,7.2223],[80.4242,7.2307],[80.404,7.2302],[80.4,7.2271],[80.4001,7.2245],[80.397,7.2268],[80.3943,7.2202],[80.3904,7.2196],[80.3867,7.2107],[80.3911,7.2035],[80.3909,7.1984],[80.3876,7.1939],[80.4051,7.1764],[80.399,7.1727],[80.4043,7.1665],[80.398,7.1597],[80.4019,7.1561],[80.4017,7.1451],[80.4101,7.123],[80.4094,7.117],[80.4044,7.1132],[80.4028,7.1044],[80.4051,7.106],[80.414,7.1026],[80.4163,7.1046],[80.418,7.1025],[80.4279,7.1033],[80.4334,7.0856],[80.4577,7.0906],[80.4536,7.0951],[80.4503,7.0921],[80.4332,7.0917],[80.4308,7.1053],[80.4332,7.1108],[80.438,7.1119],[80.4437,7.109],[80.4425,7.1146],[80.4593,7.1232],[80.4649,7.1222],[80.4768,7.1274],[80.483,7.1245],[80.4936,7.1286],[80.4993,7.1279],[80.5025,7.1342],[80.5087,7.1388],[80.5085,7.148]]]]}},{"type":"Feature","properties":{"n":"Bulathkohipitiya","d":"Kegalle","c":[80.3542,7.0986]},"geometry":{"type":"Polygon","coordinates":[[[80.4044,7.1132],[80.3955,7.1189],[80.3878,7.1185],[80.3745,7.131],[80.3594,7.1342],[80.3598,7.1468],[80.3629,7.1477],[80.3578,7.1538],[80.362,7.1535],[80.3599,7.1582],[80.3481,7.1697],[80.34,7.171],[80.3383,7.1685],[80.3422,7.155],[80.339,7.1558],[80.3322,7.1507],[80.323,7.1553],[80.3159,7.1487],[80.3161,7.1412],[80.3039,7.1387],[80.3067,7.1315],[80.3024,7.132],[80.2942,7.1268],[80.3131,7.1189],[80.3142,7.1164],[80.3082,7.1145],[80.3005,7.1082],[80.2937,7.1102],[80.2925,7.1131],[80.287,7.1132],[80.284,7.1178],[80.2878,7.0933],[80.2901,7.0921],[80.2823,7.0881],[80.2819,7.0734],[80.2769,7.0721],[80.275,7.0666],[80.271,7.064],[80.2784,7.0665],[80.2923,7.0461],[80.2989,7.0473],[80.3019,7.0544],[80.3086,7.0567],[80.3123,7.0655],[80.3163,7.0574],[80.3212,7.0646],[80.3348,7.0658],[80.3378,7.0695],[80.3443,7.0694],[80.3534,7.0607],[80.3562,7.0609],[80.3587,7.0646],[80.3573,7.0673],[80.3636,7.0689],[80.3609,7.0759],[80.3724,7.0798],[80.3807,7.0731],[80.3866,7.0719],[80.3967,7.0785],[80.4103,7.0811],[80.4132,7.0792],[80.4132,7.0747],[80.4162,7.0736],[80.4171,7.0688],[80.4076,7.0626],[80.4078,7.0497],[80.4019,7.0499],[80.4028,7.0456],[80.4142,7.0414],[80.42,7.042],[80.4261,7.0483],[80.4263,7.051],[80.4232,7.0513],[80.4258,7.0657],[80.4239,7.0686],[80.4247,7.0745],[80.4373,7.076],[80.4412,7.0695],[80.4527,7.0674],[80.4615,7.0627],[80.4639,7.0647],[80.4574,7.0791],[80.462,7.0827],[80.462,7.0873],[80.4577,7.0906],[80.4521,7.0909],[80.4424,7.086],[80.4334,7.0856],[80.4279,7.1033],[80.418,7.1025],[80.4163,7.1046],[80.414,7.1026],[80.4051,7.106],[80.4028,7.1044],[80.4044,7.1132]]]}},{"type":"Feature","properties":{"n":"Dehiowita","d":"Kegalle","c":[80.2789,6.9388]},"geometry":{"type":"Polygon","coordinates":[[[80.2618,7.0199],[80.2556,7.0188],[80.2527,7.0356],[80.2482,7.0444],[80.2302,7.0219],[80.2297,7.0185],[80.2235,7.0112],[80.2202,7.0114],[80.2221,7.0033],[80.2137,6.9995],[80.2052,6.9784],[80.2158,6.9732],[80.2153,6.9565],[80.2209,6.9497],[80.2218,6.9413],[80.2185,6.9356],[80.206,6.9372],[80.2106,6.923],[80.209,6.9165],[80.2143,6.916],[80.2156,6.9207],[80.2196,6.9219],[80.2184,6.9262],[80.2236,6.9301],[80.2242,6.9256],[80.2293,6.924],[80.2324,6.9031],[80.24,6.9069],[80.2437,6.9014],[80.2494,6.9008],[80.2521,6.8926],[80.2594,6.8867],[80.2657,6.8742],[80.2687,6.8717],[80.2783,6.871],[80.2781,6.8649],[80.2832,6.8595],[80.2816,6.8563],[80.2788,6.8571],[80.2833,6.8529],[80.2859,6.8554],[80.2908,6.8543],[80.293,6.8586],[80.3004,6.8585],[80.3042,6.8636],[80.3176,6.8503],[80.3277,6.8343],[80.3356,6.8315],[80.3377,6.8343],[80.3383,6.8296],[80.3402,6.833],[80.3475,6.8334],[80.347,6.841],[80.3532,6.8452],[80.3518,6.8504],[80.3598,6.854],[80.3605,6.8585],[80.354,6.8577],[80.3496,6.8745],[80.3421,6.883],[80.33,6.8843],[80.3235,6.8925],[80.3221,6.8999],[80.3177,6.9049],[80.3165,6.9143],[80.3056,6.9359],[80.3128,6.9375],[80.3169,6.9328],[80.3194,6.9329],[80.3218,6.9408],[80.3154,6.9494],[80.3203,6.9542],[80.3184,6.9601],[80.3288,6.9639],[80.3319,6.9622],[80.335,6.9659],[80.3459,6.968],[80.3493,6.9713],[80.3485,6.9801],[80.3509,6.9851],[80.3472,6.9948],[80.3429,6.9987],[80.3364,6.9953],[80.3222,6.9935],[80.3217,6.9868],[80.3253,6.9819],[80.3121,6.981],[80.3029,6.9875],[80.2966,6.9891],[80.2988,6.9943],[80.2965,6.9968],[80.2924,6.9955],[80.2912,7.0038],[80.2872,7.0057],[80.2856,7.0034],[80.2744,7.0096],[80.2697,7.0234],[80.2618,7.0199]]]}},{"type":"Feature","properties":{"n":"Deraniyagala","d":"Kegalle","c":[80.4001,6.9064]},"geometry":{"type":"Polygon","coordinates":[[[80.4349,6.9547],[80.4163,6.963],[80.4072,6.9633],[80.4035,6.9684],[80.401,6.9834],[80.398,6.9872],[80.4041,6.9944],[80.3955,6.9981],[80.3842,6.9987],[80.3472,6.9948],[80.3509,6.9851],[80.3485,6.9801],[80.3493,6.9713],[80.3459,6.968],[80.335,6.9659],[80.3319,6.9622],[80.3288,6.9639],[80.3184,6.9601],[80.3203,6.9542],[80.3154,6.9494],[80.3218,6.9408],[80.3221,6.937],[80.3194,6.9329],[80.3169,6.9328],[80.3128,6.9375],[80.3056,6.9359],[80.3165,6.9143],[80.3177,6.9049],[80.3221,6.8999],[80.3235,6.8925],[80.33,6.8843],[80.3421,6.883],[80.3496,6.8745],[80.354,6.8577],[80.3605,6.8585],[80.3598,6.854],[80.3518,6.8504],[80.3532,6.8452],[80.3556,6.8458],[80.3555,6.8489],[80.3604,6.8483],[80.3767,6.8541],[80.386,6.85],[80.3997,6.8596],[80.4111,6.8478],[80.4192,6.8442],[80.4213,6.8387],[80.4283,6.8423],[80.4302,6.8467],[80.4314,6.8432],[80.4379,6.8406],[80.4414,6.8321],[80.4473,6.8302],[80.4553,6.8339],[80.4633,6.8298],[80.4766,6.8288],[80.4931,6.8316],[80.5029,6.8383],[80.5092,6.8476],[80.4972,6.8573],[80.4978,6.8647],[80.4921,6.8731],[80.4983,6.8842],[80.4897,6.8921],[80.4814,6.8942],[80.4781,6.8985],[80.4718,6.8975],[80.4637,6.9015],[80.4577,6.8989],[80.452,6.9056],[80.4469,6.9052],[80.4403,6.9101],[80.429,6.9119],[80.4318,6.9192],[80.43,6.9236],[80.4343,6.9225],[80.4345,6.9404],[80.4367,6.9444],[80.4349,6.9547]]]}},{"type":"Feature","properties":{"n":"Galigamuwa","d":"Kegalle","c":[80.303,7.2156]},"geometry":{"type":"Polygon","coordinates":[[[80.34,7.171],[80.339,7.1764],[80.3426,7.178],[80.3396,7.1844],[80.3396,7.1914],[80.3328,7.2003],[80.3359,7.2033],[80.3354,7.2085],[80.338,7.2101],[80.3373,7.2221],[80.3321,7.2279],[80.3247,7.2269],[80.3213,7.2305],[80.3151,7.2303],[80.3113,7.2513],[80.3151,7.255],[80.3277,7.2568],[80.3293,7.2551],[80.332,7.2571],[80.3319,7.2657],[80.3281,7.2739],[80.3336,7.2772],[80.3434,7.2769],[80.3492,7.2805],[80.3541,7.2888],[80.3507,7.2914],[80.3466,7.29],[80.3388,7.2922],[80.3366,7.2888],[80.3224,7.2909],[80.3208,7.2944],[80.316,7.2955],[80.3171,7.3006],[80.3243,7.3016],[80.3246,7.3039],[80.3178,7.3062],[80.3039,7.3189],[80.2848,7.315],[80.287,7.2995],[80.2841,7.2965],[80.2765,7.295],[80.2793,7.2811],[80.2763,7.2758],[80.2829,7.272],[80.282,7.2586],[80.2785,7.2556],[80.2726,7.2562],[80.2704,7.2524],[80.2645,7.2545],[80.2609,7.2514],[80.2671,7.2376],[80.2819,7.2291],[80.2859,7.2217],[80.2902,7.2215],[80.2903,7.2177],[80.285,7.2128],[80.2855,7.2077],[80.2792,7.2018],[80.2628,7.197],[80.2683,7.1726],[80.2713,7.1685],[80.2706,7.1644],[80.2798,7.1385],[80.2805,7.1205],[80.287,7.1132],[80.2925,7.1131],[80.2937,7.1102],[80.3005,7.1082],[80.3082,7.1145],[80.3142,7.1164],[80.3131,7.1189],[80.2942,7.1268],[80.3024,7.132],[80.3067,7.1315],[80.3039,7.1387],[80.3161,7.1412],[80.3159,7.1487],[80.323,7.1553],[80.3322,7.1507],[80.339,7.1558],[80.3422,7.155],[80.3383,7.1685],[80.34,7.171]]]}},{"type":"Feature","properties":{"n":"Kegalle","d":"Kegalle","c":[80.3661,7.2084]},"geometry":{"type":"Polygon","coordinates":[[[80.3957,7.2254],[80.3933,7.2233],[80.3898,7.2244],[80.3875,7.2409],[80.3828,7.2528],[80.3799,7.2535],[80.3828,7.2584],[80.3774,7.2645],[80.3809,7.2715],[80.3895,7.2747],[80.392,7.2692],[80.3977,7.2687],[80.3994,7.2658],[80.4056,7.2662],[80.4042,7.2731],[80.4004,7.2714],[80.397,7.2764],[80.4026,7.2823],[80.3998,7.2869],[80.4009,7.2885],[80.3833,7.2875],[80.382,7.2797],[80.378,7.285],[80.3741,7.2808],[80.369,7.2815],[80.3645,7.2791],[80.3532,7.2798],[80.3529,7.2824],[80.3563,7.2842],[80.3535,7.2874],[80.3492,7.2805],[80.3434,7.2769],[80.3336,7.2772],[80.3281,7.2739],[80.3319,7.2657],[80.332,7.2571],[80.3293,7.2551],[80.3277,7.2568],[80.3151,7.255],[80.3113,7.2513],[80.3151,7.2303],[80.3213,7.2305],[80.3247,7.2269],[80.3321,7.2279],[80.3373,7.2221],[80.338,7.2101],[80.3354,7.2085],[80.3359,7.2033],[80.3328,7.2003],[80.3396,7.1914],[80.3396,7.1844],[80.3426,7.178],[80.339,7.1764],[80.34,7.171],[80.3481,7.1697],[80.3599,7.1582],[80.362,7.1535],[80.3578,7.1538],[80.3629,7.1477],[80.3598,7.1468],[80.3594,7.1342],[80.3745,7.131],[80.3878,7.1185],[80.3955,7.1189],[80.4044,7.1132],[80.4094,7.117],[80.4101,7.123],[80.4017,7.1451],[80.4019,7.1561],[80.398,7.1597],[80.4043,7.1665],[80.399,7.1727],[80.4051,7.1764],[80.3876,7.1939],[80.3909,7.1984],[80.3911,7.2035],[80.3867,7.2107],[80.3904,7.2196],[80.3943,7.2202],[80.3957,7.2254]],[[80.3819,7.1766],[80.3824,7.1725],[80.3887,7.1733],[80.3898,7.1695],[80.3871,7.1607],[80.3811,7.1692],[80.3793,7.168],[80.3736,7.1713],[80.3743,7.1754],[80.3819,7.1766]]]}},{"type":"Feature","properties":{"n":"Mawanella","d":"Kegalle","c":[80.4699,7.2299]},"geometry":{"type":"Polygon","coordinates":[[[80.5085,7.148],[80.5173,7.151],[80.5183,7.1538],[80.5224,7.1475],[80.5277,7.1535],[80.5319,7.1532],[80.5301,7.1581],[80.5258,7.16],[80.5268,7.1654],[80.5302,7.1685],[80.5392,7.1651],[80.5425,7.1684],[80.5466,7.1675],[80.5413,7.1808],[80.5339,7.1853],[80.523,7.1998],[80.5126,7.2064],[80.5099,7.2129],[80.5187,7.222],[80.5195,7.2349],[80.5164,7.2414],[80.5073,7.2472],[80.5062,7.2547],[80.4998,7.2597],[80.494,7.2583],[80.4767,7.2678],[80.4806,7.2828],[80.4617,7.3026],[80.4486,7.2951],[80.4505,7.294],[80.4479,7.2927],[80.4499,7.2871],[80.4478,7.2854],[80.4432,7.2851],[80.4397,7.2897],[80.4264,7.2944],[80.4262,7.2853],[80.4115,7.2872],[80.4132,7.2765],[80.41,7.2736],[80.4129,7.255],[80.417,7.2484],[80.4162,7.2468],[80.4086,7.2515],[80.4014,7.2518],[80.3982,7.2487],[80.3828,7.2528],[80.3875,7.2409],[80.3898,7.2244],[80.3933,7.2233],[80.397,7.2268],[80.4001,7.2245],[80.4,7.2271],[80.404,7.2302],[80.4242,7.2307],[80.427,7.2223],[80.4254,7.2173],[80.4298,7.2101],[80.441,7.212],[80.4412,7.2157],[80.4386,7.2166],[80.4421,7.2208],[80.4408,7.2231],[80.4623,7.2295],[80.4658,7.2216],[80.4779,7.2179],[80.4802,7.2089],[80.4771,7.2031],[80.4656,7.2023],[80.464,7.1924],[80.4713,7.1857],[80.4781,7.186],[80.4773,7.1821],[80.4859,7.1772],[80.4875,7.1639],[80.4955,7.1651],[80.501,7.1538],[80.5085,7.148]]]}},{"type":"Feature","properties":{"n":"Rambukkana","d":"Kegalle","c":[80.3838,7.3242]},"geometry":{"type":"Polygon","coordinates":[[[80.3535,7.2874],[80.3563,7.2842],[80.3529,7.2824],[80.3532,7.2798],[80.3645,7.2791],[80.369,7.2815],[80.3741,7.2808],[80.378,7.285],[80.382,7.2797],[80.3833,7.2875],[80.4009,7.2885],[80.3998,7.2869],[80.4026,7.2823],[80.397,7.2764],[80.4004,7.2714],[80.4042,7.2731],[80.4056,7.2662],[80.3994,7.2658],[80.3977,7.2687],[80.392,7.2692],[80.3895,7.2747],[80.3809,7.2715],[80.3774,7.2645],[80.3828,7.2584],[80.3799,7.2535],[80.3982,7.2487],[80.4014,7.2518],[80.4086,7.2515],[80.4162,7.2468],[80.41,7.2736],[80.4132,7.2765],[80.4115,7.2872],[80.4262,7.2853],[80.4264,7.2944],[80.4397,7.2897],[80.4432,7.2851],[80.4478,7.2854],[80.4499,7.2871],[80.4479,7.2927],[80.4505,7.294],[80.4486,7.2951],[80.4617,7.3026],[80.4562,7.3064],[80.4506,7.315],[80.4249,7.3296],[80.4213,7.339],[80.4191,7.3559],[80.4117,7.3567],[80.4141,7.374],[80.4092,7.3835],[80.3982,7.3888],[80.3901,7.3963],[80.3556,7.386],[80.3442,7.3861],[80.3432,7.3815],[80.3479,7.3773],[80.3538,7.3575],[80.3404,7.3511],[80.3418,7.344],[80.3478,7.3391],[80.3465,7.3342],[80.3364,7.3209],[80.3187,7.3284],[80.3149,7.3209],[80.3094,7.3224],[80.3039,7.3189],[80.3178,7.3062],[80.3246,7.3039],[80.3243,7.3016],[80.3171,7.3006],[80.316,7.2955],[80.3208,7.2944],[80.3224,7.2909],[80.3366,7.2888],[80.3388,7.2922],[80.3466,7.29],[80.3507,7.2914],[80.3535,7.2874]]]}},{"type":"Feature","properties":{"n":"Ruwanwella","d":"Kegalle","c":[80.2165,7.0637]},"geometry":{"type":"Polygon","coordinates":[[[80.1627,7.0598],[80.1621,7.0558],[80.1669,7.0484],[80.1658,7.041],[80.1687,7.0222],[80.1726,7.0081],[80.1803,6.9935],[80.1797,6.9808],[80.1772,6.9772],[80.1821,6.9748],[80.1879,6.9783],[80.1982,6.9758],[80.2052,6.9784],[80.2137,6.9995],[80.2221,7.0033],[80.2202,7.0114],[80.2235,7.0112],[80.2297,7.0185],[80.2302,7.0219],[80.2482,7.0444],[80.2527,7.0356],[80.2556,7.0188],[80.2618,7.0199],[80.2601,7.0242],[80.2693,7.0403],[80.2677,7.055],[80.27,7.0618],[80.268,7.0631],[80.275,7.0666],[80.2749,7.0696],[80.2819,7.0734],[80.283,7.0777],[80.2775,7.0898],[80.271,7.0878],[80.2715,7.0939],[80.267,7.0945],[80.2591,7.1025],[80.2527,7.1174],[80.2424,7.1175],[80.2368,7.126],[80.2332,7.1413],[80.2237,7.1462],[80.2161,7.1589],[80.2095,7.158],[80.2087,7.154],[80.1987,7.1449],[80.2001,7.1366],[80.2077,7.1345],[80.2104,7.1302],[80.2056,7.1282],[80.2014,7.1193],[80.1968,7.1163],[80.1929,7.1],[80.1838,7.1029],[80.1843,7.0946],[80.1751,7.0821],[80.1721,7.0719],[80.1647,7.0656],[80.1663,7.0615],[80.1627,7.0598]]]}},{"type":"Feature","properties":{"n":"Warakapola","d":"Kegalle","c":[80.2299,7.2035]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.1578,7.2011],[80.1588,7.198],[80.1651,7.2003],[80.1621,7.2029],[80.1578,7.2011]]],[[[80.1939,7.2579],[80.1984,7.2508],[80.1986,7.2454],[80.1846,7.2349],[80.1873,7.2269],[80.1825,7.2118],[80.1841,7.2047],[80.1814,7.1992],[80.1823,7.1958],[80.1798,7.1933],[80.1669,7.1943],[80.1643,7.1916],[80.1609,7.1939],[80.1567,7.1841],[80.1538,7.1851],[80.1509,7.1924],[80.1441,7.1886],[80.1518,7.1829],[80.1552,7.1667],[80.1518,7.1504],[80.1609,7.1252],[80.1659,7.1257],[80.1653,7.1282],[80.172,7.1358],[80.1921,7.1373],[80.1969,7.1344],[80.2001,7.1366],[80.1987,7.1449],[80.2087,7.154],[80.2095,7.158],[80.2161,7.1589],[80.2237,7.1462],[80.2332,7.1413],[80.2368,7.126],[80.2424,7.1175],[80.2527,7.1174],[80.2591,7.1025],[80.267,7.0945],[80.2715,7.0939],[80.2725,7.1051],[80.2818,7.1186],[80.2815,7.1245],[80.2798,7.1385],[80.2706,7.1644],[80.2713,7.1685],[80.2683,7.1726],[80.2628,7.197],[80.2792,7.2018],[80.2855,7.2077],[80.285,7.2128],[80.2903,7.2177],[80.2902,7.2215],[80.2859,7.2217],[80.2819,7.2291],[80.2671,7.2376],[80.2609,7.2514],[80.2645,7.2545],[80.2704,7.2524],[80.2726,7.2562],[80.2785,7.2556],[80.282,7.2586],[80.2829,7.272],[80.2763,7.2758],[80.2793,7.2811],[80.2765,7.295],[80.2841,7.2965],[80.287,7.2995],[80.2848,7.315],[80.2768,7.3178],[80.2524,7.3041],[80.2127,7.275],[80.2018,7.2589],[80.1939,7.2579]]]]}},{"type":"Feature","properties":{"n":"Yatiyantota","d":"Kegalle","c":[80.3704,7.0272]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.4651,7.0219],[80.4612,7.0237],[80.4552,7.033],[80.4569,7.0452],[80.4619,7.0577],[80.4641,7.0614],[80.4694,7.0637],[80.4676,7.0665],[80.4615,7.0627],[80.4527,7.0674],[80.4412,7.0695],[80.4373,7.076],[80.4247,7.0745],[80.4239,7.0686],[80.4258,7.0657],[80.4232,7.0513],[80.4263,7.051],[80.4261,7.0483],[80.42,7.042],[80.4142,7.0414],[80.4028,7.0456],[80.4019,7.0499],[80.4078,7.0497],[80.4076,7.0626],[80.4171,7.0688],[80.4162,7.0736],[80.4132,7.0747],[80.4132,7.0792],[80.407,7.0814],[80.3967,7.0785],[80.3866,7.0719],[80.3807,7.0731],[80.3724,7.0798],[80.3609,7.0759],[80.3636,7.0689],[80.3573,7.0673],[80.3587,7.0646],[80.3562,7.0609],[80.3534,7.0607],[80.3443,7.0694],[80.3378,7.0695],[80.3348,7.0658],[80.3212,7.0646],[80.3163,7.0574],[80.3123,7.0655],[80.3086,7.0567],[80.3019,7.0544],[80.2989,7.0473],[80.2923,7.0461],[80.2784,7.0665],[80.268,7.0631],[80.27,7.0618],[80.2677,7.055],[80.2693,7.0403],[80.2601,7.0242],[80.2618,7.0199],[80.2697,7.0234],[80.2744,7.0096],[80.2856,7.0034],[80.2872,7.0057],[80.2912,7.0038],[80.2924,6.9955],[80.2965,6.9968],[80.2988,6.9943],[80.2966,6.9891],[80.3029,6.9875],[80.3121,6.981],[80.3253,6.9819],[80.3217,6.9868],[80.3222,6.9935],[80.3364,6.9953],[80.3429,6.9987],[80.3472,6.9948],[80.3955,6.9981],[80.4041,6.9944],[80.398,6.9872],[80.401,6.9834],[80.4055,6.9649],[80.4163,6.963],[80.4349,6.9547],[80.443,6.9642],[80.4414,6.9738],[80.4357,6.9769],[80.429,6.9863],[80.43,6.9928],[80.4356,6.998],[80.4488,7.0004],[80.4553,7.0106],[80.4645,7.0166],[80.4651,7.0219]]],[[[80.284,7.1178],[80.2818,7.1186],[80.2725,7.1051],[80.271,7.0878],[80.2775,7.0898],[80.2808,7.0845],[80.2823,7.0881],[80.2901,7.0921],[80.2878,7.0933],[80.284,7.1178]]]]}},{"type":"Feature","properties":{"n":"Kandavalai","d":"Kilinochchi","c":[80.484,9.4462]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.3796,9.484],[80.3791,9.4815],[80.3816,9.4824],[80.3796,9.484]]],[[[80.6152,9.4519],[80.6034,9.4579],[80.5615,9.4669],[80.5486,9.4719],[80.4993,9.506],[80.4706,9.5183],[80.4657,9.5088],[80.4605,9.5082],[80.4349,9.5109],[80.4183,9.5179],[80.4011,9.5168],[80.3968,9.5143],[80.3911,9.5179],[80.3861,9.5171],[80.391,9.5139],[80.3897,9.5104],[80.3946,9.504],[80.3894,9.4947],[80.3894,9.4891],[80.3929,9.4899],[80.3884,9.4854],[80.3902,9.4876],[80.3898,9.4855],[80.3915,9.4863],[80.3904,9.4829],[80.3813,9.4786],[80.3772,9.4791],[80.3779,9.4777],[80.3589,9.4678],[80.3506,9.468],[80.3522,9.464],[80.3442,9.4529],[80.3511,9.4382],[80.3477,9.4307],[80.3494,9.4228],[80.3534,9.4194],[80.3573,9.4207],[80.3587,9.4295],[80.3656,9.4321],[80.3817,9.4236],[80.3893,9.4288],[80.4012,9.4229],[80.4023,9.42],[80.4057,9.4201],[80.4208,9.4226],[80.4208,9.4362],[80.4517,9.4372],[80.4489,9.4304],[80.4515,9.4161],[80.4488,9.4133],[80.4556,9.413],[80.4527,9.4082],[80.4591,9.4124],[80.4639,9.4111],[80.4617,9.4056],[80.4766,9.4002],[80.4793,9.4012],[80.4792,9.4045],[80.4875,9.4092],[80.4908,9.3768],[80.493,9.3739],[80.491,9.3716],[80.4927,9.3693],[80.4984,9.3704],[80.5028,9.3683],[80.501,9.3647],[80.5057,9.3568],[80.5064,9.3453],[80.5114,9.3449],[80.5151,9.3475],[80.5189,9.3644],[80.5273,9.3795],[80.5257,9.3897],[80.5276,9.3906],[80.53,9.405],[80.5565,9.3763],[80.5833,9.3625],[80.5814,9.3695],[80.5834,9.3763],[80.581,9.3829],[80.5835,9.4085],[80.5924,9.4174],[80.5959,9.4143],[80.6031,9.42],[80.6152,9.4519]]]]}},{"type":"Feature","properties":{"n":"Karachchi","d":"Kilinochchi","c":[80.3309,9.358]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.3163,9.4647],[80.3119,9.4655],[80.3093,9.4631],[80.3153,9.4639],[80.3172,9.4607],[80.3163,9.4647]]],[[[80.2965,9.4668],[80.2949,9.4648],[80.2973,9.4648],[80.2965,9.4668]]],[[[80.2981,9.4689],[80.2952,9.4678],[80.3008,9.4678],[80.3014,9.4651],[80.3019,9.4669],[80.2981,9.4689]]],[[[80.3509,9.4657],[80.3478,9.4649],[80.3476,9.4624],[80.3441,9.4627],[80.3484,9.4663],[80.338,9.4737],[80.3352,9.4689],[80.3381,9.4735],[80.3443,9.4678],[80.3392,9.4703],[80.3356,9.4689],[80.3345,9.4631],[80.3369,9.467],[80.3379,9.4646],[80.3325,9.4567],[80.3345,9.4552],[80.3323,9.4561],[80.3335,9.4586],[80.3272,9.455],[80.3102,9.4625],[80.3048,9.4586],[80.3035,9.4607],[80.2977,9.4582],[80.3029,9.4561],[80.304,9.4533],[80.3002,9.4518],[80.2977,9.4465],[80.2994,9.4414],[80.2933,9.4375],[80.2985,9.4295],[80.2917,9.4233],[80.295,9.414],[80.2925,9.4094],[80.2933,9.4019],[80.2898,9.3956],[80.294,9.3945],[80.2707,9.3783],[80.243,9.3726],[80.2305,9.3736],[80.2158,9.3817],[80.2116,9.3816],[80.2052,9.3763],[80.2087,9.3683],[80.1996,9.3478],[80.1998,9.3342],[80.1724,9.2911],[80.1692,9.2638],[80.1792,9.2298],[80.1897,9.2371],[80.1962,9.2336],[80.2159,9.2324],[80.2188,9.2377],[80.2146,9.2481],[80.212,9.2712],[80.2271,9.2942],[80.2396,9.3001],[80.2688,9.3052],[80.2793,9.3023],[80.2931,9.3074],[80.3112,9.3097],[80.3215,9.3075],[80.321,9.3],[80.3448,9.3056],[80.4048,9.305],[80.4061,9.3396],[80.5064,9.3453],[80.5057,9.3568],[80.501,9.3647],[80.5028,9.3683],[80.4984,9.3704],[80.4927,9.3693],[80.491,9.3716],[80.493,9.3739],[80.4908,9.3768],[80.4875,9.4092],[80.4792,9.4045],[80.4793,9.4012],[80.4766,9.4002],[80.4617,9.4056],[80.4639,9.4111],[80.4591,9.4124],[80.4527,9.4082],[80.4556,9.413],[80.4488,9.4133],[80.4515,9.4161],[80.4489,9.4304],[80.4517,9.4372],[80.4208,9.4362],[80.4208,9.4226],[80.4057,9.4201],[80.4023,9.42],[80.4012,9.4229],[80.3893,9.4288],[80.3817,9.4236],[80.3656,9.4321],[80.3587,9.4295],[80.3573,9.4207],[80.3534,9.4194],[80.3494,9.4228],[80.3477,9.4307],[80.3511,9.4382],[80.3442,9.4529],[80.3522,9.464],[80.3509,9.4657]]],[[[80.3018,9.4834],[80.3099,9.4681],[80.3061,9.477],[80.3138,9.4713],[80.3106,9.4689],[80.314,9.468],[80.3154,9.4703],[80.323,9.4652],[80.3018,9.4834]]]]}},{"type":"Feature","properties":{"n":"Pachchilaipalli","d":"Kilinochchi","c":[80.358,9.5886]},"geometry":{"type":"Polygon","coordinates":[[[80.2555,9.6131],[80.3065,9.5847],[80.3393,9.5627],[80.3551,9.5488],[80.3837,9.5136],[80.3844,9.5177],[80.3901,9.514],[80.3861,9.5171],[80.3911,9.5179],[80.3968,9.5143],[80.4011,9.5168],[80.4183,9.5179],[80.4349,9.5109],[80.4605,9.5082],[80.4657,9.5088],[80.4706,9.5183],[80.4502,9.5222],[80.4472,9.5257],[80.4369,9.5575],[80.4399,9.571],[80.4391,9.5782],[80.4072,9.5964],[80.3543,9.6356],[80.3195,9.6632],[80.2974,9.6847],[80.2873,9.6564],[80.2818,9.6504],[80.2752,9.6505],[80.2663,9.6288],[80.2555,9.6131]]]}},{"type":"Feature","properties":{"n":"Poonakary","d":"Kilinochchi","c":[80.1719,9.398]},"geometry":{"type":"MultiPolygon","coordinates":[[[[79.9859,9.3067],[79.9777,9.2979],[79.9714,9.2956],[79.9708,9.2867],[79.9768,9.2798],[79.9851,9.2847],[79.9919,9.2832],[79.9955,9.2807],[79.9992,9.2704],[80.0062,9.2763],[80.0063,9.2788],[80.0049,9.2759],[80.004,9.2784],[80.0057,9.2819],[80.003,9.2809],[80.0023,9.2761],[80.0002,9.2801],[80.0017,9.2787],[80.0047,9.2824],[80.0049,9.2865],[79.9999,9.2862],[79.9992,9.2896],[79.9956,9.2897],[79.9957,9.2846],[79.9942,9.2849],[79.9981,9.2734],[79.9961,9.2832],[79.9923,9.2859],[79.9949,9.2853],[79.9894,9.2927],[79.991,9.2941],[79.9921,9.2912],[79.9934,9.2923],[79.9871,9.3019],[79.9917,9.303],[79.9878,9.303],[79.9859,9.3067]]],[[[80.0721,9.3222],[80.071,9.3196],[80.0771,9.3129],[80.0888,9.3118],[80.085,9.3126],[80.0861,9.3142],[80.0809,9.3209],[80.0721,9.3222]]],[[[80.0544,9.3458],[80.0544,9.348],[80.0517,9.345],[80.0499,9.3377],[80.0511,9.3322],[80.0568,9.3295],[80.0586,9.3316],[80.0556,9.3326],[80.0573,9.3404],[80.0544,9.3458]]],[[[80.277,9.4639],[80.2761,9.4618],[80.2783,9.4631],[80.277,9.4639]]],[[[80.2866,9.4677],[80.2849,9.4667],[80.2884,9.4595],[80.2918,9.4635],[80.2897,9.4625],[80.2881,9.4648],[80.2911,9.466],[80.2897,9.4628],[80.2913,9.4664],[80.2866,9.4677]]],[[[80.2628,9.4672],[80.2597,9.4702],[80.2607,9.4651],[80.259,9.4691],[80.2571,9.4666],[80.2617,9.463],[80.261,9.4665],[80.2628,9.4672]]],[[[80.2693,9.4692],[80.2685,9.4707],[80.2637,9.4692],[80.2671,9.4667],[80.2693,9.4692]]],[[[80.2908,9.4721],[80.288,9.474],[80.2873,9.47],[80.2916,9.4681],[80.2908,9.4721]]],[[[80.2824,9.4762],[80.278,9.4744],[80.2847,9.4752],[80.2824,9.4762]]],[[[80.2535,9.4946],[80.2512,9.4946],[80.2535,9.4911],[80.2539,9.4931],[80.2576,9.4934],[80.2535,9.4946]]],[[[80.282,9.4941],[80.2775,9.4916],[80.2633,9.4953],[80.2768,9.4894],[80.282,9.4941]]],[[[80.2046,9.5361],[80.2014,9.5365],[80.21,9.5312],[80.2076,9.5361],[80.2046,9.5361]]],[[[80.2188,9.5389],[80.2169,9.5381],[80.2211,9.5365],[80.2188,9.5389]]],[[[80.1989,9.5424],[80.1968,9.5419],[80.1989,9.5389],[80.1989,9.5424]]],[[[80.0657,9.6097],[80.0639,9.6094],[80.0707,9.6043],[80.0849,9.5984],[80.0657,9.6097]]],[[[80.3011,9.4567],[80.2962,9.4552],[80.2937,9.4588],[80.292,9.4567],[80.2899,9.4588],[80.2845,9.4564],[80.2844,9.4543],[80.2775,9.4553],[80.2477,9.4687],[80.2503,9.4731],[80.2489,9.4742],[80.2555,9.4716],[80.2628,9.4742],[80.26,9.4749],[80.2635,9.477],[80.2759,9.4756],[80.2704,9.4813],[80.2663,9.4806],[80.2564,9.4866],[80.2468,9.496],[80.2462,9.5062],[80.2569,9.4978],[80.2664,9.4982],[80.2759,9.4955],[80.2744,9.4949],[80.2775,9.4939],[80.2764,9.4929],[80.2801,9.4967],[80.2824,9.4957],[80.2624,9.5134],[80.2572,9.5149],[80.2611,9.5113],[80.2555,9.5143],[80.253,9.5132],[80.2578,9.5116],[80.258,9.509],[80.2435,9.5173],[80.2286,9.5285],[80.2301,9.5336],[80.2274,9.5292],[80.2182,9.5363],[80.2172,9.5344],[80.22,9.532],[80.2177,9.5279],[80.2174,9.5303],[80.2042,9.5317],[80.1995,9.5381],[80.1942,9.5373],[80.1977,9.539],[80.1915,9.542],[80.1944,9.5525],[80.1916,9.5424],[80.1928,9.5457],[80.1848,9.5447],[80.1771,9.5404],[80.1679,9.5434],[80.1427,9.5594],[80.1371,9.5605],[80.1251,9.5772],[80.1183,9.5776],[80.1182,9.5738],[80.1121,9.5743],[80.1116,9.5779],[80.1101,9.5763],[80.1077,9.581],[80.1057,9.5798],[80.1056,9.5859],[80.1085,9.5849],[80.1009,9.5897],[80.0974,9.5913],[80.1034,9.5876],[80.0999,9.5854],[80.0999,9.5886],[80.098,9.585],[80.09,9.5933],[80.0727,9.5967],[80.0735,9.6009],[80.0697,9.5976],[80.0704,9.6019],[80.0676,9.5987],[80.0681,9.6006],[80.0661,9.5988],[80.0626,9.6002],[80.0592,9.6041],[80.0626,9.6081],[80.0581,9.6108],[80.0567,9.6048],[80.0498,9.5986],[80.0912,9.5766],[80.1314,9.5468],[80.1634,9.5164],[80.1837,9.4864],[80.1803,9.4729],[80.1675,9.4657],[80.163,9.4585],[80.1663,9.4613],[80.1643,9.4577],[80.1564,9.4532],[80.156,9.4486],[80.1451,9.4374],[80.1217,9.4269],[80.1208,9.4233],[80.1168,9.4233],[80.1099,9.4167],[80.0929,9.4116],[80.08,9.4041],[80.079,9.4062],[80.071,9.4035],[80.0516,9.3905],[80.0515,9.381],[80.0543,9.3745],[80.0524,9.3656],[80.0607,9.3568],[80.0569,9.3497],[80.0616,9.3412],[80.0596,9.3359],[80.0612,9.3308],[80.0685,9.3254],[80.0722,9.3274],[80.0726,9.3253],[80.0793,9.3252],[80.0805,9.3264],[80.0782,9.3279],[80.084,9.3285],[80.1105,9.3103],[80.12,9.2997],[80.1194,9.2905],[80.1122,9.2853],[80.1079,9.2751],[80.1095,9.2693],[80.1186,9.2601],[80.1191,9.2539],[80.1145,9.2402],[80.1183,9.2248],[80.1166,9.2116],[80.1469,9.2109],[80.1792,9.2298],[80.1692,9.2638],[80.1724,9.2911],[80.1998,9.3342],[80.1996,9.3478],[80.2087,9.3683],[80.2052,9.3763],[80.2116,9.3816],[80.2158,9.3817],[80.2305,9.3736],[80.243,9.3726],[80.2707,9.3783],[80.294,9.3945],[80.2898,9.3956],[80.2933,9.4019],[80.2925,9.4094],[80.295,9.414],[80.2917,9.4233],[80.2985,9.4295],[80.2933,9.4375],[80.2994,9.4414],[80.2977,9.4465],[80.3002,9.4518],[80.304,9.4533],[80.3011,9.4567]]]]}},{"type":"Feature","properties":{"n":"Alawwa","d":"Kurunegala","c":[80.2153,7.3284]},"geometry":{"type":"Polygon","coordinates":[[[80.2768,7.3178],[80.277,7.3218],[80.279,7.3225],[80.2752,7.332],[80.2766,7.3424],[80.2615,7.3652],[80.268,7.3698],[80.2716,7.3686],[80.2747,7.3751],[80.2627,7.3959],[80.2335,7.3852],[80.219,7.3833],[80.2111,7.3857],[80.2027,7.3777],[80.1957,7.3806],[80.1958,7.3735],[80.1891,7.3674],[80.1865,7.3616],[80.1831,7.3606],[80.1823,7.3535],[80.1687,7.3439],[80.166,7.3376],[80.1689,7.3343],[80.1613,7.3261],[80.1623,7.3211],[80.1601,7.3222],[80.1533,7.3133],[80.1502,7.3176],[80.1495,7.3144],[80.1461,7.3133],[80.1465,7.3105],[80.1409,7.3059],[80.1529,7.2931],[80.1659,7.2859],[80.1677,7.2806],[80.1805,7.2672],[80.1824,7.2611],[80.188,7.2635],[80.1939,7.2579],[80.2018,7.2589],[80.2127,7.275],[80.2524,7.3041],[80.2768,7.3178]]]}},{"type":"Feature","properties":{"n":"Ambanpola","d":"Kurunegala","c":[80.2221,7.9075]},"geometry":{"type":"Polygon","coordinates":[[[80.2573,7.9558],[80.256,7.9611],[80.2595,7.9678],[80.2528,7.9743],[80.2468,7.9757],[80.2467,7.9798],[80.2377,7.9747],[80.2189,7.9724],[80.2115,7.9563],[80.2098,7.9576],[80.197,7.9518],[80.1933,7.9524],[80.1909,7.9485],[80.1805,7.9518],[80.1675,7.9491],[80.1624,7.9317],[80.1578,7.9323],[80.1625,7.9144],[80.1627,7.8986],[80.1786,7.8618],[80.1901,7.8552],[80.1912,7.849],[80.1986,7.8428],[80.2138,7.847],[80.225,7.8446],[80.233,7.8506],[80.2421,7.8512],[80.2399,7.858],[80.2434,7.8588],[80.2408,7.8639],[80.2436,7.8721],[80.244,7.8688],[80.254,7.8657],[80.2546,7.8681],[80.2589,7.8682],[80.2628,7.8743],[80.2752,7.8767],[80.279,7.8701],[80.2855,7.866],[80.29,7.874],[80.2918,7.8705],[80.2971,7.8728],[80.3066,7.8727],[80.3059,7.8754],[80.2916,7.8798],[80.2899,7.8841],[80.2946,7.8947],[80.2919,7.8948],[80.2871,7.9001],[80.2817,7.8992],[80.2758,7.9141],[80.2701,7.9189],[80.2714,7.9218],[80.2676,7.9269],[80.2673,7.9353],[80.2633,7.9365],[80.2617,7.943],[80.2562,7.9465],[80.2573,7.9558]]]}},{"type":"Feature","properties":{"n":"Bamunakotuwa","d":"Kurunegala","c":[80.2508,7.5478]},"geometry":{"type":"Polygon","coordinates":[[[80.2941,7.5884],[80.2895,7.5872],[80.2804,7.5913],[80.2714,7.5854],[80.2597,7.5897],[80.2558,7.5889],[80.2569,7.5919],[80.2547,7.5907],[80.2496,7.5941],[80.25,7.5984],[80.2399,7.5978],[80.2384,7.5942],[80.2321,7.5951],[80.2293,7.5904],[80.2192,7.5895],[80.214,7.5865],[80.21,7.5828],[80.2077,7.5746],[80.2027,7.5738],[80.1978,7.5794],[80.1959,7.5787],[80.1921,7.5703],[80.185,7.5667],[80.1856,7.5638],[80.178,7.5625],[80.1793,7.5612],[80.1728,7.5555],[80.1731,7.5462],[80.1877,7.5315],[80.2036,7.529],[80.2117,7.5193],[80.2158,7.5205],[80.2216,7.5281],[80.2348,7.522],[80.2352,7.5199],[80.2474,7.5208],[80.2556,7.5119],[80.259,7.5006],[80.264,7.5019],[80.2632,7.4937],[80.2676,7.4943],[80.2687,7.492],[80.2737,7.4934],[80.2777,7.4911],[80.2838,7.4934],[80.2847,7.4906],[80.291,7.4876],[80.2967,7.4928],[80.2974,7.5011],[80.3022,7.5025],[80.3036,7.5094],[80.3056,7.5092],[80.3092,7.518],[80.3057,7.5251],[80.3087,7.5285],[80.3082,7.5347],[80.3042,7.5401],[80.3054,7.5482],[80.3009,7.5605],[80.3029,7.5668],[80.3,7.5679],[80.3016,7.5712],[80.2941,7.5884]]]}},{"type":"Feature","properties":{"n":"Bingiriya","d":"Kurunegala","c":[79.9666,7.6073]},"geometry":{"type":"Polygon","coordinates":[[[79.9038,7.6164],[79.9058,7.5941],[79.8986,7.5786],[79.898,7.5568],[79.9086,7.5567],[79.9173,7.5466],[79.918,7.5424],[79.9323,7.5446],[79.934,7.5411],[79.9368,7.5418],[79.938,7.5372],[79.9409,7.5383],[79.9398,7.5321],[79.9457,7.5321],[79.9455,7.525],[79.9501,7.5278],[79.9554,7.5258],[79.9608,7.5274],[79.9606,7.5303],[79.9659,7.5332],[79.9657,7.5373],[79.9694,7.5406],[79.977,7.5394],[79.9781,7.5315],[79.9736,7.5291],[79.9752,7.5208],[79.9728,7.5177],[79.9741,7.5153],[79.9821,7.5188],[79.982,7.5219],[79.9937,7.5392],[79.9983,7.5397],[80.006,7.5451],[80.0094,7.541],[80.0218,7.5413],[80.0258,7.5477],[80.0327,7.5501],[80.0303,7.5573],[80.0328,7.5612],[80.0279,7.5683],[80.0283,7.5728],[80.0105,7.5823],[80.0142,7.5903],[80.0109,7.5977],[80.0124,7.6055],[80.0135,7.6088],[80.0177,7.6088],[80.0159,7.6159],[80.0084,7.616],[80.007,7.6102],[79.9911,7.6078],[79.998,7.6179],[79.9975,7.6247],[80.0027,7.632],[80.0021,7.6346],[80.0047,7.6343],[80.0117,7.6439],[80.0112,7.6496],[80.0364,7.6592],[80.0357,7.6681],[80.043,7.6718],[80.0458,7.6789],[80.0421,7.6831],[80.0316,7.6749],[80.0269,7.6743],[80.0201,7.6851],[80.0168,7.6828],[80.0126,7.6878],[80.0077,7.6888],[80.0032,7.6856],[79.9894,7.683],[79.9854,7.6896],[79.992,7.6972],[79.9945,7.6956],[79.9963,7.6972],[79.993,7.7034],[79.9875,7.7051],[79.9866,7.6983],[79.9802,7.694],[79.9771,7.6879],[79.9686,7.6847],[79.9651,7.6907],[79.9579,7.6826],[79.9564,7.6731],[79.9466,7.6758],[79.9446,7.6823],[79.9394,7.6764],[79.9337,7.6811],[79.9262,7.6746],[79.9283,7.6654],[79.9211,7.6559],[79.9294,7.6532],[79.9314,7.6497],[79.9217,7.6462],[79.9189,7.6334],[79.9076,7.6256],[79.9038,7.6164]]]}},{"type":"Feature","properties":{"n":"Ehetuwewa","d":"Kurunegala","c":[80.3551,7.9643]},"geometry":{"type":"Polygon","coordinates":[[[80.2907,7.8966],[80.3015,7.8962],[80.3027,7.8929],[80.3103,7.8967],[80.3164,7.8918],[80.3285,7.8937],[80.3295,7.89],[80.3335,7.889],[80.3335,7.886],[80.337,7.8843],[80.3466,7.8874],[80.3497,7.8832],[80.3575,7.8802],[80.3624,7.8823],[80.3657,7.8796],[80.3714,7.8803],[80.3769,7.8863],[80.3768,7.9102],[80.3736,7.9112],[80.3706,7.9079],[80.3662,7.9092],[80.3663,7.9112],[80.3696,7.9126],[80.3711,7.92],[80.3814,7.9387],[80.3831,7.9604],[80.3866,7.9618],[80.3881,7.967],[80.3992,7.9652],[80.4062,7.9527],[80.4132,7.952],[80.4156,7.9495],[80.4172,7.9553],[80.423,7.9598],[80.424,7.9636],[80.4208,7.9758],[80.4221,7.9862],[80.4133,8.0061],[80.4166,8.0154],[80.4177,8.0429],[80.4036,8.0558],[80.3937,8.0533],[80.3908,8.048],[80.3837,8.0507],[80.3798,8.0558],[80.3677,8.0572],[80.3639,8.065],[80.3636,8.057],[80.3669,8.0537],[80.368,8.0465],[80.3556,8.0488],[80.3508,8.0453],[80.3454,8.046],[80.3409,8.0436],[80.3525,8.0293],[80.3511,8.0225],[80.3471,8.0187],[80.3516,8.0084],[80.3445,8.0077],[80.3374,8.011],[80.3364,8.0073],[80.3361,7.996],[80.347,7.9871],[80.3433,7.9828],[80.3394,7.9822],[80.3289,7.988],[80.3238,7.9845],[80.3264,7.9708],[80.3243,7.9665],[80.3156,7.9569],[80.3067,7.9568],[80.3041,7.9517],[80.3069,7.9428],[80.3026,7.9423],[80.2965,7.9369],[80.2931,7.9381],[80.2949,7.9339],[80.2865,7.9342],[80.2774,7.9406],[80.2751,7.9381],[80.271,7.9438],[80.2708,7.9546],[80.2678,7.9545],[80.2625,7.9617],[80.2606,7.9609],[80.2599,7.9564],[80.2573,7.9558],[80.2562,7.9465],[80.2617,7.943],[80.2633,7.9365],[80.2673,7.9353],[80.2676,7.9269],[80.2714,7.9218],[80.2701,7.9189],[80.2758,7.9141],[80.2817,7.8992],[80.2871,7.9001],[80.2907,7.8966]]]}},{"type":"Feature","properties":{"n":"Galgamuwa","d":"Kurunegala","c":[80.2595,8.0188]},"geometry":{"type":"Polygon","coordinates":[[[80.2573,7.9558],[80.2599,7.9564],[80.2625,7.9617],[80.2678,7.9545],[80.2708,7.9546],[80.271,7.9438],[80.2745,7.9387],[80.2774,7.9406],[80.2813,7.9394],[80.2901,7.933],[80.2949,7.9339],[80.2931,7.9381],[80.2965,7.9369],[80.3026,7.9423],[80.3069,7.9428],[80.3047,7.9542],[80.3067,7.9568],[80.318,7.9584],[80.3184,7.9618],[80.3264,7.9708],[80.3238,7.9845],[80.3289,7.988],[80.3394,7.9822],[80.3433,7.9828],[80.347,7.9871],[80.3361,7.996],[80.3364,8.0073],[80.3374,8.011],[80.3445,8.0077],[80.3516,8.0084],[80.3471,8.0187],[80.3511,8.0225],[80.3525,8.0293],[80.3409,8.0436],[80.3454,8.046],[80.3508,8.0453],[80.3556,8.0488],[80.368,8.0465],[80.3669,8.0537],[80.3636,8.057],[80.3631,8.0672],[80.3554,8.0697],[80.3472,8.0807],[80.3402,8.0823],[80.3375,8.0889],[80.3314,8.0892],[80.3272,8.0957],[80.3219,8.098],[80.3213,8.1034],[80.3152,8.1136],[80.3112,8.1135],[80.3072,8.1181],[80.3009,8.1154],[80.2897,8.1187],[80.2873,8.1161],[80.285,8.1187],[80.2794,8.1155],[80.264,8.1155],[80.2546,8.1281],[80.2661,8.0882],[80.268,8.0843],[80.2716,8.0855],[80.2652,8.0733],[80.2653,8.0654],[80.2583,8.066],[80.2579,8.063],[80.2539,8.0623],[80.2412,8.049],[80.2341,8.0522],[80.2258,8.043],[80.2284,8.0393],[80.2279,8.0333],[80.2262,8.0351],[80.2206,8.0332],[80.2195,8.0296],[80.2141,8.0258],[80.2061,8.0303],[80.1904,8.0235],[80.1846,8.0292],[80.1725,8.0239],[80.1669,8.0269],[80.1646,8.0257],[80.1621,8.0285],[80.1648,8.0343],[80.1623,8.035],[80.1572,8.047],[80.1453,8.0516],[80.1437,8.0365],[80.1463,8.0176],[80.1414,8.0055],[80.1476,7.9982],[80.1312,7.9665],[80.1325,7.9593],[80.1389,7.9545],[80.142,7.9566],[80.1477,7.9549],[80.153,7.9583],[80.1593,7.9576],[80.1651,7.9501],[80.1689,7.9486],[80.1715,7.9511],[80.1754,7.9494],[80.1805,7.9518],[80.1909,7.9485],[80.1933,7.9524],[80.197,7.9518],[80.2098,7.9576],[80.2115,7.9563],[80.2189,7.9724],[80.2377,7.9747],[80.2467,7.9798],[80.2468,7.9757],[80.2528,7.9743],[80.2595,7.9678],[80.256,7.9611],[80.2573,7.9558]]]}},{"type":"Feature","properties":{"n":"Ganewatta","d":"Kurunegala","c":[80.3679,7.6564]},"geometry":{"type":"Polygon","coordinates":[[[80.3419,7.7405],[80.3354,7.7428],[80.3313,7.7472],[80.3282,7.7464],[80.3219,7.7383],[80.3253,7.7285],[80.3162,7.7197],[80.3083,7.7202],[80.304,7.7172],[80.2988,7.719],[80.2966,7.7033],[80.291,7.7027],[80.2885,7.7058],[80.2758,7.7101],[80.2745,7.7025],[80.2784,7.7015],[80.2798,7.6907],[80.2897,7.6922],[80.2912,7.6848],[80.3055,7.676],[80.3076,7.6694],[80.317,7.6597],[80.3163,7.6478],[80.3293,7.6313],[80.3388,7.633],[80.3407,7.6312],[80.3394,7.6242],[80.3436,7.6156],[80.3593,7.5992],[80.3597,7.5927],[80.3731,7.5848],[80.3722,7.5827],[80.3759,7.5768],[80.3875,7.5724],[80.3941,7.5778],[80.4055,7.58],[80.4081,7.5835],[80.407,7.588],[80.412,7.595],[80.4093,7.6232],[80.4124,7.6296],[80.4081,7.6391],[80.417,7.6363],[80.4214,7.6405],[80.4294,7.639],[80.442,7.647],[80.4502,7.648],[80.4479,7.6651],[80.4505,7.6701],[80.4416,7.673],[80.4421,7.6774],[80.4367,7.6788],[80.4394,7.681],[80.4341,7.6851],[80.4361,7.6877],[80.4319,7.6888],[80.4297,7.6924],[80.4252,7.6893],[80.4134,7.6894],[80.4012,7.6979],[80.3924,7.6987],[80.3791,7.6879],[80.3784,7.6801],[80.3728,7.6752],[80.3678,7.6785],[80.3638,7.6779],[80.3554,7.6854],[80.3543,7.6906],[80.3474,7.6985],[80.3384,7.7004],[80.3339,7.7051],[80.3275,7.7035],[80.3307,7.7076],[80.3315,7.7147],[80.3414,7.7294],[80.3419,7.7405]]]}},{"type":"Feature","properties":{"n":"Giribawa","d":"Kurunegala","c":[80.1811,8.1036]},"geometry":{"type":"Polygon","coordinates":[[[80.2546,8.1281],[80.2505,8.1325],[80.2322,8.1394],[80.2107,8.144],[80.2037,8.1532],[80.1853,8.1509],[80.1817,8.1618],[80.165,8.1631],[80.1579,8.1658],[80.1485,8.1748],[80.1197,8.1807],[80.1172,8.1848],[80.1074,8.1886],[80.1076,8.1938],[80.0981,8.1977],[80.0991,8.1917],[80.1019,8.1894],[80.1024,8.1809],[80.0966,8.1671],[80.0978,8.1604],[80.1058,8.1515],[80.1129,8.0963],[80.1263,8.0776],[80.1403,8.0748],[80.1502,8.0682],[80.1501,8.0623],[80.1453,8.0516],[80.1572,8.047],[80.1623,8.035],[80.1648,8.0343],[80.1621,8.0285],[80.1646,8.0257],[80.1669,8.0269],[80.1725,8.0239],[80.1846,8.0292],[80.1904,8.0235],[80.2061,8.0303],[80.2141,8.0258],[80.2195,8.0296],[80.2206,8.0332],[80.2262,8.0351],[80.2279,8.0333],[80.2284,8.0393],[80.2258,8.043],[80.2341,8.0522],[80.2412,8.049],[80.2539,8.0623],[80.2579,8.063],[80.2583,8.066],[80.2653,8.0654],[80.2652,8.0733],[80.2716,8.0855],[80.268,8.0843],[80.2661,8.0882],[80.2546,8.1281]]]}},{"type":"Feature","properties":{"n":"Ibbagamuwa","d":"Kurunegala","c":[80.4691,7.6178]},"geometry":{"type":"Polygon","coordinates":[[[80.5388,7.7086],[80.5394,7.7053],[80.5341,7.7036],[80.5224,7.7046],[80.5193,7.6988],[80.512,7.6932],[80.4962,7.6931],[80.4911,7.7004],[80.4931,7.7011],[80.4925,7.7091],[80.4893,7.7177],[80.4845,7.7157],[80.4832,7.7183],[80.477,7.7177],[80.4724,7.7112],[80.4642,7.7115],[80.4637,7.7079],[80.4693,7.7072],[80.4707,7.7031],[80.4604,7.6995],[80.4531,7.704],[80.4355,7.7008],[80.4354,7.6962],[80.4308,7.6913],[80.4361,7.6877],[80.4341,7.6851],[80.4394,7.681],[80.4367,7.6788],[80.4421,7.6774],[80.4416,7.673],[80.4505,7.6701],[80.4479,7.6651],[80.4502,7.648],[80.442,7.647],[80.4294,7.639],[80.4214,7.6405],[80.417,7.6363],[80.4081,7.6391],[80.4124,7.6296],[80.4093,7.6232],[80.412,7.595],[80.407,7.588],[80.4081,7.5835],[80.4055,7.58],[80.3941,7.5778],[80.3875,7.5724],[80.3972,7.5669],[80.395,7.5634],[80.409,7.5451],[80.4088,7.5404],[80.4239,7.5288],[80.4282,7.5175],[80.4285,7.5074],[80.4391,7.5071],[80.4446,7.5038],[80.4646,7.5135],[80.4665,7.5182],[80.4694,7.5176],[80.473,7.5219],[80.4814,7.5232],[80.4785,7.5307],[80.4736,7.5321],[80.4869,7.5533],[80.4849,7.5589],[80.4895,7.561],[80.4883,7.5666],[80.4925,7.576],[80.4914,7.5791],[80.4976,7.5903],[80.4903,7.5916],[80.4855,7.5898],[80.4838,7.5943],[80.4868,7.5976],[80.5034,7.5992],[80.5055,7.6036],[80.5019,7.6047],[80.5046,7.6051],[80.5009,7.6069],[80.5029,7.6088],[80.5008,7.6126],[80.5049,7.6231],[80.5131,7.625],[80.5226,7.6219],[80.5272,7.625],[80.5275,7.6323],[80.5368,7.6363],[80.5477,7.6306],[80.5546,7.6341],[80.5495,7.6411],[80.5494,7.6484],[80.5467,7.6489],[80.5469,7.6537],[80.5441,7.6544],[80.5434,7.6596],[80.5438,7.6617],[80.55,7.6611],[80.5518,7.6689],[80.5472,7.679],[80.5482,7.6861],[80.5454,7.6979],[80.5474,7.7046],[80.5428,7.709],[80.5388,7.7086]]]}},{"type":"Feature","properties":{"n":"Kobeigane","d":"Kurunegala","c":[80.0982,7.6839]},"geometry":{"type":"Polygon","coordinates":[[[80.0458,7.6789],[80.0561,7.679],[80.0583,7.6679],[80.0638,7.6597],[80.0708,7.6581],[80.0719,7.662],[80.075,7.662],[80.0848,7.6585],[80.0881,7.655],[80.101,7.6573],[80.1051,7.6501],[80.1,7.6465],[80.1013,7.6431],[80.1058,7.6382],[80.1172,7.6376],[80.118,7.6346],[80.1135,7.6272],[80.1201,7.6202],[80.1253,7.6237],[80.1321,7.6353],[80.138,7.6325],[80.1413,7.6343],[80.1467,7.6324],[80.1524,7.6249],[80.1673,7.6285],[80.1667,7.6247],[80.1678,7.6335],[80.1733,7.6334],[80.1656,7.6465],[80.1708,7.6562],[80.169,7.6629],[80.1662,7.6625],[80.164,7.6665],[80.1683,7.6798],[80.1625,7.6865],[80.1599,7.6995],[80.1509,7.6958],[80.1553,7.7035],[80.1554,7.7117],[80.1587,7.7155],[80.1567,7.719],[80.1519,7.7184],[80.1454,7.726],[80.1396,7.7218],[80.1192,7.7171],[80.1154,7.7213],[80.0949,7.7249],[80.0849,7.734],[80.074,7.7297],[80.0672,7.718],[80.0553,7.7174],[80.0486,7.7251],[80.0268,7.7213],[80.0168,7.7069],[80.0112,7.7047],[79.9996,7.7049],[79.999,7.6989],[79.9945,7.6956],[79.992,7.6972],[79.9854,7.6896],[79.9894,7.683],[80.0032,7.6856],[80.0077,7.6888],[80.0126,7.6878],[80.0168,7.6828],[80.0201,7.6851],[80.0269,7.6743],[80.0316,7.6749],[80.0421,7.6831],[80.0458,7.6789]]]}},{"type":"Feature","properties":{"n":"Kotawehera","d":"Kurunegala","c":[80.1224,7.8656]},"geometry":{"type":"Polygon","coordinates":[[[80.1675,7.9491],[80.1593,7.9576],[80.153,7.9583],[80.1477,7.9549],[80.142,7.9566],[80.1389,7.9545],[80.1462,7.9418],[80.1404,7.9373],[80.1344,7.9377],[80.1307,7.9341],[80.12,7.9463],[80.114,7.9502],[80.1078,7.9498],[80.1045,7.9406],[80.1066,7.9298],[80.0993,7.9247],[80.0965,7.9143],[80.0904,7.9164],[80.0917,7.9212],[80.0704,7.9137],[80.0725,7.9071],[80.072,7.8935],[80.0712,7.8904],[80.0645,7.8882],[80.0648,7.8738],[80.062,7.8717],[80.0501,7.8727],[80.0472,7.8671],[80.0392,7.8652],[80.0357,7.8592],[80.0391,7.8585],[80.036,7.8445],[80.0319,7.8416],[80.0355,7.8329],[80.0377,7.8324],[80.0484,7.8371],[80.0488,7.8401],[80.0523,7.8372],[80.0608,7.8423],[80.0621,7.8391],[80.0654,7.8414],[80.067,7.8361],[80.0647,7.8315],[80.0556,7.8313],[80.0455,7.8225],[80.0525,7.8158],[80.0595,7.8192],[80.0624,7.8132],[80.0724,7.8099],[80.078,7.8037],[80.0776,7.8076],[80.0901,7.8213],[80.0942,7.8229],[80.0968,7.8196],[80.0997,7.8196],[80.1048,7.824],[80.1156,7.8125],[80.124,7.8116],[80.1261,7.8071],[80.1245,7.8029],[80.1187,7.8018],[80.1258,7.7965],[80.1345,7.7964],[80.1416,7.8004],[80.1425,7.7969],[80.1454,7.7963],[80.1447,7.803],[80.1531,7.8068],[80.1574,7.8043],[80.1595,7.7987],[80.1675,7.8054],[80.1734,7.806],[80.1808,7.8015],[80.1788,7.7963],[80.1804,7.7944],[80.1866,7.7977],[80.1896,7.8031],[80.1924,7.8031],[80.192,7.8055],[80.1955,7.8046],[80.2008,7.8154],[80.2002,7.8212],[80.1962,7.8235],[80.1938,7.8364],[80.1991,7.8366],[80.2,7.8429],[80.1912,7.849],[80.1901,7.8552],[80.1786,7.8618],[80.1627,7.8986],[80.1625,7.9144],[80.1578,7.9323],[80.1624,7.9317],[80.1675,7.9491]]]}},{"type":"Feature","properties":{"n":"Kuliyapitiya East","d":"Kurunegala","c":[80.1671,7.4685]},"geometry":{"type":"Polygon","coordinates":[[[80.1731,7.5462],[80.1644,7.5365],[80.1597,7.5245],[80.1451,7.5145],[80.1467,7.5078],[80.1434,7.4983],[80.1336,7.4988],[80.1357,7.4945],[80.1409,7.4921],[80.1343,7.4904],[80.1378,7.4854],[80.1313,7.4843],[80.13,7.4762],[80.1236,7.4755],[80.1156,7.4675],[80.1168,7.4561],[80.1217,7.4545],[80.1164,7.45],[80.1133,7.442],[80.1156,7.4413],[80.1143,7.4389],[80.1202,7.4393],[80.1251,7.4364],[80.1182,7.4257],[80.1198,7.4168],[80.1105,7.4115],[80.1124,7.4082],[80.1169,7.4076],[80.1244,7.4137],[80.1286,7.4135],[80.1337,7.4054],[80.1353,7.4073],[80.1323,7.4101],[80.14,7.4107],[80.1408,7.4164],[80.1472,7.4189],[80.1524,7.4105],[80.1556,7.4112],[80.1552,7.394],[80.1701,7.3831],[80.1729,7.3851],[80.1718,7.4005],[80.1766,7.4043],[80.187,7.4052],[80.1891,7.4471],[80.1847,7.4613],[80.1877,7.4721],[80.1864,7.4772],[80.1991,7.4812],[80.2007,7.4744],[80.2039,7.4727],[80.2054,7.463],[80.2167,7.4649],[80.2183,7.4686],[80.2167,7.4792],[80.2232,7.4816],[80.2261,7.4901],[80.2224,7.4948],[80.2252,7.5022],[80.2213,7.5098],[80.2114,7.518],[80.211,7.5219],[80.2036,7.529],[80.1877,7.5315],[80.1731,7.5462]]]}},{"type":"Feature","properties":{"n":"Kuliyapitiya West","d":"Kurunegala","c":[80.053,7.4726]},"geometry":{"type":"Polygon","coordinates":[[[79.9852,7.525],[79.9891,7.5249],[79.9926,7.5207],[79.9915,7.5186],[79.9954,7.5088],[79.9878,7.4978],[79.9918,7.4873],[79.9846,7.4868],[79.9866,7.4827],[79.9844,7.4681],[79.9888,7.4601],[79.9859,7.4555],[79.9849,7.4402],[79.995,7.435],[79.9961,7.4271],[80.0074,7.4232],[80.0236,7.4256],[80.0278,7.4242],[80.0474,7.4308],[80.0587,7.428],[80.065,7.4299],[80.0634,7.427],[80.0698,7.4226],[80.0689,7.4182],[80.073,7.4111],[80.0711,7.4066],[80.0751,7.4074],[80.083,7.4027],[80.0838,7.3984],[80.0887,7.4043],[80.0892,7.4017],[80.0924,7.4045],[80.0969,7.4044],[80.0989,7.411],[80.1065,7.409],[80.1084,7.4031],[80.1124,7.4082],[80.1105,7.4115],[80.1198,7.4168],[80.1182,7.4257],[80.1251,7.4364],[80.1202,7.4393],[80.1143,7.4389],[80.1156,7.4413],[80.1133,7.442],[80.1164,7.45],[80.1217,7.4545],[80.1168,7.4561],[80.1156,7.4675],[80.1236,7.4755],[80.13,7.4762],[80.1313,7.4843],[80.1378,7.4854],[80.1343,7.4904],[80.1409,7.4921],[80.1357,7.4945],[80.1344,7.4999],[80.1293,7.4993],[80.1245,7.5039],[80.1261,7.5082],[80.1182,7.5095],[80.1121,7.503],[80.1032,7.5002],[80.0994,7.5097],[80.0935,7.5101],[80.0895,7.5157],[80.0781,7.5068],[80.0726,7.5078],[80.0767,7.5037],[80.0697,7.4921],[80.0542,7.4894],[80.0452,7.4913],[80.0428,7.5217],[80.0481,7.5341],[80.05,7.547],[80.0441,7.5551],[80.0379,7.5559],[80.0315,7.5541],[80.0327,7.5501],[80.0258,7.5477],[80.0218,7.5413],[80.0094,7.541],[80.006,7.5451],[79.9983,7.5397],[79.9937,7.5392],[79.9852,7.525]]]}},{"type":"Feature","properties":{"n":"Kurunegala","d":"Kurunegala","c":[80.3478,7.4593]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.3022,7.5025],[80.3052,7.5024],[80.3063,7.499],[80.3091,7.4992],[80.3088,7.4961],[80.3137,7.4954],[80.3153,7.4928],[80.3142,7.4818],[80.3175,7.4719],[80.3248,7.4646],[80.3263,7.4595],[80.3221,7.4519],[80.3282,7.4414],[80.328,7.4342],[80.3406,7.4172],[80.3386,7.4085],[80.3427,7.4053],[80.3424,7.3994],[80.3478,7.3916],[80.3461,7.3868],[80.3556,7.386],[80.3765,7.3923],[80.3718,7.4007],[80.3678,7.4003],[80.3651,7.4031],[80.3523,7.4017],[80.3543,7.4066],[80.3648,7.4164],[80.3648,7.4216],[80.3521,7.4218],[80.3487,7.4254],[80.3512,7.4354],[80.357,7.4387],[80.3589,7.4487],[80.369,7.4514],[80.3727,7.455],[80.3714,7.4596],[80.3762,7.469],[80.3734,7.4725],[80.3672,7.4746],[80.3691,7.4761],[80.379,7.473],[80.3825,7.4755],[80.3768,7.4908],[80.3772,7.5022],[80.3708,7.5021],[80.3717,7.5075],[80.3687,7.5146],[80.3555,7.51],[80.3573,7.5016],[80.3467,7.5],[80.3449,7.4977],[80.3461,7.4929],[80.3392,7.4894],[80.3252,7.4927],[80.3232,7.4984],[80.3148,7.5069],[80.3111,7.5053],[80.3068,7.5104],[80.3036,7.5094],[80.3022,7.5025]],[[80.3438,7.4261],[80.3445,7.4215],[80.3408,7.4175],[80.3428,7.4218],[80.3402,7.4229],[80.3438,7.4261]],[[80.3585,7.3952],[80.3531,7.4],[80.3591,7.3993],[80.3585,7.3952]]],[[[80.3436,7.6156],[80.3415,7.6135],[80.3359,7.6208],[80.3362,7.6236],[80.3306,7.624],[80.325,7.6056],[80.3189,7.6016],[80.3097,7.6063],[80.3077,7.6007],[80.3211,7.5825],[80.3499,7.5552],[80.3558,7.547],[80.3623,7.5303],[80.3656,7.5337],[80.3716,7.5341],[80.3729,7.5401],[80.3745,7.5385],[80.3821,7.5402],[80.384,7.5373],[80.3851,7.5448],[80.3968,7.543],[80.3964,7.541],[80.4027,7.5417],[80.4012,7.5497],[80.4032,7.5509],[80.395,7.5634],[80.3972,7.5669],[80.3855,7.5744],[80.3759,7.5768],[80.3722,7.5827],[80.3731,7.5848],[80.3597,7.5927],[80.3593,7.5992],[80.3436,7.6156]]]]}},{"type":"Feature","properties":{"n":"Maho","d":"Kurunegala","c":[80.2885,7.8052]},"geometry":{"type":"Polygon","coordinates":[[[80.2,7.8429],[80.1991,7.8366],[80.1938,7.8364],[80.1962,7.8235],[80.2002,7.8212],[80.2008,7.8154],[80.1955,7.8046],[80.201,7.7971],[80.2034,7.7963],[80.2042,7.8006],[80.2069,7.7998],[80.2068,7.7945],[80.2027,7.7867],[80.2108,7.7808],[80.2111,7.7752],[80.2197,7.7731],[80.2193,7.7789],[80.226,7.791],[80.2275,7.7865],[80.2218,7.7722],[80.223,7.7705],[80.2285,7.7718],[80.2336,7.7643],[80.2303,7.7538],[80.2354,7.755],[80.2433,7.747],[80.2343,7.7423],[80.2341,7.7354],[80.246,7.7296],[80.2474,7.7252],[80.2638,7.7269],[80.2665,7.7218],[80.2746,7.7167],[80.2758,7.7101],[80.2885,7.7058],[80.291,7.7027],[80.2966,7.7033],[80.2988,7.719],[80.304,7.7172],[80.3083,7.7202],[80.3162,7.7197],[80.3253,7.7285],[80.3219,7.7383],[80.3282,7.7464],[80.3313,7.7472],[80.3354,7.7428],[80.3419,7.7405],[80.3507,7.7541],[80.3607,7.7607],[80.3586,7.7752],[80.3533,7.788],[80.3531,7.7928],[80.3575,7.8015],[80.3557,7.8083],[80.3569,7.8178],[80.3502,7.8185],[80.3521,7.8232],[80.3498,7.826],[80.3605,7.829],[80.3655,7.8607],[80.3684,7.866],[80.3685,7.8737],[80.3654,7.8811],[80.3542,7.8809],[80.3466,7.8874],[80.337,7.8843],[80.3335,7.886],[80.3335,7.889],[80.3295,7.89],[80.3285,7.8937],[80.3164,7.8918],[80.3103,7.8967],[80.3027,7.8929],[80.3015,7.8962],[80.2907,7.8966],[80.2946,7.8947],[80.2899,7.8841],[80.2916,7.8798],[80.3059,7.8754],[80.3066,7.8727],[80.2971,7.8728],[80.2918,7.8705],[80.29,7.874],[80.2855,7.866],[80.279,7.8701],[80.2752,7.8767],[80.2628,7.8743],[80.2589,7.8682],[80.2546,7.8681],[80.254,7.8657],[80.244,7.8688],[80.2436,7.8721],[80.2408,7.8639],[80.2434,7.8588],[80.2399,7.858],[80.2421,7.8512],[80.233,7.8506],[80.225,7.8446],[80.2138,7.847],[80.2,7.8429]]]}},{"type":"Feature","properties":{"n":"Mallawapitiya","d":"Kurunegala","c":[80.3886,7.4681]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.3585,7.3952],[80.3591,7.3993],[80.3531,7.4],[80.3585,7.3952]]],[[[80.3438,7.4261],[80.3402,7.4229],[80.3428,7.4218],[80.3408,7.4175],[80.3445,7.4215],[80.3438,7.4261]]],[[[80.4032,7.5509],[80.4012,7.5497],[80.4027,7.5417],[80.3964,7.541],[80.3968,7.543],[80.3851,7.5448],[80.384,7.5373],[80.3821,7.5402],[80.3745,7.5385],[80.3729,7.5401],[80.3716,7.5341],[80.3656,7.5337],[80.3623,7.5303],[80.3717,7.5075],[80.3708,7.5021],[80.3772,7.5022],[80.3768,7.4908],[80.3825,7.4755],[80.379,7.473],[80.3691,7.4761],[80.3672,7.4746],[80.3734,7.4725],[80.3762,7.469],[80.3714,7.4596],[80.3727,7.455],[80.369,7.4514],[80.3589,7.4487],[80.357,7.4387],[80.3512,7.4354],[80.3487,7.4254],[80.3521,7.4218],[80.3648,7.4216],[80.3648,7.4164],[80.3543,7.4066],[80.3523,7.4017],[80.3651,7.4031],[80.3678,7.4003],[80.3718,7.4007],[80.3765,7.3923],[80.3901,7.3963],[80.3982,7.3888],[80.4051,7.3863],[80.4056,7.405],[80.4002,7.4151],[80.3943,7.4146],[80.3995,7.4186],[80.4134,7.4231],[80.4089,7.446],[80.4047,7.4562],[80.4007,7.4553],[80.4084,7.4634],[80.3997,7.4649],[80.4075,7.4676],[80.4036,7.4748],[80.4058,7.4817],[80.4106,7.4843],[80.4116,7.5075],[80.4271,7.5186],[80.4239,7.5288],[80.4184,7.534],[80.4135,7.5349],[80.4088,7.5404],[80.409,7.5451],[80.4032,7.5509]]]]}},{"type":"Feature","properties":{"n":"Maspotha","d":"Kurunegala","c":[80.3226,7.5574]},"geometry":{"type":"Polygon","coordinates":[[[80.3056,7.5092],[80.3083,7.5097],[80.3111,7.5053],[80.3148,7.5069],[80.3232,7.4984],[80.3252,7.4927],[80.3392,7.4894],[80.3461,7.4929],[80.3449,7.4977],[80.3467,7.5],[80.3573,7.5016],[80.3555,7.51],[80.3687,7.5146],[80.3558,7.547],[80.3499,7.5552],[80.3211,7.5825],[80.3077,7.6007],[80.3112,7.6315],[80.3052,7.6419],[80.3022,7.6544],[80.2968,7.6562],[80.2906,7.6696],[80.2862,7.6661],[80.2897,7.6575],[80.2899,7.642],[80.2924,7.6394],[80.2874,7.6337],[80.289,7.6296],[80.2913,7.6297],[80.2899,7.6285],[80.2928,7.6229],[80.2905,7.6188],[80.2929,7.6132],[80.291,7.6121],[80.2923,7.5951],[80.2971,7.5783],[80.3016,7.5712],[80.3,7.5679],[80.3029,7.5668],[80.3009,7.5605],[80.3054,7.5482],[80.3042,7.5401],[80.3082,7.5347],[80.3087,7.5285],[80.3057,7.5251],[80.3092,7.518],[80.3056,7.5092]]]}},{"type":"Feature","properties":{"n":"Mawathagama","d":"Kurunegala","c":[80.4431,7.4243]},"geometry":{"type":"Polygon","coordinates":[[[80.4633,7.3779],[80.4701,7.3939],[80.4671,7.3972],[80.4668,7.4029],[80.4603,7.405],[80.4597,7.4106],[80.4673,7.4132],[80.4713,7.4065],[80.4785,7.4067],[80.4911,7.3945],[80.5054,7.3855],[80.5091,7.3853],[80.5172,7.3893],[80.5166,7.3921],[80.5124,7.3939],[80.5159,7.3951],[80.5176,7.3988],[80.5136,7.4059],[80.5153,7.4138],[80.513,7.4192],[80.503,7.4259],[80.501,7.4299],[80.4977,7.4295],[80.4934,7.4217],[80.4832,7.428],[80.4806,7.4239],[80.4637,7.438],[80.4606,7.4473],[80.4631,7.4482],[80.4604,7.4526],[80.4619,7.4585],[80.4547,7.4621],[80.4529,7.4713],[80.4461,7.4703],[80.4416,7.4772],[80.4366,7.4776],[80.4349,7.48],[80.4379,7.487],[80.4448,7.4905],[80.4432,7.497],[80.4399,7.4993],[80.4391,7.5071],[80.4285,7.5074],[80.4282,7.5175],[80.425,7.5187],[80.4223,7.5138],[80.4116,7.5075],[80.4106,7.4843],[80.4058,7.4817],[80.4036,7.4748],[80.4075,7.4676],[80.3997,7.4649],[80.4084,7.4634],[80.4007,7.4553],[80.4047,7.4562],[80.4089,7.446],[80.4134,7.4231],[80.3995,7.4186],[80.3943,7.4146],[80.4002,7.4151],[80.4056,7.405],[80.4051,7.3863],[80.4092,7.3835],[80.4141,7.374],[80.4117,7.3567],[80.4191,7.3559],[80.4214,7.3598],[80.4261,7.3597],[80.4341,7.3532],[80.4438,7.3571],[80.4521,7.35],[80.4565,7.3505],[80.4579,7.3526],[80.4558,7.3569],[80.4524,7.3563],[80.4492,7.3612],[80.4537,7.3659],[80.4556,7.374],[80.4633,7.3779]]]}},{"type":"Feature","properties":{"n":"Narammala","d":"Kurunegala","c":[80.1911,7.3971]},"geometry":{"type":"Polygon","coordinates":[[[80.2627,7.3959],[80.2551,7.4113],[80.2511,7.4127],[80.2443,7.4211],[80.2432,7.4276],[80.247,7.4275],[80.2467,7.4316],[80.2505,7.4333],[80.2513,7.4372],[80.2377,7.4598],[80.2354,7.4622],[80.2238,7.4584],[80.2167,7.4649],[80.2054,7.463],[80.2039,7.4727],[80.2007,7.4744],[80.1991,7.4812],[80.1864,7.4772],[80.1877,7.4721],[80.1847,7.4613],[80.1891,7.4471],[80.187,7.4052],[80.1766,7.4043],[80.1718,7.4005],[80.1729,7.3851],[80.1701,7.3831],[80.161,7.3913],[80.1552,7.394],[80.1491,7.3934],[80.144,7.3875],[80.1404,7.3897],[80.1383,7.3857],[80.1353,7.3862],[80.1315,7.3767],[80.1214,7.371],[80.1207,7.3642],[80.1328,7.3509],[80.1292,7.3365],[80.1229,7.3322],[80.1231,7.3298],[80.1368,7.3231],[80.1461,7.3133],[80.1495,7.3144],[80.1502,7.3176],[80.1533,7.3133],[80.1601,7.3222],[80.1623,7.3211],[80.1613,7.3261],[80.1689,7.3343],[80.166,7.3376],[80.1687,7.3439],[80.1759,7.3499],[80.1773,7.3484],[80.1767,7.35],[80.18,7.3507],[80.1831,7.3606],[80.1865,7.3616],[80.1891,7.3674],[80.1958,7.3735],[80.1957,7.3806],[80.2027,7.3777],[80.2111,7.3857],[80.219,7.3833],[80.2335,7.3852],[80.2627,7.3959]]]}},{"type":"Feature","properties":{"n":"Nikaweratiya","d":"Kurunegala","c":[80.1441,7.7628]},"geometry":{"type":"Polygon","coordinates":[[[80.1567,7.719],[80.1676,7.7207],[80.1799,7.73],[80.2004,7.7319],[80.2195,7.7266],[80.2341,7.7354],[80.2343,7.7423],[80.2433,7.747],[80.2354,7.755],[80.2303,7.7538],[80.2336,7.7643],[80.2285,7.7718],[80.223,7.7705],[80.2218,7.7722],[80.2275,7.7865],[80.226,7.791],[80.2193,7.7789],[80.2197,7.7731],[80.2111,7.7752],[80.2108,7.7808],[80.2027,7.7867],[80.2068,7.7945],[80.2069,7.7998],[80.2042,7.8006],[80.2034,7.7963],[80.201,7.7971],[80.1955,7.8046],[80.192,7.8055],[80.1924,7.8031],[80.1896,7.8031],[80.1866,7.7977],[80.1804,7.7944],[80.1788,7.7963],[80.1808,7.8015],[80.1734,7.806],[80.1675,7.8054],[80.1595,7.7987],[80.1574,7.8043],[80.1531,7.8068],[80.1447,7.803],[80.1454,7.7963],[80.1425,7.7969],[80.1416,7.8004],[80.1345,7.7964],[80.1258,7.7965],[80.1187,7.8018],[80.1245,7.8029],[80.1261,7.8071],[80.1229,7.8128],[80.1216,7.8104],[80.1156,7.8125],[80.1048,7.824],[80.0997,7.8196],[80.0968,7.8196],[80.0942,7.8229],[80.0901,7.8213],[80.0776,7.8076],[80.0872,7.7923],[80.0855,7.7906],[80.0869,7.7842],[80.0898,7.7837],[80.0856,7.7773],[80.0715,7.7774],[80.0731,7.7656],[80.0661,7.7619],[80.0671,7.7566],[80.0653,7.7545],[80.0691,7.746],[80.0575,7.7382],[80.0591,7.7314],[80.0558,7.7278],[80.0486,7.7251],[80.0553,7.7174],[80.0672,7.718],[80.074,7.7297],[80.0849,7.734],[80.0949,7.7249],[80.1154,7.7213],[80.1192,7.7171],[80.1396,7.7218],[80.1454,7.726],[80.1519,7.7184],[80.1567,7.719]]]}},{"type":"Feature","properties":{"n":"Panduwasnuwara East","d":"Kurunegala","c":[80.1414,7.5566]},"geometry":{"type":"Polygon","coordinates":[[[80.214,7.5865],[80.2138,7.5976],[80.2181,7.6054],[80.2153,7.6137],[80.2027,7.6166],[80.2019,7.6184],[80.194,7.6172],[80.1922,7.6196],[80.1882,7.6113],[80.1798,7.6058],[80.1796,7.602],[80.1747,7.5999],[80.1748,7.5971],[80.1719,7.5954],[80.1672,7.5982],[80.1579,7.597],[80.1529,7.5937],[80.1473,7.5945],[80.146,7.5873],[80.1439,7.5864],[80.1284,7.599],[80.1254,7.5945],[80.1272,7.589],[80.122,7.5852],[80.1218,7.5812],[80.0989,7.5728],[80.0888,7.5753],[80.0917,7.5651],[80.0884,7.561],[80.089,7.5533],[80.0809,7.5462],[80.0805,7.5425],[80.0846,7.5306],[80.0836,7.5283],[80.0789,7.5302],[80.0735,7.5269],[80.072,7.516],[80.0802,7.5116],[80.0788,7.5084],[80.0895,7.5157],[80.0935,7.5101],[80.0994,7.5097],[80.1032,7.5002],[80.1121,7.503],[80.1182,7.5095],[80.1261,7.5082],[80.1245,7.5039],[80.1293,7.4993],[80.1434,7.4983],[80.1467,7.5078],[80.1451,7.5145],[80.1597,7.5245],[80.1644,7.5365],[80.1731,7.5462],[80.1728,7.5555],[80.1793,7.5612],[80.178,7.5625],[80.1856,7.5638],[80.185,7.5667],[80.1921,7.5703],[80.1959,7.5787],[80.1978,7.5794],[80.2027,7.5738],[80.2077,7.5746],[80.21,7.5828],[80.214,7.5865]]]}},{"type":"Feature","properties":{"n":"Panduwasnuwara West","d":"Kurunegala","c":[80.0759,7.5996]},"geometry":{"type":"Polygon","coordinates":[[[80.0315,7.5541],[80.0441,7.5551],[80.05,7.547],[80.0481,7.5341],[80.0428,7.5217],[80.0452,7.4913],[80.0542,7.4894],[80.0697,7.4921],[80.0767,7.5037],[80.0726,7.5078],[80.0781,7.5068],[80.0802,7.5116],[80.072,7.516],[80.0735,7.5269],[80.0789,7.5302],[80.0836,7.5283],[80.0846,7.5306],[80.0805,7.5425],[80.0809,7.5462],[80.089,7.5533],[80.0884,7.561],[80.0917,7.5651],[80.0888,7.5753],[80.0989,7.5728],[80.1218,7.5812],[80.122,7.5852],[80.1272,7.589],[80.1254,7.5945],[80.1284,7.599],[80.1439,7.5864],[80.146,7.5873],[80.1473,7.5945],[80.1529,7.5937],[80.1579,7.597],[80.1672,7.5982],[80.1719,7.5954],[80.1748,7.5971],[80.1747,7.5999],[80.1796,7.602],[80.1798,7.6058],[80.1882,7.6113],[80.1922,7.6196],[80.184,7.6337],[80.1705,7.6346],[80.1678,7.6335],[80.1667,7.6247],[80.1673,7.6285],[80.1524,7.6249],[80.1467,7.6324],[80.1413,7.6343],[80.138,7.6325],[80.1321,7.6353],[80.1253,7.6237],[80.1201,7.6202],[80.1135,7.6272],[80.118,7.6346],[80.1172,7.6376],[80.1058,7.6382],[80.1013,7.6431],[80.1,7.6465],[80.1051,7.6501],[80.101,7.6573],[80.0881,7.655],[80.0848,7.6585],[80.075,7.662],[80.0719,7.662],[80.0708,7.6581],[80.0638,7.6597],[80.0583,7.6679],[80.0561,7.679],[80.0458,7.6789],[80.043,7.6718],[80.0357,7.6681],[80.0364,7.6592],[80.0112,7.6496],[80.0117,7.6439],[80.0047,7.6343],[80.0021,7.6346],[80.0027,7.632],[79.9975,7.6247],[79.998,7.6179],[79.9911,7.6078],[80.007,7.6102],[80.0084,7.616],[80.0159,7.6159],[80.0177,7.6088],[80.0135,7.6088],[80.0124,7.6055],[80.0109,7.5977],[80.0142,7.5903],[80.0105,7.5823],[80.0283,7.5728],[80.0279,7.5683],[80.0328,7.5612],[80.0303,7.5573],[80.0315,7.5541]]]}},{"type":"Feature","properties":{"n":"Pannala","d":"Kurunegala","c":[80.0286,7.3618]},"geometry":{"type":"Polygon","coordinates":[[[79.9395,7.2759],[79.9438,7.2736],[79.9461,7.2803],[79.953,7.2806],[79.9538,7.2826],[79.9496,7.285],[79.9483,7.2889],[79.9547,7.2899],[79.9542,7.2935],[79.966,7.2891],[79.9706,7.293],[79.9752,7.2924],[79.9794,7.3011],[79.9916,7.3028],[79.9922,7.3052],[79.9868,7.3048],[79.9864,7.307],[79.9967,7.3141],[80.0021,7.3145],[80.0057,7.3215],[80.0074,7.3171],[80.0119,7.3168],[80.0131,7.314],[80.0184,7.3173],[80.0252,7.317],[80.0226,7.3119],[80.0272,7.3089],[80.0289,7.302],[80.0357,7.3033],[80.045,7.2991],[80.045,7.2955],[80.0512,7.2905],[80.0512,7.2849],[80.0612,7.285],[80.0797,7.2975],[80.0818,7.3045],[80.0855,7.3033],[80.0927,7.3073],[80.1007,7.3132],[80.1056,7.3208],[80.1161,7.3251],[80.1278,7.3341],[80.1328,7.3509],[80.1207,7.3642],[80.1214,7.371],[80.1315,7.3767],[80.1353,7.3862],[80.1383,7.3857],[80.1404,7.3897],[80.144,7.3875],[80.1491,7.3934],[80.1552,7.394],[80.1556,7.4112],[80.1524,7.4105],[80.1472,7.4189],[80.1408,7.4164],[80.14,7.4107],[80.1323,7.4101],[80.1353,7.4073],[80.1337,7.4054],[80.1286,7.4135],[80.1244,7.4137],[80.1169,7.4076],[80.1124,7.4082],[80.1084,7.4031],[80.1065,7.409],[80.0989,7.411],[80.0969,7.4044],[80.0924,7.4045],[80.0892,7.4017],[80.0887,7.4043],[80.0838,7.3984],[80.083,7.4027],[80.0751,7.4074],[80.0711,7.4066],[80.073,7.4111],[80.0689,7.4182],[80.0698,7.4226],[80.0634,7.427],[80.065,7.4299],[80.0587,7.428],[80.0474,7.4308],[80.0278,7.4242],[80.0236,7.4256],[80.0074,7.4232],[79.9961,7.4271],[79.9952,7.4319],[79.9922,7.427],[79.993,7.4211],[79.9892,7.4266],[79.9739,7.4179],[79.9637,7.4173],[79.9638,7.4141],[79.947,7.4183],[79.944,7.4093],[79.9378,7.4075],[79.937,7.4046],[79.9303,7.4066],[79.9286,7.4153],[79.9218,7.4116],[79.9359,7.3459],[79.9395,7.2759]]]}},{"type":"Feature","properties":{"n":"Polgahawela","d":"Kurunegala","c":[80.3077,7.3745]},"geometry":{"type":"Polygon","coordinates":[[[80.2768,7.3178],[80.2848,7.315],[80.3039,7.3189],[80.3094,7.3224],[80.3149,7.3209],[80.3187,7.3284],[80.3364,7.3209],[80.3465,7.3342],[80.3478,7.3391],[80.3418,7.344],[80.3404,7.3511],[80.3538,7.3575],[80.3479,7.3773],[80.3432,7.3815],[80.3478,7.3916],[80.3424,7.3994],[80.3427,7.4053],[80.3386,7.4085],[80.3406,7.4172],[80.3332,7.4249],[80.328,7.4342],[80.328,7.4391],[80.3195,7.4363],[80.3185,7.4404],[80.3084,7.4429],[80.3083,7.4317],[80.3027,7.4254],[80.2998,7.4177],[80.2925,7.4151],[80.2876,7.4197],[80.2832,7.4139],[80.2761,7.4194],[80.2731,7.411],[80.2707,7.4124],[80.2621,7.4088],[80.2551,7.4113],[80.2747,7.3751],[80.2716,7.3686],[80.268,7.3698],[80.2615,7.3652],[80.2766,7.3424],[80.2752,7.332],[80.279,7.3225],[80.277,7.3218],[80.2768,7.3178]]]}},{"type":"Feature","properties":{"n":"Polpitigama","d":"Kurunegala","c":[80.4261,7.803]},"geometry":{"type":"Polygon","coordinates":[[[80.3657,7.8796],[80.3685,7.8737],[80.3684,7.866],[80.3655,7.8607],[80.3605,7.829],[80.3498,7.826],[80.3521,7.8232],[80.3502,7.8185],[80.3569,7.8178],[80.3557,7.8083],[80.3575,7.8015],[80.3531,7.7928],[80.3533,7.788],[80.3586,7.7752],[80.3607,7.7607],[80.3507,7.7541],[80.3419,7.7405],[80.3414,7.7294],[80.3315,7.7147],[80.3307,7.7076],[80.3275,7.7035],[80.3339,7.7051],[80.3384,7.7004],[80.3474,7.6985],[80.3543,7.6906],[80.3554,7.6854],[80.3638,7.6779],[80.3678,7.6785],[80.3728,7.6752],[80.3784,7.6801],[80.3791,7.6879],[80.3924,7.6987],[80.4012,7.6979],[80.4134,7.6894],[80.4252,7.6893],[80.4297,7.6924],[80.433,7.6918],[80.4355,7.7008],[80.4386,7.7023],[80.4531,7.704],[80.4604,7.6995],[80.4707,7.7031],[80.4693,7.7072],[80.4637,7.7079],[80.4642,7.7115],[80.4724,7.7112],[80.477,7.7177],[80.4832,7.7183],[80.4845,7.7157],[80.4893,7.7177],[80.4925,7.7091],[80.4931,7.7011],[80.4911,7.7004],[80.4962,7.6931],[80.512,7.6932],[80.5193,7.6988],[80.5224,7.7046],[80.5282,7.7028],[80.5394,7.7053],[80.5388,7.7086],[80.5344,7.7093],[80.5351,7.7392],[80.5315,7.7437],[80.5273,7.7443],[80.5189,7.761],[80.5175,7.7724],[80.514,7.7749],[80.5024,7.7746],[80.5001,7.781],[80.4959,7.7831],[80.4937,7.8093],[80.4992,7.8166],[80.4818,7.8232],[80.4814,7.8291],[80.4777,7.8311],[80.4765,7.8419],[80.4668,7.8498],[80.4729,7.8566],[80.4778,7.8807],[80.4727,7.8964],[80.4673,7.9001],[80.4625,7.9092],[80.4583,7.9453],[80.454,7.9465],[80.4513,7.9524],[80.4484,7.9513],[80.4465,7.9544],[80.4364,7.951],[80.4328,7.9458],[80.4204,7.9508],[80.4169,7.9484],[80.4132,7.952],[80.4062,7.9527],[80.3992,7.9652],[80.3881,7.967],[80.3866,7.9618],[80.3831,7.9604],[80.3828,7.9448],[80.3786,7.9316],[80.3711,7.92],[80.3696,7.9126],[80.3663,7.9112],[80.3662,7.9092],[80.3706,7.9079],[80.3736,7.9112],[80.3768,7.9102],[80.3769,7.8863],[80.3714,7.8803],[80.3657,7.8796]]]}},{"type":"Feature","properties":{"n":"Rasnayakapura","d":"Kurunegala","c":[80.0229,7.7651]},"geometry":{"type":"Polygon","coordinates":[[[79.9926,7.7935],[80.0002,7.7783],[79.9908,7.7613],[79.9931,7.7544],[79.999,7.7493],[79.9975,7.7444],[79.9802,7.7355],[79.9756,7.7309],[79.9739,7.7235],[79.9597,7.7177],[79.9534,7.7201],[79.9504,7.7131],[79.9522,7.7011],[79.9444,7.7009],[79.9368,7.6922],[79.9523,7.694],[79.9612,7.6865],[79.9666,7.6901],[79.9686,7.6847],[79.9771,7.6879],[79.9802,7.694],[79.9866,7.6983],[79.9875,7.7051],[79.993,7.7034],[79.9963,7.6972],[79.999,7.6989],[79.9996,7.7049],[80.0112,7.7047],[80.0168,7.7069],[80.0268,7.7213],[80.0558,7.7278],[80.0591,7.7314],[80.0575,7.7382],[80.0691,7.746],[80.0653,7.7545],[80.0671,7.7566],[80.0661,7.7619],[80.0731,7.7656],[80.0715,7.7774],[80.0856,7.7773],[80.0898,7.7837],[80.0869,7.7842],[80.0855,7.7906],[80.0872,7.7923],[80.0828,7.7973],[80.0823,7.8026],[80.078,7.8037],[80.0724,7.8099],[80.0624,7.8132],[80.0595,7.8192],[80.0525,7.8158],[80.0455,7.8225],[80.0556,7.8313],[80.0647,7.8315],[80.067,7.8361],[80.0654,7.8414],[80.0621,7.8391],[80.0608,7.8423],[80.0523,7.8372],[80.0488,7.8401],[80.0484,7.8371],[80.0377,7.8324],[80.0355,7.8329],[80.0319,7.8416],[80.025,7.841],[80.0165,7.8377],[80.0131,7.8338],[80.0057,7.8326],[80.0029,7.8272],[80.0095,7.815],[79.9965,7.8115],[79.9926,7.7935]]]}},{"type":"Feature","properties":{"n":"Rideegama","d":"Kurunegala","c":[80.5164,7.5168]},"geometry":{"type":"Polygon","coordinates":[[[80.4391,7.5071],[80.4399,7.4993],[80.4432,7.497],[80.4448,7.4905],[80.4379,7.487],[80.4349,7.48],[80.4366,7.4776],[80.4416,7.4772],[80.4461,7.4703],[80.4529,7.4713],[80.4547,7.4621],[80.4619,7.4585],[80.4604,7.4526],[80.4631,7.4482],[80.4606,7.4473],[80.4637,7.438],[80.4806,7.4239],[80.4832,7.428],[80.4934,7.4217],[80.4977,7.4295],[80.501,7.4299],[80.5177,7.4121],[80.5271,7.4119],[80.5266,7.4172],[80.5286,7.4186],[80.5359,7.4152],[80.5368,7.421],[80.5465,7.414],[80.5537,7.4171],[80.555,7.4192],[80.5517,7.4259],[80.546,7.4307],[80.5442,7.4355],[80.5449,7.439],[80.5475,7.4396],[80.5419,7.4479],[80.5387,7.4491],[80.541,7.4517],[80.553,7.4488],[80.5552,7.4562],[80.5636,7.4581],[80.5649,7.4606],[80.5624,7.4672],[80.5681,7.478],[80.5744,7.4785],[80.5689,7.4869],[80.5718,7.4916],[80.5698,7.4919],[80.5688,7.5001],[80.5718,7.5086],[80.5668,7.5108],[80.5668,7.5164],[80.5619,7.5134],[80.5637,7.5239],[80.5547,7.5379],[80.5504,7.5381],[80.5524,7.5482],[80.5505,7.5506],[80.5546,7.5637],[80.5598,7.5682],[80.5617,7.5736],[80.565,7.5724],[80.5692,7.5766],[80.5728,7.5745],[80.5721,7.5856],[80.5667,7.5929],[80.5754,7.6057],[80.5641,7.6198],[80.5636,7.631],[80.5546,7.6341],[80.5477,7.6306],[80.5368,7.6363],[80.5275,7.6323],[80.5272,7.625],[80.5226,7.6219],[80.5131,7.625],[80.5049,7.6231],[80.5008,7.6126],[80.5029,7.6088],[80.5009,7.6069],[80.5046,7.6051],[80.5019,7.6047],[80.5055,7.6036],[80.5034,7.5992],[80.4868,7.5976],[80.4838,7.5943],[80.4855,7.5898],[80.4903,7.5916],[80.4976,7.5903],[80.4914,7.5791],[80.4925,7.576],[80.4883,7.5666],[80.4895,7.561],[80.4849,7.5589],[80.4869,7.5533],[80.4736,7.5321],[80.4785,7.5307],[80.4814,7.5232],[80.473,7.5219],[80.4694,7.5176],[80.4665,7.5182],[80.4646,7.5135],[80.4507,7.5057],[80.4446,7.5038],[80.4391,7.5071]]]}},{"type":"Feature","properties":{"n":"Udubaddawa","d":"Kurunegala","c":[79.9458,7.4801]},"geometry":{"type":"Polygon","coordinates":[[[79.898,7.5568],[79.9049,7.4852],[79.9093,7.4732],[79.9218,7.4116],[79.9286,7.4153],[79.9303,7.4066],[79.937,7.4046],[79.9378,7.4075],[79.944,7.4093],[79.947,7.4183],[79.9638,7.4141],[79.9637,7.4173],[79.9739,7.4179],[79.9892,7.4266],[79.993,7.4211],[79.9922,7.427],[79.995,7.435],[79.9849,7.4402],[79.9859,7.4555],[79.9888,7.4601],[79.9842,7.4732],[79.9866,7.4827],[79.9846,7.4868],[79.9918,7.4873],[79.9878,7.4978],[79.9954,7.5088],[79.9915,7.5186],[79.9926,7.5207],[79.9891,7.5249],[79.9852,7.525],[79.982,7.5219],[79.9821,7.5188],[79.9741,7.5153],[79.9736,7.5291],[79.9781,7.5315],[79.9765,7.534],[79.9783,7.537],[79.977,7.5394],[79.9694,7.5406],[79.9657,7.5373],[79.9659,7.5332],[79.9606,7.5303],[79.9608,7.5274],[79.9554,7.5258],[79.9501,7.5278],[79.9455,7.525],[79.9457,7.5321],[79.9398,7.5321],[79.9409,7.5383],[79.938,7.5372],[79.9368,7.5418],[79.934,7.5411],[79.9323,7.5446],[79.918,7.5424],[79.9173,7.5466],[79.9086,7.5567],[79.898,7.5568]]]}},{"type":"Feature","properties":{"n":"Wariyapola","d":"Kurunegala","c":[80.237,7.662]},"geometry":{"type":"Polygon","coordinates":[[[80.2941,7.5884],[80.291,7.6121],[80.2929,7.6132],[80.2905,7.6188],[80.2928,7.6229],[80.2899,7.6285],[80.2913,7.6297],[80.289,7.6296],[80.2874,7.6337],[80.2924,7.6394],[80.2899,7.642],[80.2897,7.6575],[80.2862,7.6661],[80.2882,7.6689],[80.2919,7.6683],[80.2968,7.6562],[80.3022,7.6544],[80.3052,7.6419],[80.3112,7.6315],[80.3097,7.6063],[80.3139,7.6027],[80.3189,7.6016],[80.325,7.6056],[80.3306,7.624],[80.3362,7.6236],[80.3359,7.6208],[80.3432,7.6133],[80.3394,7.6242],[80.3417,7.6293],[80.3388,7.633],[80.3293,7.6313],[80.3163,7.6478],[80.317,7.6597],[80.3076,7.6694],[80.3055,7.676],[80.2912,7.6848],[80.2897,7.6922],[80.2798,7.6907],[80.2784,7.7015],[80.2745,7.7025],[80.2746,7.7167],[80.2665,7.7218],[80.2638,7.7269],[80.2474,7.7252],[80.246,7.7296],[80.2341,7.7354],[80.2195,7.7266],[80.2004,7.7319],[80.1799,7.73],[80.1676,7.7207],[80.1567,7.719],[80.1587,7.7155],[80.1554,7.7117],[80.1553,7.7035],[80.1509,7.6958],[80.1599,7.6995],[80.1625,7.6865],[80.1683,7.6798],[80.164,7.6665],[80.1662,7.6625],[80.169,7.6629],[80.1708,7.6562],[80.1656,7.6465],[80.1683,7.6399],[80.1733,7.6334],[80.184,7.6337],[80.194,7.6172],[80.2019,7.6184],[80.2027,7.6166],[80.2153,7.6137],[80.2181,7.6054],[80.2138,7.5976],[80.214,7.5865],[80.2192,7.5895],[80.2293,7.5904],[80.2321,7.5951],[80.2384,7.5942],[80.2399,7.5978],[80.2445,7.599],[80.25,7.5984],[80.2496,7.5941],[80.2547,7.5907],[80.2569,7.5919],[80.2558,7.5889],[80.2597,7.5897],[80.2714,7.5854],[80.2804,7.5913],[80.2895,7.5872],[80.2941,7.5884]]]}},{"type":"Feature","properties":{"n":"Weerabugedara","d":"Kurunegala","c":[80.2695,7.4655]},"geometry":{"type":"Polygon","coordinates":[[[80.2117,7.5193],[80.2171,7.5114],[80.2213,7.5098],[80.2252,7.5022],[80.2224,7.4948],[80.2261,7.4901],[80.2256,7.4863],[80.2232,7.4816],[80.2167,7.4792],[80.2183,7.4686],[80.2167,7.4649],[80.2238,7.4584],[80.2354,7.4622],[80.2493,7.4425],[80.2505,7.4333],[80.2467,7.4316],[80.247,7.4275],[80.2432,7.4276],[80.2443,7.4211],[80.2511,7.4127],[80.2621,7.4088],[80.2707,7.4124],[80.2731,7.411],[80.2761,7.4194],[80.2832,7.4139],[80.2876,7.4197],[80.2925,7.4151],[80.2998,7.4177],[80.3027,7.4254],[80.3083,7.4317],[80.3084,7.4429],[80.3185,7.4404],[80.3195,7.4363],[80.328,7.4391],[80.3245,7.4503],[80.3221,7.4519],[80.3263,7.4595],[80.3248,7.4646],[80.3175,7.4719],[80.3142,7.4818],[80.3153,7.4928],[80.3137,7.4954],[80.3088,7.4961],[80.3091,7.4992],[80.3063,7.499],[80.3052,7.5024],[80.2974,7.5011],[80.2967,7.4928],[80.291,7.4876],[80.2847,7.4906],[80.2838,7.4934],[80.2777,7.4911],[80.2737,7.4934],[80.2687,7.492],[80.2676,7.4943],[80.2632,7.4937],[80.264,7.5019],[80.259,7.5006],[80.2556,7.5119],[80.2474,7.5208],[80.2352,7.5199],[80.2348,7.522],[80.2216,7.5281],[80.2158,7.5205],[80.2117,7.5193]]]}},{"type":"Feature","properties":{"n":"Madhu","d":"Mannar","c":[80.2236,8.846]},"geometry":{"type":"Polygon","coordinates":[[[80.3379,8.9588],[80.3264,8.9594],[80.2474,8.9514],[80.1725,8.9501],[80.1721,8.9447],[80.1626,8.9465],[80.1517,8.9419],[80.147,8.9371],[80.1423,8.939],[80.1341,8.9036],[80.1387,8.8794],[80.1394,8.852],[80.1329,8.8492],[80.1072,8.8517],[80.0896,8.8484],[80.0821,8.8529],[80.0783,8.8482],[80.0792,8.8263],[80.0844,8.8243],[80.0794,8.8193],[80.0802,8.8133],[80.0881,8.8152],[80.0945,8.8126],[80.0995,8.8059],[80.0989,8.8029],[80.0955,8.8024],[80.0963,8.7981],[80.0919,8.7944],[80.0917,8.7894],[80.0799,8.7825],[80.0817,8.7657],[80.0912,8.7678],[80.0904,8.7571],[80.0925,8.7496],[80.1124,8.7415],[80.1181,8.7423],[80.1389,8.7376],[80.139,8.7043],[80.1413,8.6621],[80.1433,8.6572],[80.2331,8.6802],[80.2295,8.6858],[80.2248,8.6874],[80.2195,8.6998],[80.214,8.7015],[80.2099,8.7095],[80.2006,8.7163],[80.1921,8.7328],[80.1866,8.7342],[80.1822,8.7408],[80.1701,8.7465],[80.1667,8.7505],[80.1742,8.7602],[80.1789,8.7731],[80.1971,8.7652],[80.2053,8.7884],[80.2262,8.8267],[80.2952,8.8197],[80.3153,8.8297],[80.3351,8.8325],[80.3482,8.8389],[80.3534,8.8391],[80.3544,8.8416],[80.3615,8.8378],[80.375,8.8453],[80.3829,8.8458],[80.3986,8.8599],[80.3966,8.876],[80.383,8.9046],[80.3776,8.9364],[80.3741,8.9374],[80.3745,8.9416],[80.3648,8.9479],[80.3606,8.9467],[80.3562,8.9507],[80.3509,8.9514],[80.3475,8.956],[80.3393,8.9562],[80.3379,8.9588]]]}},{"type":"Feature","properties":{"n":"Mannar Town","d":"Mannar","c":[79.8187,9.0504]},"geometry":{"type":"MultiPolygon","coordinates":[[[[79.9179,8.9587],[79.9146,8.9575],[79.9182,8.9535],[79.9179,8.9587]]],[[[79.9155,8.961],[79.914,8.9585],[79.9179,8.959],[79.9155,8.961]]],[[[79.9013,8.9614],[79.8932,8.9609],[79.8895,8.955],[79.8994,8.9464],[79.9057,8.9581],[79.9013,8.9614]]],[[[79.9792,8.973],[79.9704,8.9722],[79.9527,8.9575],[79.9548,8.954],[79.9529,8.9542],[79.9497,8.9463],[79.952,8.9431],[79.9492,8.946],[79.9429,8.9444],[79.9432,8.9462],[79.9314,8.9449],[79.9291,8.9422],[79.9282,8.9461],[79.9217,8.9454],[79.9231,8.947],[79.9209,8.9472],[79.9195,8.9417],[79.9231,8.932],[79.9427,8.9186],[79.9506,8.9097],[79.9382,8.902],[79.9403,8.8999],[79.9379,8.8983],[79.9393,8.895],[79.9428,8.8957],[79.9448,8.8899],[79.9392,8.8827],[79.9476,8.8765],[79.9546,8.8766],[79.9544,8.8701],[79.9606,8.8679],[79.962,8.8695],[79.9668,8.8679],[79.971,8.8754],[79.9859,8.8735],[79.9904,8.869],[80.0036,8.8684],[80.0131,8.865],[80.015,8.8536],[80.0231,8.8447],[80.027,8.8481],[80.0338,8.8445],[80.0329,8.8428],[80.0504,8.8394],[80.0515,8.8371],[80.0542,8.8392],[80.0519,8.844],[80.0457,8.8496],[80.0534,8.8548],[80.0536,8.8624],[80.0594,8.867],[80.0779,8.8698],[80.0776,8.8887],[80.0247,8.8832],[80.0127,8.8944],[80.014,8.8971],[80.007,8.9038],[79.9997,8.8976],[79.9951,8.8993],[79.9941,8.9026],[79.9902,8.9028],[79.9904,8.911],[79.9829,8.9127],[79.981,8.916],[79.981,8.9312],[79.9716,8.9389],[79.9743,8.9495],[79.9723,8.9508],[79.9769,8.955],[79.9752,8.9608],[79.9792,8.973]]],[[[79.7281,9.1082],[79.6939,9.0986],[79.6972,9.0989],[79.6952,9.0956],[79.6973,9.0954],[79.6965,9.092],[79.6949,9.0917],[79.6952,9.0938],[79.6883,9.0891],[79.6905,9.0885],[79.6945,9.0927],[79.693,9.0913],[79.6949,9.0914],[79.6966,9.0803],[79.6996,9.0797],[79.6844,9.0784],[79.6856,9.0799],[79.683,9.0764],[79.6893,9.0784],[79.7044,9.0778],[79.7273,9.0736],[79.7617,9.0613],[79.7951,9.0443],[79.8187,9.0289],[79.8501,9.0033],[79.8705,8.9821],[79.8868,8.9603],[79.8812,8.9708],[79.8843,8.966],[79.8928,8.9616],[79.895,8.9651],[79.9001,8.9661],[79.8962,8.9672],[79.8936,8.9643],[79.8939,8.9671],[79.9064,8.9716],[79.9106,8.9754],[79.9244,8.9755],[79.9237,8.9829],[79.898,8.9966],[79.8834,9.0098],[79.8746,9.0201],[79.8691,9.0314],[79.8717,9.0352],[79.9025,9.0221],[79.9161,9.0103],[79.9244,9.0092],[79.9245,9.0111],[79.9078,9.0226],[79.8993,9.0366],[79.8806,9.0536],[79.8891,9.0456],[79.8891,9.048],[79.8593,9.0729],[79.8462,9.0796],[79.7897,9.098],[79.7281,9.1082]]]]}},{"type":"Feature","properties":{"n":"Manthai West","d":"Mannar","c":[80.1096,9.027]},"geometry":{"type":"Polygon","coordinates":[[[80.1792,9.2298],[80.1469,9.2109],[80.1166,9.2116],[80.1086,9.1977],[80.1055,9.1968],[80.106,9.1996],[80.1041,9.1976],[80.1055,9.2021],[80.1033,9.1899],[80.1027,9.194],[80.1044,9.1827],[80.1013,9.1792],[80.0974,9.1589],[80.0946,9.1539],[80.0837,9.151],[80.0777,9.1392],[80.0806,9.1355],[80.0775,9.1336],[80.0778,9.1283],[80.0739,9.126],[80.0762,9.121],[80.072,9.1063],[80.0742,9.1049],[80.0722,9.1035],[80.0763,9.0978],[80.0722,9.0985],[80.0713,9.0923],[80.0692,9.0915],[80.0679,9.0869],[80.0704,9.0812],[80.0666,9.066],[80.0555,9.0533],[80.0487,9.0406],[80.046,9.0298],[80.0362,9.0193],[80.0393,9.016],[80.0336,9.0143],[80.0256,9.0168],[80.011,9.0114],[80.002,9.0008],[79.9888,8.9952],[79.9897,8.9907],[79.9865,8.9793],[79.9792,8.973],[79.9752,8.9608],[79.9769,8.955],[79.9723,8.9508],[79.9743,8.9495],[79.9716,8.9389],[79.981,8.9312],[79.981,8.916],[79.9829,8.9127],[79.9904,8.911],[79.9902,8.9028],[79.9941,8.9026],[79.9951,8.8993],[79.9997,8.8976],[80.007,8.9038],[80.014,8.8971],[80.0127,8.8944],[80.0247,8.8832],[80.0776,8.8887],[80.0779,8.8698],[80.0594,8.867],[80.0536,8.8624],[80.0534,8.8548],[80.0457,8.8496],[80.0542,8.8392],[80.0652,8.8485],[80.0783,8.8482],[80.0821,8.8529],[80.0896,8.8484],[80.1072,8.8517],[80.1329,8.8492],[80.1394,8.852],[80.1387,8.8794],[80.1341,8.9036],[80.1406,8.9373],[80.1423,8.939],[80.147,8.9371],[80.1517,8.9419],[80.1626,8.9465],[80.1721,8.9447],[80.1759,8.9572],[80.1757,8.9725],[80.188,8.9792],[80.1869,8.9848],[80.1741,8.9964],[80.1928,9.0457],[80.2043,9.0531],[80.2178,9.0552],[80.214,9.0971],[80.2237,9.113],[80.2152,9.142],[80.1934,9.1758],[80.1897,9.2371],[80.1792,9.2298]]]}},{"type":"Feature","properties":{"n":"Musali","d":"Mannar","c":[80.0183,8.6765]},"geometry":{"type":"Polygon","coordinates":[[[80.0799,8.7825],[80.0732,8.7872],[80.0609,8.7827],[80.0398,8.789],[80.0324,8.7855],[80.029,8.7901],[80.0317,8.7959],[80.029,8.7991],[80.0019,8.7985],[79.9789,8.7917],[79.9561,8.8064],[79.9476,8.8035],[79.9387,8.805],[79.9258,8.8009],[79.9214,8.7966],[79.9316,8.7819],[79.9396,8.7587],[79.9575,8.7251],[79.9473,8.7086],[79.949,8.6929],[79.9466,8.6898],[79.9501,8.6801],[79.9466,8.6648],[79.9417,8.6605],[79.9406,8.6527],[79.9443,8.6297],[79.9389,8.6166],[79.9315,8.6124],[79.9163,8.589],[79.9184,8.5667],[79.9256,8.5642],[79.9307,8.5577],[79.9346,8.5559],[79.9451,8.5603],[79.9534,8.552],[79.9645,8.5501],[79.9752,8.5527],[79.9874,8.5431],[79.9971,8.5459],[80.003,8.5422],[80.0057,8.5358],[80.011,8.5331],[80.0385,8.5243],[80.0498,8.5249],[80.0539,8.6392],[80.0419,8.6744],[80.059,8.6657],[80.0605,8.6618],[80.0678,8.6612],[80.0773,8.6542],[80.0835,8.657],[80.0921,8.6528],[80.0983,8.6543],[80.1031,8.6507],[80.1083,8.6519],[80.1128,8.6494],[80.1433,8.6572],[80.1413,8.6621],[80.139,8.7043],[80.1389,8.7376],[80.1181,8.7423],[80.1124,8.7415],[80.0925,8.7496],[80.0904,8.7571],[80.0912,8.7678],[80.0817,8.7657],[80.0799,8.7825]]]}},{"type":"Feature","properties":{"n":"Nanaddan","d":"Mannar","c":[79.9931,8.8343]},"geometry":{"type":"MultiPolygon","coordinates":[[[[79.9144,8.8206],[79.9137,8.8182],[79.9158,8.8181],[79.9144,8.8206]]],[[[79.9146,8.9211],[79.9228,8.907],[79.9236,8.9091],[79.9207,8.9098],[79.9202,8.9128],[79.9237,8.9113],[79.9175,8.9146],[79.9195,8.9148],[79.9164,8.9159],[79.9179,8.9175],[79.9146,8.9211]]],[[[80.0783,8.8482],[80.0652,8.8485],[80.0515,8.8371],[80.0504,8.8394],[80.0329,8.8428],[80.0338,8.8445],[80.027,8.8481],[80.0231,8.8447],[80.015,8.8536],[80.0131,8.865],[80.0036,8.8684],[79.9904,8.869],[79.9859,8.8735],[79.971,8.8754],[79.9668,8.8679],[79.9544,8.8701],[79.9546,8.8766],[79.9476,8.8765],[79.9392,8.8827],[79.9448,8.8899],[79.9428,8.8957],[79.9393,8.895],[79.9379,8.8983],[79.9403,8.8999],[79.9382,8.902],[79.9506,8.9097],[79.9427,8.9186],[79.9324,8.9241],[79.9025,8.948],[79.9007,8.9426],[79.9037,8.9389],[79.9119,8.9411],[79.9089,8.939],[79.9083,8.9319],[79.9122,8.9227],[79.9146,8.9228],[79.9095,8.9276],[79.9092,8.9298],[79.9112,8.9289],[79.909,8.9337],[79.9112,8.9363],[79.9093,8.9382],[79.9167,8.9344],[79.9145,8.9337],[79.9185,8.9293],[79.9155,8.9267],[79.9205,8.9222],[79.9197,8.9174],[79.9256,8.9099],[79.928,8.9116],[79.9302,8.9017],[79.9257,8.9026],[79.9274,8.9042],[79.9242,8.9033],[79.9249,8.9007],[79.931,8.8981],[79.9264,8.8969],[79.9238,8.9021],[79.9279,8.8874],[79.9274,8.8735],[79.915,8.8292],[79.9175,8.8372],[79.9189,8.8361],[79.9183,8.8391],[79.9209,8.8325],[79.9187,8.8354],[79.9177,8.8329],[79.9159,8.8215],[79.9186,8.82],[79.9182,8.8178],[79.9148,8.8143],[79.913,8.8219],[79.911,8.8203],[79.9143,8.813],[79.9197,8.8114],[79.9175,8.8106],[79.9192,8.8068],[79.9155,8.8059],[79.9141,8.8086],[79.9214,8.7966],[79.9258,8.8009],[79.9387,8.805],[79.9476,8.8035],[79.9561,8.8064],[79.9789,8.7917],[80.0019,8.7985],[80.029,8.7991],[80.0317,8.7959],[80.029,8.7901],[80.0324,8.7855],[80.0398,8.789],[80.0609,8.7827],[80.0732,8.7872],[80.0799,8.7825],[80.0917,8.7894],[80.0919,8.7944],[80.0963,8.7981],[80.0955,8.8024],[80.0989,8.8029],[80.0995,8.8059],[80.0945,8.8126],[80.0881,8.8152],[80.0802,8.8133],[80.0794,8.8193],[80.0844,8.8243],[80.0792,8.8263],[80.0783,8.8482]]],[[[79.9022,8.9372],[79.8879,8.9572],[79.8881,8.954],[79.9234,8.9021],[79.9196,8.9115],[79.909,8.9258],[79.907,8.9344],[79.9022,8.9372]]]]}},{"type":"Feature","properties":{"n":"Ambanganga","d":"Matale","c":[80.6766,7.5614]},"geometry":{"type":"Polygon","coordinates":[[[80.712,7.6029],[80.6939,7.5981],[80.6824,7.5991],[80.6723,7.5942],[80.6701,7.6099],[80.6638,7.6118],[80.6621,7.6002],[80.6643,7.5923],[80.6578,7.5862],[80.6579,7.5837],[80.6508,7.5844],[80.6533,7.58],[80.6483,7.5677],[80.643,7.5617],[80.6382,7.5455],[80.642,7.538],[80.6397,7.5354],[80.6447,7.5332],[80.6505,7.5136],[80.6588,7.5144],[80.6607,7.5248],[80.6663,7.5306],[80.668,7.5278],[80.6663,7.5243],[80.6799,7.5247],[80.6841,7.5195],[80.6892,7.5221],[80.6922,7.5242],[80.6884,7.5395],[80.6912,7.5417],[80.6911,7.5379],[80.6962,7.5408],[80.6987,7.5344],[80.7014,7.5345],[80.7094,7.5495],[80.7073,7.5638],[80.7122,7.579],[80.712,7.6029]]]}},{"type":"Feature","properties":{"n":"Dambulla","d":"Matale","c":[80.7175,7.8756]},"geometry":{"type":"Polygon","coordinates":[[[80.8306,7.9704],[80.8212,7.97],[80.8169,7.9753],[80.817,7.9805],[80.8118,7.9825],[80.7985,7.9765],[80.7995,7.9629],[80.7976,7.9579],[80.7842,7.9616],[80.7756,7.9668],[80.7766,7.9956],[80.7632,8.0007],[80.7536,8.0112],[80.7425,8.0045],[80.7232,7.9995],[80.7099,7.9899],[80.7033,7.9903],[80.6798,7.9553],[80.6652,7.9612],[80.6556,7.9591],[80.6544,7.9476],[80.6506,7.9435],[80.6519,7.9135],[80.6302,7.9],[80.6328,7.8946],[80.636,7.8939],[80.6362,7.8881],[80.6211,7.8836],[80.6199,7.8787],[80.6216,7.8702],[80.6196,7.8677],[80.619,7.8483],[80.6278,7.8484],[80.6333,7.8436],[80.6327,7.8415],[80.6368,7.8403],[80.6376,7.8352],[80.6356,7.8324],[80.6381,7.8279],[80.6289,7.8203],[80.6292,7.8166],[80.6218,7.8149],[80.621,7.8053],[80.6106,7.8021],[80.6108,7.7933],[80.6132,7.7916],[80.6128,7.787],[80.616,7.7815],[80.6133,7.7769],[80.6053,7.7763],[80.6077,7.7667],[80.6059,7.7563],[80.6106,7.7517],[80.6168,7.7515],[80.6188,7.7544],[80.6179,7.7635],[80.6202,7.7635],[80.6224,7.7686],[80.6275,7.7625],[80.6344,7.7633],[80.6422,7.7464],[80.6645,7.7409],[80.6714,7.7555],[80.6784,7.7408],[80.6795,7.7423],[80.6868,7.7371],[80.6888,7.7402],[80.6953,7.7411],[80.7078,7.7732],[80.7159,7.7784],[80.7201,7.7872],[80.7242,7.7873],[80.7313,7.7927],[80.7665,7.8075],[80.768,7.8021],[80.7747,7.8014],[80.7788,7.8056],[80.7819,7.8038],[80.7832,7.7992],[80.7943,7.804],[80.7914,7.8183],[80.7952,7.8181],[80.8013,7.8222],[80.8039,7.8316],[80.8028,7.8415],[80.808,7.8528],[80.8066,7.8607],[80.8102,7.8876],[80.8151,7.9046],[80.8157,7.9242],[80.8275,7.9425],[80.8304,7.9546],[80.8386,7.9595],[80.8507,7.9623],[80.8383,7.9706],[80.8306,7.9704]]]}},{"type":"Feature","properties":{"n":"Galewela","d":"Matale","c":[80.5685,7.7785]},"geometry":{"type":"Polygon","coordinates":[[[80.6196,7.8677],[80.6139,7.8668],[80.612,7.8603],[80.6059,7.8611],[80.5983,7.8552],[80.5924,7.8573],[80.5887,7.8671],[80.5723,7.8688],[80.5617,7.8484],[80.524,7.8268],[80.5001,7.8268],[80.4986,7.8136],[80.4937,7.8093],[80.4959,7.7831],[80.5001,7.781],[80.5024,7.7746],[80.514,7.7749],[80.5175,7.7724],[80.5189,7.761],[80.5273,7.7443],[80.5315,7.7437],[80.5351,7.7392],[80.5344,7.7093],[80.5428,7.709],[80.5474,7.7046],[80.5454,7.6979],[80.5482,7.6861],[80.5472,7.679],[80.5518,7.6689],[80.5546,7.669],[80.5552,7.6724],[80.5816,7.671],[80.5797,7.6732],[80.5824,7.6813],[80.5818,7.6863],[80.5795,7.6877],[80.581,7.7003],[80.597,7.6969],[80.5961,7.7033],[80.5979,7.7053],[80.5952,7.7096],[80.6045,7.7128],[80.6153,7.7119],[80.6153,7.7186],[80.6199,7.7249],[80.6201,7.7449],[80.6059,7.7563],[80.6077,7.7667],[80.6053,7.7763],[80.6133,7.7769],[80.616,7.7815],[80.6128,7.787],[80.6132,7.7916],[80.6108,7.7933],[80.6106,7.8021],[80.621,7.8053],[80.6218,7.8149],[80.6292,7.8166],[80.6289,7.8203],[80.6381,7.8279],[80.6356,7.8324],[80.6376,7.8352],[80.6368,7.8403],[80.6327,7.8415],[80.6333,7.8436],[80.6278,7.8484],[80.619,7.8483],[80.6196,7.8677]]]}},{"type":"Feature","properties":{"n":"Laggala","d":"Matale","c":[80.8061,7.5554]},"geometry":{"type":"Polygon","coordinates":[[[80.7094,7.5495],[80.7128,7.5462],[80.7219,7.5459],[80.7262,7.5431],[80.7315,7.534],[80.7329,7.5224],[80.7359,7.5216],[80.7367,7.4969],[80.734,7.4866],[80.7272,7.4808],[80.7279,7.4747],[80.7309,7.4719],[80.7305,7.4643],[80.7367,7.4644],[80.7501,7.4485],[80.7553,7.4492],[80.7613,7.4408],[80.7733,7.4352],[80.7763,7.4294],[80.7839,7.4293],[80.7876,7.4265],[80.8017,7.4389],[80.8074,7.4401],[80.8059,7.4478],[80.8191,7.461],[80.8307,7.4594],[80.84,7.4631],[80.8497,7.4725],[80.8605,7.4747],[80.8782,7.4641],[80.8774,7.4666],[80.8833,7.4695],[80.8835,7.4723],[80.8929,7.4734],[80.8875,7.4827],[80.8799,7.5146],[80.8774,7.5597],[80.873,7.5886],[80.8682,7.5893],[80.8735,7.6117],[80.8722,7.6472],[80.8748,7.6826],[80.8646,7.6902],[80.8515,7.6886],[80.8498,7.6949],[80.8527,7.7009],[80.8506,7.7015],[80.8442,7.6929],[80.8397,7.692],[80.8355,7.6803],[80.8229,7.6776],[80.8186,7.6788],[80.8063,7.6709],[80.8029,7.6787],[80.7901,7.6781],[80.7897,7.6602],[80.785,7.6442],[80.7859,7.6241],[80.7896,7.6145],[80.7793,7.6164],[80.7483,7.6113],[80.7476,7.6022],[80.7331,7.5952],[80.7298,7.5964],[80.728,7.6026],[80.7203,7.6039],[80.7161,7.6012],[80.712,7.6029],[80.7122,7.579],[80.7073,7.5638],[80.7094,7.5495]]]}},{"type":"Feature","properties":{"n":"Matale","d":"Matale","c":[80.6281,7.5403]},"geometry":{"type":"Polygon","coordinates":[[[80.6638,7.6118],[80.6627,7.6231],[80.6548,7.623],[80.6526,7.626],[80.6621,7.6306],[80.6584,7.6363],[80.6602,7.6415],[80.6448,7.6333],[80.6468,7.6314],[80.6444,7.6278],[80.6361,7.6273],[80.6343,7.6242],[80.6266,7.6274],[80.6271,7.6251],[80.6227,7.6208],[80.6217,7.6112],[80.6276,7.6094],[80.63,7.6053],[80.6372,7.6041],[80.6381,7.6009],[80.6358,7.5834],[80.6327,7.5794],[80.6243,7.5786],[80.6169,7.582],[80.6149,7.565],[80.6067,7.5555],[80.6099,7.5535],[80.6049,7.5381],[80.6055,7.5096],[80.6075,7.5086],[80.6041,7.5022],[80.6047,7.4873],[80.6006,7.4801],[80.5967,7.4657],[80.5975,7.4612],[80.5931,7.4609],[80.5926,7.4581],[80.6053,7.4452],[80.61,7.4453],[80.6137,7.4494],[80.618,7.4453],[80.6256,7.4477],[80.6242,7.4523],[80.6265,7.4553],[80.6242,7.4616],[80.6272,7.4635],[80.627,7.4685],[80.6308,7.4707],[80.6308,7.4848],[80.634,7.4898],[80.634,7.5075],[80.6382,7.5075],[80.6358,7.5097],[80.638,7.5116],[80.6368,7.5136],[80.6438,7.5187],[80.6418,7.5238],[80.6458,7.5272],[80.6447,7.5332],[80.6397,7.5354],[80.642,7.538],[80.6382,7.5455],[80.643,7.5617],[80.6483,7.5677],[80.6533,7.58],[80.6508,7.5844],[80.6579,7.5837],[80.6578,7.5862],[80.6643,7.5923],[80.6621,7.6002],[80.6638,7.6118]]]}},{"type":"Feature","properties":{"n":"Naula","d":"Matale","c":[80.7059,7.6884]},"geometry":{"type":"Polygon","coordinates":[[[80.712,7.6029],[80.7161,7.6012],[80.7203,7.6039],[80.728,7.6026],[80.7298,7.5964],[80.7331,7.5952],[80.7476,7.6022],[80.7483,7.6113],[80.7793,7.6164],[80.7896,7.6145],[80.7859,7.6241],[80.785,7.6442],[80.7897,7.6602],[80.7901,7.6781],[80.7781,7.6781],[80.7683,7.6913],[80.7705,7.694],[80.7719,7.7059],[80.7614,7.7342],[80.7616,7.7772],[80.7637,7.7853],[80.7594,7.7917],[80.768,7.8021],[80.7679,7.8073],[80.7313,7.7927],[80.7242,7.7873],[80.7201,7.7872],[80.7159,7.7784],[80.7078,7.7732],[80.6953,7.7411],[80.6888,7.7402],[80.6868,7.7371],[80.6795,7.7423],[80.6784,7.7408],[80.6714,7.7555],[80.6645,7.7409],[80.6422,7.7464],[80.6344,7.7633],[80.6275,7.7625],[80.6224,7.7686],[80.6202,7.7635],[80.6179,7.7635],[80.6188,7.7544],[80.6147,7.7511],[80.6155,7.7476],[80.6201,7.7449],[80.6209,7.7339],[80.6138,7.7075],[80.615,7.698],[80.6171,7.6959],[80.616,7.6908],[80.6248,7.6845],[80.626,7.6729],[80.6305,7.6675],[80.6282,7.6409],[80.6398,7.6434],[80.6394,7.6416],[80.645,7.642],[80.6504,7.6372],[80.6558,7.6378],[80.6577,7.6413],[80.6602,7.6415],[80.6584,7.6363],[80.6621,7.6306],[80.6526,7.626],[80.6548,7.623],[80.6627,7.6231],[80.6638,7.6118],[80.6701,7.6099],[80.6723,7.5942],[80.6824,7.5991],[80.6939,7.5981],[80.712,7.6029]]]}},{"type":"Feature","properties":{"n":"Pallepola","d":"Matale","c":[80.5976,7.6469]},"geometry":{"type":"Polygon","coordinates":[[[80.5518,7.6689],[80.55,7.6611],[80.5438,7.6617],[80.5441,7.6544],[80.5469,7.6537],[80.5467,7.6489],[80.5494,7.6484],[80.5495,7.6411],[80.5529,7.6345],[80.5636,7.631],[80.5658,7.6175],[80.575,7.6187],[80.5797,7.6165],[80.5751,7.6106],[80.5754,7.604],[80.5828,7.6002],[80.5971,7.6021],[80.5987,7.5962],[80.6072,7.5926],[80.6173,7.5932],[80.6241,7.5903],[80.6277,7.5926],[80.6368,7.5904],[80.6372,7.6041],[80.63,7.6053],[80.6276,7.6094],[80.6217,7.6112],[80.6227,7.6208],[80.6271,7.6251],[80.6266,7.6274],[80.6343,7.6242],[80.6361,7.6273],[80.6444,7.6278],[80.6468,7.6314],[80.6448,7.6333],[80.6504,7.6372],[80.645,7.642],[80.6394,7.6416],[80.6398,7.6434],[80.6282,7.6409],[80.6305,7.6675],[80.626,7.6729],[80.6248,7.6845],[80.616,7.6908],[80.6171,7.6959],[80.615,7.698],[80.6138,7.7075],[80.6153,7.7119],[80.6045,7.7128],[80.5952,7.7096],[80.5979,7.7053],[80.5961,7.7033],[80.597,7.6969],[80.581,7.7003],[80.5795,7.6877],[80.5818,7.6863],[80.5824,7.6813],[80.5797,7.6732],[80.5816,7.671],[80.5552,7.6724],[80.5546,7.669],[80.5518,7.6689]]]}},{"type":"Feature","properties":{"n":"Rattota","d":"Matale","c":[80.6833,7.486]},"geometry":{"type":"Polygon","coordinates":[[[80.6458,7.5272],[80.6418,7.5238],[80.6438,7.5187],[80.6368,7.5136],[80.638,7.5116],[80.6358,7.5097],[80.6382,7.5075],[80.634,7.5075],[80.634,7.4898],[80.6308,7.4848],[80.6308,7.4707],[80.6366,7.4669],[80.6365,7.4635],[80.6395,7.4616],[80.6387,7.4582],[80.6442,7.4546],[80.6421,7.4464],[80.6439,7.4342],[80.6412,7.4279],[80.6453,7.4288],[80.6473,7.4329],[80.6454,7.4474],[80.6467,7.4567],[80.6502,7.4562],[80.6529,7.4515],[80.6506,7.4409],[80.6526,7.4352],[80.6481,7.4307],[80.6497,7.4261],[80.6543,7.4222],[80.6645,7.4272],[80.6711,7.4189],[80.6743,7.4195],[80.6785,7.4241],[80.6843,7.4231],[80.6862,7.4265],[80.6846,7.4291],[80.6958,7.4352],[80.696,7.4393],[80.7024,7.4478],[80.7001,7.4572],[80.7017,7.4606],[80.7279,7.4747],[80.7272,7.4808],[80.734,7.4866],[80.7367,7.4969],[80.7359,7.5216],[80.7329,7.5224],[80.7315,7.534],[80.7262,7.5431],[80.7219,7.5459],[80.7128,7.5462],[80.7094,7.5495],[80.7014,7.5345],[80.6987,7.5344],[80.6962,7.5408],[80.6945,7.5382],[80.6936,7.5402],[80.6911,7.5379],[80.6912,7.5417],[80.6884,7.5395],[80.6922,7.5242],[80.6841,7.5195],[80.6799,7.5247],[80.6663,7.5243],[80.668,7.5278],[80.6663,7.5306],[80.6607,7.5248],[80.6588,7.5144],[80.6505,7.5136],[80.6498,7.5205],[80.6462,7.5231],[80.6458,7.5272]]]}},{"type":"Feature","properties":{"n":"Ukuwela","d":"Matale","c":[80.6366,7.4294]},"geometry":{"type":"Polygon","coordinates":[[[80.6544,7.3845],[80.6688,7.384],[80.6866,7.3876],[80.6971,7.3865],[80.6984,7.3919],[80.7054,7.3959],[80.7051,7.4151],[80.7082,7.4205],[80.7075,7.4243],[80.7123,7.4245],[80.71,7.4343],[80.7048,7.4398],[80.7024,7.4478],[80.696,7.4393],[80.6958,7.4352],[80.6846,7.4291],[80.6862,7.4265],[80.6843,7.4231],[80.6785,7.4241],[80.6711,7.4189],[80.6645,7.4272],[80.6543,7.4222],[80.6481,7.4307],[80.6526,7.4352],[80.6506,7.4409],[80.6529,7.4515],[80.6502,7.4562],[80.6467,7.4567],[80.6454,7.4474],[80.6473,7.4329],[80.6453,7.4288],[80.6412,7.4279],[80.6439,7.4342],[80.6421,7.4464],[80.6442,7.4546],[80.6387,7.4582],[80.6395,7.4616],[80.6329,7.4702],[80.627,7.4685],[80.6272,7.4635],[80.6242,7.4616],[80.6265,7.4553],[80.6242,7.4523],[80.6256,7.4477],[80.618,7.4453],[80.6137,7.4494],[80.61,7.4453],[80.6053,7.4452],[80.5926,7.4581],[80.5931,7.4609],[80.5975,7.4612],[80.5967,7.4657],[80.6033,7.4845],[80.5985,7.4899],[80.593,7.4863],[80.5814,7.4869],[80.5791,7.4836],[80.5727,7.483],[80.5744,7.4785],[80.5681,7.478],[80.5624,7.4672],[80.5649,7.4606],[80.5636,7.4581],[80.5678,7.4564],[80.5703,7.4515],[80.5714,7.4402],[80.5772,7.4384],[80.584,7.4301],[80.5906,7.4305],[80.5983,7.4212],[80.614,7.4136],[80.622,7.4031],[80.6383,7.398],[80.6544,7.3845]]]}},{"type":"Feature","properties":{"n":"Wilgamuwa","d":"Matale","c":[80.9272,7.6027]},"geometry":{"type":"Polygon","coordinates":[[[80.9865,7.7202],[80.9781,7.7156],[80.962,7.7162],[80.9487,7.712],[80.9394,7.7135],[80.9371,7.71],[80.9262,7.7083],[80.9099,7.7114],[80.9032,7.7159],[80.8826,7.714],[80.8805,7.6977],[80.8733,7.6761],[80.8735,7.6117],[80.8682,7.5893],[80.873,7.5886],[80.8774,7.5597],[80.8799,7.5146],[80.8875,7.4827],[80.8929,7.4734],[80.8971,7.4742],[80.9004,7.4635],[80.9049,7.4576],[80.9074,7.4645],[80.9159,7.462],[80.9208,7.4747],[80.9246,7.4749],[80.9257,7.4798],[80.9299,7.4808],[80.9294,7.4893],[80.9393,7.4893],[80.941,7.4868],[80.954,7.4898],[80.9573,7.4875],[80.9719,7.4881],[80.9687,7.5326],[80.9695,7.5688],[80.9755,7.5867],[80.9738,7.5977],[80.9777,7.6122],[80.9775,7.6213],[80.9852,7.6464],[80.9947,7.6594],[80.9927,7.6747],[80.986,7.6884],[80.9904,7.6978],[80.9865,7.7202]]]}},{"type":"Feature","properties":{"n":"Yatawatta","d":"Matale","c":[80.587,7.5477]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.6368,7.5904],[80.6277,7.5926],[80.6241,7.5903],[80.6173,7.5932],[80.6072,7.5926],[80.5987,7.5962],[80.5971,7.6021],[80.5828,7.6002],[80.5754,7.604],[80.5667,7.5929],[80.5721,7.5856],[80.5728,7.5745],[80.5692,7.5766],[80.565,7.5724],[80.5617,7.5736],[80.5598,7.5682],[80.5546,7.5637],[80.5505,7.5506],[80.5524,7.5482],[80.5504,7.5381],[80.5547,7.5379],[80.5637,7.5239],[80.5619,7.5134],[80.5668,7.5164],[80.5668,7.5108],[80.5718,7.5086],[80.5688,7.5001],[80.5698,7.4919],[80.5718,7.4916],[80.5689,7.4869],[80.5727,7.483],[80.5791,7.4836],[80.5814,7.4869],[80.593,7.4863],[80.5985,7.4899],[80.6033,7.4845],[80.6041,7.5022],[80.6075,7.5086],[80.6055,7.5096],[80.6049,7.5381],[80.6099,7.5535],[80.6067,7.5555],[80.6149,7.565],[80.6169,7.582],[80.6243,7.5786],[80.6327,7.5794],[80.6358,7.5834],[80.6368,7.5904]]],[[[80.5658,7.6175],[80.5754,7.6057],[80.5751,7.6106],[80.5797,7.6165],[80.575,7.6187],[80.5658,7.6175]]]]}},{"type":"Feature","properties":{"n":"Akuressa","d":"Matara","c":[80.4383,6.1349]},"geometry":{"type":"Polygon","coordinates":[[[80.4382,6.2263],[80.436,6.2267],[80.4283,6.2159],[80.4229,6.2132],[80.419,6.213],[80.4105,6.2178],[80.4045,6.2161],[80.3895,6.2214],[80.3841,6.2195],[80.3956,6.2058],[80.4007,6.1916],[80.3957,6.1882],[80.3856,6.1868],[80.3889,6.18],[80.3878,6.1768],[80.3937,6.1707],[80.3892,6.1663],[80.383,6.1672],[80.3801,6.149],[80.3853,6.1339],[80.3994,6.1264],[80.404,6.1126],[80.4194,6.1094],[80.4197,6.104],[80.4352,6.094],[80.4337,6.0883],[80.4251,6.0843],[80.4102,6.0708],[80.4166,6.0637],[80.4223,6.0632],[80.4238,6.0651],[80.4322,6.0596],[80.4351,6.0563],[80.4327,6.0511],[80.4372,6.0451],[80.4471,6.0428],[80.457,6.0465],[80.4597,6.0444],[80.4606,6.0469],[80.4651,6.0478],[80.4665,6.045],[80.4733,6.0474],[80.4717,6.052],[80.4749,6.0603],[80.4722,6.0608],[80.4725,6.0626],[80.4757,6.0614],[80.4824,6.065],[80.4858,6.0628],[80.4855,6.06],[80.4915,6.0593],[80.4955,6.0619],[80.499,6.0569],[80.4986,6.0533],[80.5068,6.0607],[80.4921,6.0688],[80.4933,6.0745],[80.4909,6.0738],[80.4896,6.0817],[80.4863,6.085],[80.4833,6.0826],[80.4795,6.0857],[80.4787,6.0909],[80.4759,6.0886],[80.4749,6.0901],[80.4769,6.1002],[80.4745,6.1035],[80.4803,6.1122],[80.478,6.1207],[80.4871,6.1279],[80.4828,6.1329],[80.4842,6.1393],[80.4803,6.1426],[80.4855,6.1574],[80.4823,6.1588],[80.478,6.1661],[80.4794,6.17],[80.4718,6.1753],[80.4735,6.1783],[80.469,6.1827],[80.4653,6.1806],[80.4601,6.1826],[80.4572,6.1778],[80.4504,6.1771],[80.4488,6.1965],[80.4519,6.2005],[80.448,6.206],[80.4497,6.2156],[80.446,6.2209],[80.4451,6.2187],[80.4409,6.2216],[80.4382,6.2263]]]}},{"type":"Feature","properties":{"n":"Athuraliya","d":"Matara","c":[80.5072,6.1166]},"geometry":{"type":"Polygon","coordinates":[[[80.505,6.0582],[80.507,6.0554],[80.5162,6.0584],[80.5197,6.0626],[80.5197,6.0718],[80.525,6.0771],[80.5298,6.0773],[80.5308,6.0841],[80.5385,6.0863],[80.5388,6.0887],[80.5355,6.0875],[80.5355,6.0931],[80.5291,6.0916],[80.5363,6.0937],[80.5327,6.0959],[80.5352,6.1004],[80.5424,6.098],[80.5405,6.1052],[80.543,6.1065],[80.5332,6.1129],[80.5332,6.124],[80.5309,6.1244],[80.5329,6.1375],[80.5311,6.1396],[80.5328,6.1408],[80.5271,6.1458],[80.5268,6.1641],[80.5102,6.1746],[80.4955,6.1757],[80.4934,6.1621],[80.4891,6.1599],[80.4837,6.1621],[80.4823,6.1588],[80.4855,6.1574],[80.4803,6.1426],[80.4842,6.1393],[80.4828,6.1329],[80.4871,6.1279],[80.478,6.1207],[80.4803,6.1122],[80.4745,6.1035],[80.4769,6.1002],[80.4749,6.0901],[80.4759,6.0886],[80.4787,6.0909],[80.4795,6.0857],[80.4833,6.0826],[80.4863,6.085],[80.4896,6.0817],[80.4909,6.0738],[80.4933,6.0745],[80.4921,6.0688],[80.5068,6.0607],[80.505,6.0582]]]}},{"type":"Feature","properties":{"n":"Devinuwara","d":"Matara","c":[80.5961,5.9426]},"geometry":{"type":"Polygon","coordinates":[[[80.6094,6.0261],[80.5931,6.0194],[80.5952,6.0156],[80.589,6.0173],[80.5893,6.013],[80.5939,6.0086],[80.6,6.0125],[80.602,6.0107],[80.6022,6.0129],[80.6051,6.0092],[80.5995,6.0097],[80.5986,6.0066],[80.5945,6.0061],[80.5908,5.9962],[80.5959,5.9967],[80.5967,5.9945],[80.5942,5.9907],[80.5943,5.9836],[80.6052,5.9825],[80.6101,5.988],[80.628,5.9844],[80.6263,5.9753],[80.62,5.9726],[80.6244,5.9728],[80.6244,5.967],[80.6139,5.9629],[80.6169,5.9613],[80.6173,5.9569],[80.6134,5.9586],[80.6106,5.9654],[80.6067,5.9632],[80.6058,5.9665],[80.6034,5.9664],[80.6012,5.9612],[80.5993,5.9618],[80.6026,5.9557],[80.6009,5.9549],[80.602,5.9512],[80.5975,5.9479],[80.5961,5.9426],[80.5913,5.9459],[80.5793,5.9413],[80.5798,5.9376],[80.5833,5.9353],[80.5806,5.9305],[80.5828,5.926],[80.5799,5.9228],[80.5818,5.9194],[80.59,5.9185],[80.593,5.9258],[80.5953,5.9242],[80.611,5.9299],[80.6113,5.9325],[80.6137,5.9299],[80.618,5.9322],[80.6152,5.9368],[80.6193,5.9387],[80.6189,5.943],[80.6212,5.9454],[80.6312,5.9457],[80.629,5.9493],[80.629,5.9649],[80.6319,5.9645],[80.6294,5.9694],[80.6372,5.9717],[80.6372,5.978],[80.6473,5.9757],[80.6432,5.9819],[80.6452,5.9943],[80.6436,5.998],[80.6387,5.9988],[80.6392,6.0029],[80.6307,6.0064],[80.6306,6.0106],[80.6234,6.0143],[80.6286,6.0212],[80.6193,6.0258],[80.6127,6.0243],[80.6094,6.0261]]]}},{"type":"Feature","properties":{"n":"Dikwella","d":"Matara","c":[80.6714,5.9845]},"geometry":{"type":"Polygon","coordinates":[[[80.6638,6.0243],[80.6535,6.0147],[80.6435,6.0181],[80.6379,6.014],[80.6411,6.0043],[80.6387,5.9988],[80.6436,5.998],[80.6452,5.9943],[80.6432,5.9819],[80.6473,5.9757],[80.6372,5.978],[80.6372,5.9717],[80.6294,5.9694],[80.6319,5.9645],[80.629,5.9649],[80.629,5.9493],[80.6312,5.9457],[80.6342,5.9477],[80.6351,5.9446],[80.6375,5.9455],[80.6369,5.9434],[80.64,5.9446],[80.6405,5.9507],[80.6474,5.9547],[80.672,5.9594],[80.676,5.9579],[80.6828,5.9596],[80.6842,5.9578],[80.6871,5.9623],[80.6954,5.9632],[80.6981,5.961],[80.6971,5.9594],[80.6998,5.9587],[80.7046,5.9589],[80.706,5.9623],[80.7079,5.9593],[80.72,5.9596],[80.7155,5.9646],[80.721,5.9733],[80.72,5.9767],[80.7231,5.9793],[80.7015,5.9938],[80.6957,5.9937],[80.6906,5.9886],[80.6871,5.9924],[80.6846,6.006],[80.6969,6.0172],[80.6928,6.0231],[80.6638,6.0243]]]}},{"type":"Feature","properties":{"n":"Hakmana","d":"Matara","c":[80.647,6.0945]},"geometry":{"type":"Polygon","coordinates":[[[80.6796,6.0944],[80.6772,6.1017],[80.6812,6.1074],[80.693,6.1138],[80.6902,6.1196],[80.6912,6.1231],[80.6609,6.1181],[80.6575,6.1281],[80.6499,6.1328],[80.6387,6.1243],[80.6307,6.1119],[80.6271,6.1119],[80.6183,6.1029],[80.6147,6.1039],[80.6126,6.102],[80.6041,6.1072],[80.5915,6.0974],[80.5985,6.0864],[80.6107,6.0857],[80.6145,6.082],[80.6135,6.0744],[80.6238,6.0687],[80.6358,6.0644],[80.6471,6.0661],[80.6509,6.069],[80.6574,6.0646],[80.6699,6.0631],[80.672,6.0685],[80.6694,6.0694],[80.6703,6.0741],[80.6831,6.0734],[80.6899,6.0705],[80.6901,6.077],[80.6803,6.0874],[80.6796,6.0944]]]}},{"type":"Feature","properties":{"n":"Kaburupitiya","d":"Matara","c":[80.5586,6.0655]},"geometry":{"type":"Polygon","coordinates":[[[80.507,6.0554],[80.5071,6.0493],[80.5109,6.0504],[80.5123,6.0473],[80.5102,6.0436],[80.5179,6.0307],[80.5269,6.0379],[80.5304,6.0355],[80.5362,6.0397],[80.5397,6.0393],[80.5569,6.0254],[80.5601,6.0278],[80.5647,6.0254],[80.5686,6.0297],[80.5692,6.035],[80.5766,6.0382],[80.5757,6.0408],[80.5821,6.0412],[80.5874,6.0489],[80.5846,6.0545],[80.5948,6.0565],[80.5965,6.0619],[80.5911,6.0617],[80.5894,6.0653],[80.5923,6.0698],[80.6035,6.0697],[80.6062,6.074],[80.609,6.0733],[80.6076,6.0769],[80.6135,6.0744],[80.6145,6.082],[80.6107,6.0857],[80.5985,6.0864],[80.5915,6.0974],[80.5812,6.1035],[80.5726,6.1035],[80.5686,6.0978],[80.5681,6.088],[80.5635,6.0959],[80.5567,6.0998],[80.5494,6.0987],[80.5443,6.0936],[80.5374,6.0944],[80.5374,6.0961],[80.5347,6.0948],[80.5363,6.0937],[80.5291,6.0916],[80.5355,6.0931],[80.5355,6.0875],[80.5388,6.0887],[80.5385,6.0863],[80.5308,6.0841],[80.5298,6.0773],[80.525,6.0771],[80.5197,6.0718],[80.5197,6.0626],[80.5162,6.0584],[80.507,6.0554]]]}},{"type":"Feature","properties":{"n":"Kirinda Puhulwella","d":"Matara","c":[80.6342,6.0464]},"geometry":{"type":"Polygon","coordinates":[[[80.6899,6.0705],[80.6831,6.0734],[80.6703,6.0741],[80.6694,6.0694],[80.672,6.0685],[80.6699,6.0631],[80.6574,6.0646],[80.6509,6.069],[80.6471,6.0661],[80.6358,6.0644],[80.6076,6.0769],[80.609,6.0733],[80.6062,6.074],[80.6035,6.0697],[80.5998,6.0682],[80.5949,6.0709],[80.5952,6.0688],[80.5923,6.0698],[80.5894,6.0653],[80.5911,6.0617],[80.5965,6.0619],[80.5948,6.0565],[80.5846,6.0545],[80.5874,6.0489],[80.6029,6.0465],[80.6086,6.0419],[80.6106,6.0388],[80.6062,6.0333],[80.6098,6.0322],[80.6083,6.027],[80.6127,6.0243],[80.6193,6.0258],[80.6286,6.0212],[80.6234,6.0143],[80.6306,6.0106],[80.6307,6.0064],[80.6392,6.0029],[80.6411,6.0043],[80.6379,6.014],[80.6394,6.0157],[80.6435,6.0181],[80.6535,6.0147],[80.6638,6.0243],[80.6591,6.0375],[80.653,6.0403],[80.6541,6.0431],[80.6604,6.05],[80.6737,6.0546],[80.6762,6.061],[80.6888,6.0631],[80.6899,6.0705]]]}},{"type":"Feature","properties":{"n":"Kotapola","d":"Matara","c":[80.5371,6.3224]},"geometry":{"type":"Polygon","coordinates":[[[80.4937,6.3678],[80.4874,6.3637],[80.4804,6.3663],[80.4759,6.3651],[80.464,6.3525],[80.458,6.3504],[80.4626,6.3381],[80.4687,6.3315],[80.4726,6.3304],[80.4763,6.3223],[80.4821,6.3212],[80.4846,6.3141],[80.4877,6.3124],[80.4909,6.3013],[80.4938,6.2997],[80.4851,6.2921],[80.4837,6.2839],[80.4786,6.2856],[80.4761,6.2827],[80.4829,6.27],[80.4957,6.2726],[80.4947,6.2625],[80.5005,6.2541],[80.4987,6.253],[80.4993,6.2493],[80.5131,6.2365],[80.5114,6.2331],[80.5138,6.2267],[80.5221,6.2284],[80.5251,6.2351],[80.5304,6.2337],[80.5385,6.2377],[80.545,6.2357],[80.5494,6.2444],[80.5631,6.2472],[80.5647,6.2525],[80.5738,6.2573],[80.5759,6.2627],[80.5733,6.2797],[80.5742,6.2833],[80.5773,6.2826],[80.5721,6.2847],[80.5745,6.2871],[80.5717,6.2891],[80.571,6.2984],[80.5695,6.3018],[80.5653,6.3026],[80.5611,6.3148],[80.558,6.3132],[80.5524,6.3199],[80.5551,6.3205],[80.5565,6.3292],[80.5792,6.3283],[80.5867,6.338],[80.61,6.3454],[80.6043,6.3612],[80.6166,6.3695],[80.6135,6.378],[80.615,6.3825],[80.6189,6.3841],[80.6189,6.3943],[80.6172,6.3965],[80.5918,6.3974],[80.5781,6.3909],[80.5656,6.3942],[80.5525,6.3895],[80.5513,6.3955],[80.5472,6.3957],[80.543,6.3945],[80.5423,6.3886],[80.5323,6.3889],[80.5315,6.374],[80.4937,6.3678]]]}},{"type":"Feature","properties":{"n":"Malimbada","d":"Matara","c":[80.497,6.0194]},"geometry":{"type":"Polygon","coordinates":[[[80.4665,6.045],[80.4678,6.0302],[80.4708,6.0274],[80.4769,6.0308],[80.4743,6.0268],[80.4813,6.0239],[80.4797,6.021],[80.4816,6.019],[80.488,6.0193],[80.4881,6.0164],[80.4698,6.0096],[80.4784,6.0019],[80.4733,6.0004],[80.4772,5.998],[80.4739,5.9965],[80.4864,5.9898],[80.4877,5.9824],[80.4841,5.98],[80.4842,5.9773],[80.4942,5.9747],[80.4957,5.9685],[80.5081,5.9663],[80.5057,5.9706],[80.5061,5.9789],[80.5081,5.9804],[80.5044,5.9867],[80.5049,5.994],[80.514,5.9944],[80.5182,5.992],[80.5213,5.9952],[80.5255,5.9939],[80.5226,5.9965],[80.5262,6.0047],[80.53,6.0073],[80.5349,6.0071],[80.5322,6.0095],[80.5312,6.0157],[80.5131,6.0378],[80.513,6.0413],[80.5102,6.0436],[80.5123,6.0473],[80.5109,6.0504],[80.5071,6.0493],[80.508,6.0542],[80.505,6.0582],[80.4986,6.0533],[80.499,6.0569],[80.4955,6.0619],[80.4915,6.0593],[80.4855,6.06],[80.4858,6.0628],[80.4824,6.065],[80.4757,6.0614],[80.4725,6.0626],[80.4722,6.0608],[80.4749,6.0603],[80.4717,6.052],[80.4733,6.0474],[80.4665,6.045]]]}},{"type":"Feature","properties":{"n":"Matara Four Gravets","d":"Matara","c":[80.5614,5.9627]},"geometry":{"type":"Polygon","coordinates":[[[80.5908,5.9962],[80.5814,5.9951],[80.576,5.9915],[80.5706,5.9929],[80.572,5.9898],[80.5661,5.9858],[80.568,5.9813],[80.5582,5.9741],[80.548,5.9727],[80.5485,5.9665],[80.5453,5.9662],[80.5455,5.9709],[80.5337,5.9792],[80.5249,5.9749],[80.5239,5.9792],[80.5175,5.978],[80.5081,5.9804],[80.5055,5.9749],[80.5081,5.9663],[80.5028,5.966],[80.5047,5.9627],[80.5011,5.9612],[80.5026,5.9601],[80.5006,5.9526],[80.5055,5.9435],[80.5024,5.9421],[80.502,5.9387],[80.5035,5.9368],[80.5242,5.9355],[80.5273,5.9382],[80.5304,5.937],[80.5395,5.9422],[80.5453,5.9427],[80.5469,5.9408],[80.5503,5.9421],[80.5695,5.9379],[80.5806,5.9305],[80.5833,5.9353],[80.5798,5.9376],[80.5793,5.9413],[80.5913,5.9459],[80.5961,5.9426],[80.5975,5.9479],[80.602,5.9512],[80.6009,5.9549],[80.6026,5.9557],[80.5993,5.9618],[80.6012,5.9612],[80.6034,5.9664],[80.6058,5.9665],[80.6067,5.9632],[80.6106,5.9654],[80.6134,5.9586],[80.6173,5.9569],[80.6169,5.9613],[80.6139,5.9629],[80.6244,5.967],[80.6244,5.9728],[80.62,5.9726],[80.6263,5.9753],[80.6281,5.9819],[80.628,5.9844],[80.6101,5.988],[80.6052,5.9825],[80.5943,5.9836],[80.5942,5.9907],[80.5967,5.9945],[80.5959,5.9967],[80.5908,5.9962]]]}},{"type":"Feature","properties":{"n":"Mulatiyana","d":"Matara","c":[80.5845,6.1469]},"geometry":{"type":"Polygon","coordinates":[[[80.5347,6.0948],[80.5374,6.0961],[80.5374,6.0944],[80.5443,6.0936],[80.5494,6.0987],[80.5567,6.0998],[80.5635,6.0959],[80.5681,6.088],[80.5686,6.0978],[80.5726,6.1035],[80.5812,6.1035],[80.5915,6.0974],[80.6041,6.1072],[80.6126,6.102],[80.6147,6.1039],[80.6183,6.1029],[80.6271,6.1119],[80.6307,6.1119],[80.6387,6.1243],[80.6499,6.1328],[80.645,6.1331],[80.6435,6.138],[80.6534,6.1486],[80.654,6.1568],[80.6585,6.1614],[80.6601,6.1706],[80.6549,6.1728],[80.6499,6.1683],[80.6431,6.1677],[80.6335,6.1702],[80.6333,6.1762],[80.6253,6.1819],[80.6169,6.1823],[80.6091,6.1874],[80.6095,6.1898],[80.6042,6.1862],[80.5894,6.1866],[80.5675,6.1948],[80.5661,6.2029],[80.5605,6.2067],[80.5582,6.206],[80.5525,6.1997],[80.5494,6.1999],[80.5436,6.1909],[80.5333,6.186],[80.5339,6.1775],[80.5288,6.178],[80.5257,6.1719],[80.5267,6.1691],[80.5246,6.1664],[80.5283,6.1555],[80.5271,6.1458],[80.5328,6.1408],[80.5311,6.1396],[80.5329,6.1375],[80.5309,6.1244],[80.5332,6.124],[80.5332,6.1129],[80.543,6.1065],[80.5405,6.1052],[80.5424,6.098],[80.5352,6.1004],[80.5327,6.0959],[80.5347,6.0948]]]}},{"type":"Feature","properties":{"n":"Pasgoda","d":"Matara","c":[80.6064,6.2761]},"geometry":{"type":"Polygon","coordinates":[[[80.6687,6.3052],[80.6681,6.3174],[80.6734,6.3222],[80.6699,6.3267],[80.6635,6.3273],[80.661,6.3329],[80.659,6.3325],[80.6562,6.3367],[80.6632,6.3389],[80.6607,6.3411],[80.6624,6.3452],[80.6603,6.3539],[80.6287,6.3519],[80.5867,6.338],[80.5792,6.3283],[80.5565,6.3292],[80.5551,6.3205],[80.5524,6.3199],[80.558,6.3132],[80.5611,6.3148],[80.5653,6.3026],[80.5695,6.3018],[80.571,6.2984],[80.5717,6.2891],[80.5745,6.2871],[80.5721,6.2847],[80.5773,6.2826],[80.5742,6.2833],[80.5733,6.2797],[80.5759,6.2627],[80.5738,6.2573],[80.5647,6.2525],[80.5631,6.2472],[80.5494,6.2444],[80.54,6.2287],[80.5505,6.2208],[80.5513,6.2126],[80.5465,6.2094],[80.5497,6.2061],[80.5494,6.1999],[80.5525,6.1997],[80.5605,6.2067],[80.5661,6.2029],[80.5675,6.1948],[80.5894,6.1866],[80.6042,6.1862],[80.6095,6.1898],[80.6059,6.1986],[80.6107,6.209],[80.6226,6.2232],[80.6272,6.2402],[80.6413,6.2553],[80.6599,6.2596],[80.6497,6.2722],[80.6576,6.281],[80.6613,6.2893],[80.6551,6.2995],[80.6552,6.303],[80.6687,6.3052]]]}},{"type":"Feature","properties":{"n":"Pitabaddara","d":"Matara","c":[80.4709,6.2389]},"geometry":{"type":"Polygon","coordinates":[[[80.4823,6.1588],[80.4837,6.1621],[80.4891,6.1599],[80.4934,6.1621],[80.4955,6.1757],[80.5102,6.1746],[80.5246,6.1664],[80.5288,6.178],[80.5339,6.1775],[80.5333,6.186],[80.5436,6.1909],[80.5494,6.1999],[80.5497,6.2061],[80.5465,6.2094],[80.5513,6.2126],[80.5505,6.2208],[80.54,6.2287],[80.545,6.2357],[80.5385,6.2377],[80.5304,6.2337],[80.5251,6.2351],[80.5221,6.2284],[80.5138,6.2267],[80.5114,6.2331],[80.5131,6.2365],[80.4993,6.2493],[80.4987,6.253],[80.5005,6.2541],[80.4947,6.2625],[80.4957,6.2726],[80.4829,6.27],[80.4761,6.2827],[80.4708,6.2797],[80.4644,6.2813],[80.4576,6.29],[80.4516,6.2873],[80.4432,6.3018],[80.4298,6.3096],[80.4276,6.3172],[80.4214,6.3179],[80.4102,6.3257],[80.4084,6.3317],[80.4046,6.3345],[80.3967,6.3338],[80.3904,6.33],[80.3839,6.3321],[80.3744,6.3244],[80.3749,6.3218],[80.3882,6.3055],[80.4091,6.2937],[80.411,6.2872],[80.4187,6.2771],[80.4188,6.2724],[80.4277,6.2619],[80.4391,6.2559],[80.439,6.2528],[80.4351,6.252],[80.4326,6.2484],[80.4378,6.2399],[80.4328,6.2367],[80.4409,6.2216],[80.4451,6.2187],[80.446,6.2209],[80.4497,6.2156],[80.448,6.206],[80.4519,6.2005],[80.4488,6.1965],[80.4504,6.1771],[80.4572,6.1778],[80.4601,6.1826],[80.4653,6.1806],[80.469,6.1827],[80.4735,6.1783],[80.4718,6.1753],[80.4794,6.17],[80.478,6.1661],[80.4823,6.1588]]]}},{"type":"Feature","properties":{"n":"Thihagoda","d":"Matara","c":[80.5584,6.0095]},"geometry":{"type":"Polygon","coordinates":[[[80.6094,6.0261],[80.6098,6.0322],[80.6062,6.0333],[80.6106,6.0388],[80.6086,6.0419],[80.6029,6.0465],[80.5874,6.0489],[80.5821,6.0412],[80.5757,6.0408],[80.5766,6.0382],[80.5692,6.035],[80.5686,6.0297],[80.5647,6.0254],[80.5601,6.0278],[80.5569,6.0254],[80.5397,6.0393],[80.5362,6.0397],[80.5304,6.0355],[80.5269,6.0379],[80.5179,6.0307],[80.5312,6.0157],[80.5322,6.0095],[80.5349,6.0071],[80.53,6.0073],[80.5262,6.0047],[80.5226,5.9965],[80.5255,5.9939],[80.5213,5.9952],[80.5182,5.992],[80.514,5.9944],[80.5049,5.994],[80.5044,5.9867],[80.5081,5.9804],[80.5175,5.978],[80.5239,5.9792],[80.5249,5.9749],[80.5337,5.9792],[80.5455,5.9709],[80.5453,5.9662],[80.5485,5.9665],[80.548,5.9727],[80.5582,5.9741],[80.568,5.9813],[80.5661,5.9858],[80.572,5.9898],[80.5706,5.9929],[80.576,5.9915],[80.5814,5.9951],[80.5908,5.9962],[80.5945,6.0061],[80.5986,6.0066],[80.5995,6.0097],[80.6051,6.0092],[80.6022,6.0129],[80.602,6.0107],[80.6,6.0125],[80.5939,6.0086],[80.5893,6.013],[80.589,6.0173],[80.5952,6.0156],[80.5931,6.0194],[80.6094,6.0261]]]}},{"type":"Feature","properties":{"n":"Weligama","d":"Matara","c":[80.4942,5.9747]},"geometry":{"type":"Polygon","coordinates":[[[80.3798,5.9646],[80.3879,5.9647],[80.396,5.9598],[80.4078,5.9567],[80.4107,5.9586],[80.4165,5.9544],[80.4244,5.9704],[80.4362,5.9722],[80.4514,5.9633],[80.4526,5.959],[80.4494,5.9557],[80.4499,5.9476],[80.4461,5.9474],[80.4487,5.9499],[80.4422,5.9461],[80.4517,5.9408],[80.4561,5.9445],[80.4601,5.9409],[80.4618,5.9422],[80.4722,5.9369],[80.4835,5.9361],[80.4916,5.9399],[80.5035,5.9368],[80.5024,5.9421],[80.5055,5.9435],[80.5006,5.9526],[80.5026,5.9601],[80.5011,5.9612],[80.5047,5.9627],[80.5028,5.966],[80.4957,5.9685],[80.4942,5.9747],[80.4674,5.9796],[80.4709,5.9768],[80.4682,5.9739],[80.4731,5.97],[80.4696,5.9658],[80.4594,5.9631],[80.4561,5.9676],[80.457,5.9706],[80.4544,5.9685],[80.4501,5.9704],[80.454,5.9745],[80.4425,5.9808],[80.4333,5.9812],[80.4341,5.985],[80.4257,5.9871],[80.4214,5.9931],[80.4137,5.9943],[80.4111,5.9912],[80.4083,5.9925],[80.406,5.9902],[80.4044,5.9949],[80.3994,5.9955],[80.3975,5.9981],[80.3948,5.9964],[80.3864,6.0015],[80.3855,5.9944],[80.3795,5.9834],[80.384,5.9723],[80.3828,5.967],[80.3798,5.9646]]]}},{"type":"Feature","properties":{"n":"Welipitiya","d":"Matara","c":[80.4372,6.0165]},"geometry":{"type":"Polygon","coordinates":[[[80.4102,6.0708],[80.4028,6.0547],[80.3987,6.0527],[80.3911,6.058],[80.388,6.057],[80.3855,6.0529],[80.3872,6.0358],[80.3916,6.0324],[80.4016,6.0343],[80.4109,6.0328],[80.4219,6.0185],[80.414,6.0171],[80.408,6.0122],[80.394,6.0135],[80.3884,6.0101],[80.3864,6.0015],[80.3948,5.9964],[80.3975,5.9981],[80.3994,5.9955],[80.4044,5.9949],[80.406,5.9902],[80.4083,5.9925],[80.4111,5.9912],[80.4137,5.9943],[80.4214,5.9931],[80.4257,5.9871],[80.4341,5.985],[80.4333,5.9812],[80.4425,5.9808],[80.454,5.9745],[80.4501,5.9704],[80.4544,5.9685],[80.457,5.9706],[80.4561,5.9676],[80.4594,5.9631],[80.4696,5.9658],[80.4731,5.97],[80.4682,5.9739],[80.4709,5.9768],[80.4674,5.9796],[80.4842,5.9773],[80.4841,5.98],[80.4877,5.9824],[80.4836,5.993],[80.4757,5.9941],[80.4739,5.9965],[80.4772,5.998],[80.4733,6.0004],[80.4784,6.0019],[80.4698,6.0096],[80.4881,6.0164],[80.488,6.0193],[80.4816,6.019],[80.4797,6.021],[80.4813,6.0239],[80.4743,6.0268],[80.4769,6.0308],[80.4708,6.0274],[80.4678,6.0302],[80.4668,6.0468],[80.441,6.0428],[80.4327,6.0511],[80.4351,6.0563],[80.4322,6.0596],[80.4238,6.0651],[80.4223,6.0632],[80.4166,6.0637],[80.4102,6.0708]]]}},{"type":"Feature","properties":{"n":"Badalkumbura","d":"Monaragala","c":[81.2141,6.8694]},"geometry":{"type":"Polygon","coordinates":[[[81.285,6.9334],[81.2805,6.9366],[81.2781,6.9313],[81.2709,6.9303],[81.2682,6.9401],[81.2611,6.9444],[81.2615,6.946],[81.2654,6.9453],[81.2656,6.9498],[81.2606,6.9582],[81.2594,6.954],[81.2553,6.9559],[81.251,6.9532],[81.2411,6.9646],[81.2346,6.9625],[81.2317,6.9645],[81.2314,6.9619],[81.2249,6.9605],[81.2201,6.9643],[81.218,6.951],[81.2253,6.9451],[81.2052,6.9388],[81.1989,6.9305],[81.2056,6.9253],[81.2047,6.9221],[81.2016,6.9202],[81.1851,6.9205],[81.1796,6.9277],[81.1765,6.919],[81.1752,6.9022],[81.1651,6.9008],[81.1606,6.8978],[81.155,6.8887],[81.151,6.8893],[81.147,6.8858],[81.1243,6.8789],[81.1125,6.8725],[81.1089,6.8644],[81.1232,6.8512],[81.1301,6.8477],[81.1355,6.8402],[81.1281,6.8324],[81.1384,6.8202],[81.1449,6.822],[81.1451,6.8158],[81.1492,6.8089],[81.1444,6.8004],[81.1573,6.8],[81.1601,6.8038],[81.1695,6.8024],[81.1698,6.7982],[81.1738,6.7974],[81.1784,6.8011],[81.1966,6.806],[81.2041,6.803],[81.2029,6.796],[81.2054,6.786],[81.2086,6.7852],[81.2088,6.7817],[81.2132,6.7826],[81.2151,6.78],[81.2173,6.7804],[81.2172,6.7955],[81.2287,6.8008],[81.2365,6.7995],[81.2352,6.7932],[81.2456,6.7966],[81.2623,6.7958],[81.2602,6.8137],[81.2648,6.8329],[81.2721,6.8419],[81.2782,6.8556],[81.286,6.859],[81.2872,6.8503],[81.2942,6.8537],[81.2939,6.8646],[81.2973,6.88],[81.2947,6.8956],[81.288,6.9052],[81.2843,6.924],[81.285,6.9334]]]}},{"type":"Feature","properties":{"n":"Bibile","d":"Monaragala","c":[81.2909,7.1875]},"geometry":{"type":"Polygon","coordinates":[[[81.3754,7.0944],[81.3782,7.095],[81.3852,7.1048],[81.4005,7.1067],[81.4056,7.113],[81.4115,7.1119],[81.4143,7.1145],[81.4143,7.1205],[81.4305,7.158],[81.4301,7.1675],[81.4402,7.1769],[81.4447,7.1877],[81.4395,7.1888],[81.4396,7.1913],[81.4339,7.1965],[81.4186,7.1893],[81.4109,7.1984],[81.3953,7.2051],[81.3927,7.2087],[81.3858,7.2291],[81.3898,7.238],[81.3831,7.2461],[81.3808,7.259],[81.3692,7.2622],[81.3669,7.2656],[81.371,7.284],[81.37,7.291],[81.3478,7.3148],[81.3578,7.3193],[81.3672,7.3276],[81.358,7.3396],[81.3449,7.3352],[81.3296,7.3336],[81.3227,7.3339],[81.3187,7.3379],[81.3178,7.3234],[81.3142,7.3164],[81.318,7.3036],[81.3226,7.298],[81.3152,7.2778],[81.3195,7.2649],[81.2997,7.2565],[81.2937,7.2485],[81.2829,7.242],[81.285,7.2493],[81.2753,7.2567],[81.278,7.2622],[81.2688,7.2776],[81.2624,7.2804],[81.2572,7.2759],[81.2379,7.2683],[81.2342,7.2692],[81.2303,7.2666],[81.2281,7.269],[81.2339,7.2392],[81.2223,7.2285],[81.2035,7.2018],[81.1855,7.1916],[81.1872,7.1861],[81.1835,7.1815],[81.1836,7.174],[81.1709,7.1702],[81.165,7.1746],[81.1618,7.1729],[81.1524,7.1938],[81.1475,7.196],[81.1391,7.1898],[81.1324,7.1779],[81.1212,7.1667],[81.1188,7.1536],[81.1217,7.1517],[81.1247,7.142],[81.1309,7.1368],[81.1383,7.1357],[81.1405,7.1302],[81.1454,7.1275],[81.1488,7.1205],[81.1571,7.1124],[81.1663,7.0827],[81.1733,7.0858],[81.1793,7.084],[81.1846,7.0853],[81.1887,7.0944],[81.197,7.0929],[81.2038,7.0956],[81.2063,7.0921],[81.2106,7.0961],[81.2151,7.0801],[81.2263,7.0837],[81.2249,7.0894],[81.2344,7.0982],[81.2313,7.1053],[81.2322,7.1097],[81.2413,7.115],[81.2475,7.1144],[81.2487,7.1218],[81.2458,7.1281],[81.2479,7.1351],[81.2522,7.1376],[81.2576,7.1284],[81.2684,7.1395],[81.2757,7.1388],[81.3051,7.1484],[81.323,7.1502],[81.3336,7.1552],[81.3323,7.1491],[81.3349,7.1432],[81.3438,7.1375],[81.3384,7.1306],[81.3445,7.1053],[81.3636,7.0938],[81.3739,7.0964],[81.3754,7.0944]]]}},{"type":"Feature","properties":{"n":"Buttala","d":"Monaragala","c":[81.2934,6.6621]},"geometry":{"type":"Polygon","coordinates":[[[81.1501,6.7997],[81.1457,6.7953],[81.1465,6.7892],[81.1504,6.7879],[81.1505,6.784],[81.1362,6.774],[81.1475,6.7693],[81.1497,6.7653],[81.1552,6.7641],[81.1639,6.7519],[81.1722,6.7489],[81.1734,6.7403],[81.1765,6.7376],[81.1671,6.7301],[81.1691,6.7194],[81.1673,6.7169],[81.1729,6.7116],[81.173,6.7076],[81.1668,6.7],[81.1709,6.6908],[81.1758,6.6884],[81.182,6.6711],[81.182,6.6634],[81.1778,6.6594],[81.1775,6.6388],[81.1851,6.6195],[81.1851,6.5994],[81.1847,6.5948],[81.1805,6.5955],[81.1796,6.5858],[81.1872,6.5724],[81.199,6.5708],[81.1911,6.5547],[81.1994,6.5531],[81.2167,6.5366],[81.2603,6.5444],[81.2635,6.5227],[81.2661,6.5198],[81.2717,6.5198],[81.2819,6.506],[81.2864,6.5104],[81.2818,6.5205],[81.2824,6.5242],[81.2858,6.5261],[81.2886,6.5338],[81.2956,6.5359],[81.3029,6.5417],[81.3055,6.5396],[81.3415,6.5514],[81.3473,6.5556],[81.3756,6.5647],[81.3768,6.5634],[81.4611,6.5919],[81.4803,6.6051],[81.4922,6.6063],[81.4802,6.6163],[81.4674,6.6336],[81.4576,6.6425],[81.4523,6.6436],[81.4448,6.6507],[81.4407,6.6501],[81.4326,6.6608],[81.4258,6.6629],[81.4133,6.672],[81.41,6.684],[81.4108,6.7107],[81.4081,6.7126],[81.4077,6.7197],[81.3817,6.742],[81.3591,6.7465],[81.3535,6.7464],[81.3517,6.7433],[81.3461,6.7422],[81.3348,6.7443],[81.3281,6.7665],[81.3258,6.7667],[81.3221,6.7735],[81.3193,6.7709],[81.3213,6.7655],[81.3055,6.7838],[81.2962,6.7867],[81.2931,6.7851],[81.2941,6.7821],[81.2873,6.7895],[81.2818,6.7909],[81.2796,6.7949],[81.2742,6.793],[81.2546,6.7972],[81.2352,6.7932],[81.2365,6.7995],[81.2287,6.8008],[81.2172,6.7955],[81.2173,6.7804],[81.2151,6.78],[81.2132,6.7826],[81.2088,6.7817],[81.2086,6.7852],[81.2054,6.786],[81.2029,6.796],[81.2041,6.803],[81.1966,6.806],[81.1784,6.8011],[81.1738,6.7974],[81.1698,6.7982],[81.1695,6.8024],[81.1601,6.8038],[81.1573,6.8],[81.1501,6.7997]]]}},{"type":"Feature","properties":{"n":"Katharagama","d":"Monaragala","c":[81.3909,6.4953]},"geometry":{"type":"Polygon","coordinates":[[[81.2167,6.5366],[81.2235,6.5234],[81.228,6.522],[81.2304,6.5037],[81.2421,6.491],[81.2389,6.4895],[81.2345,6.4938],[81.2275,6.4943],[81.2247,6.4924],[81.2224,6.4845],[81.2481,6.3829],[81.2682,6.3832],[81.2733,6.374],[81.2727,6.3625],[81.2739,6.3655],[81.3107,6.3806],[81.3195,6.3798],[81.3251,6.3824],[81.3303,6.3796],[81.3396,6.3824],[81.3495,6.39],[81.3652,6.3906],[81.3714,6.3976],[81.38,6.3967],[81.3925,6.4166],[81.3992,6.4148],[81.4002,6.4065],[81.4136,6.4097],[81.418,6.4083],[81.4182,6.4118],[81.4229,6.4125],[81.4255,6.4182],[81.4332,6.4156],[81.436,6.42],[81.4435,6.4194],[81.4471,6.4136],[81.4605,6.4133],[81.4654,6.4071],[81.4735,6.4082],[81.4786,6.4187],[81.4743,6.4355],[81.4758,6.4398],[81.4742,6.449],[81.4847,6.4629],[81.4849,6.4657],[81.4776,6.4718],[81.4791,6.4784],[81.4764,6.4847],[81.4792,6.4951],[81.485,6.498],[81.4888,6.5041],[81.5222,6.5194],[81.5315,6.536],[81.5372,6.5378],[81.5453,6.5363],[81.5639,6.554],[81.58,6.5504],[81.5877,6.5602],[81.5919,6.5617],[81.5981,6.5602],[81.6032,6.5674],[81.6066,6.5798],[81.6026,6.5825],[81.6012,6.5928],[81.5862,6.6106],[81.5731,6.613],[81.5679,6.6098],[81.5571,6.6121],[81.5398,6.6078],[81.5246,6.6078],[81.5167,6.6151],[81.5074,6.6189],[81.5009,6.6094],[81.4803,6.6051],[81.4611,6.5919],[81.3768,6.5634],[81.3756,6.5647],[81.3473,6.5556],[81.3415,6.5514],[81.3055,6.5396],[81.3029,6.5417],[81.2956,6.5359],[81.2886,6.5338],[81.2858,6.5261],[81.2824,6.5242],[81.2818,6.5205],[81.2864,6.5104],[81.2819,6.506],[81.2717,6.5198],[81.2661,6.5198],[81.2635,6.5227],[81.2603,6.5444],[81.2167,6.5366]]]}},{"type":"Feature","properties":{"n":"Madulla","d":"Monaragala","c":[81.4357,6.9133]},"geometry":{"type":"Polygon","coordinates":[[[81.4791,7.3208],[81.4768,7.3246],[81.4893,7.3354],[81.4774,7.3801],[81.4706,7.3932],[81.4724,7.413],[81.4761,7.4216],[81.4602,7.4276],[81.4777,7.454],[81.4757,7.4565],[81.4532,7.4586],[81.4362,7.4435],[81.4237,7.4407],[81.4176,7.4333],[81.4051,7.4314],[81.4076,7.4218],[81.4042,7.4156],[81.3848,7.4065],[81.3728,7.409],[81.3721,7.3953],[81.3784,7.3867],[81.38,7.3744],[81.3846,7.3693],[81.3723,7.3574],[81.3613,7.3552],[81.3609,7.351],[81.3651,7.3432],[81.358,7.3396],[81.3672,7.3276],[81.3578,7.3193],[81.3478,7.3148],[81.37,7.291],[81.371,7.284],[81.3669,7.2656],[81.3692,7.2622],[81.3808,7.259],[81.3831,7.2461],[81.3898,7.238],[81.3858,7.2291],[81.3953,7.2051],[81.4109,7.1984],[81.4186,7.1893],[81.4339,7.1965],[81.4396,7.1913],[81.4395,7.1888],[81.4447,7.1877],[81.4402,7.1769],[81.4301,7.1675],[81.4305,7.158],[81.4143,7.1205],[81.4143,7.1145],[81.4115,7.1119],[81.4056,7.113],[81.4005,7.1067],[81.3852,7.1048],[81.3782,7.095],[81.3754,7.0944],[81.382,7.0813],[81.3786,7.0779],[81.3665,7.0761],[81.3629,7.0697],[81.3566,7.0651],[81.3592,7.0537],[81.3574,7.0496],[81.3432,7.0435],[81.3361,7.0353],[81.3327,7.0248],[81.3242,7.0159],[81.3208,7.014],[81.3097,7.0151],[81.3133,6.9973],[81.3116,6.9919],[81.315,6.9869],[81.3156,6.9776],[81.3134,6.975],[81.3163,6.9714],[81.3136,6.9658],[81.3193,6.9563],[81.3205,6.9478],[81.325,6.9422],[81.3242,6.9334],[81.3316,6.9297],[81.3373,6.9234],[81.3451,6.9244],[81.3435,6.9137],[81.3387,6.9114],[81.3471,6.9092],[81.3507,6.9031],[81.3685,6.9049],[81.3702,6.9126],[81.3814,6.9112],[81.3835,6.9179],[81.3873,6.9196],[81.394,6.918],[81.4009,6.9215],[81.4157,6.922],[81.4324,6.9177],[81.4361,6.9156],[81.4357,6.9133],[81.4369,6.9165],[81.4416,6.9179],[81.4452,6.9132],[81.4665,6.9336],[81.4686,6.9335],[81.4704,6.9291],[81.4737,6.9292],[81.4778,6.9366],[81.4849,6.9349],[81.4871,6.9248],[81.4826,6.9217],[81.5093,6.9247],[81.5086,6.9172],[81.514,6.9208],[81.5171,6.9161],[81.5208,6.9158],[81.5204,6.9129],[81.5253,6.9121],[81.5272,6.9148],[81.5263,6.92],[81.5229,6.9204],[81.5255,6.9335],[81.518,6.9312],[81.5157,6.9337],[81.5134,6.9533],[81.5103,6.9574],[81.5094,6.9659],[81.505,6.9697],[81.5025,6.9821],[81.4993,6.9822],[81.498,6.9953],[81.4907,6.9994],[81.4932,7.0042],[81.4887,7.0079],[81.4912,7.0114],[81.4907,7.0163],[81.4798,7.0226],[81.4685,7.0183],[81.4545,7.0221],[81.4522,7.0272],[81.432,7.0346],[81.4189,7.055],[81.4238,7.0646],[81.435,7.0639],[81.4441,7.0591],[81.4583,7.0454],[81.4589,7.0501],[81.4545,7.0558],[81.457,7.0614],[81.4607,7.06],[81.4629,7.0639],[81.4687,7.0666],[81.4653,7.083],[81.4599,7.0917],[81.4557,7.1091],[81.4553,7.1265],[81.4596,7.1294],[81.455,7.1315],[81.4588,7.1371],[81.4564,7.1382],[81.4596,7.1386],[81.4591,7.1428],[81.463,7.142],[81.4633,7.1437],[81.4601,7.1458],[81.4629,7.1458],[81.4633,7.1489],[81.4719,7.1401],[81.4714,7.1433],[81.4735,7.1429],[81.4683,7.1479],[81.4729,7.1499],[81.4689,7.1543],[81.4721,7.1563],[81.4735,7.1532],[81.4741,7.1624],[81.4797,7.1594],[81.4798,7.164],[81.4995,7.1568],[81.5099,7.1812],[81.5213,7.1974],[81.5396,7.2137],[81.554,7.2188],[81.549,7.2203],[81.5395,7.2325],[81.5352,7.2326],[81.5316,7.2395],[81.5192,7.2427],[81.5204,7.2476],[81.5254,7.2528],[81.5218,7.2613],[81.5227,7.2694],[81.5167,7.2781],[81.5181,7.2876],[81.5086,7.2995],[81.4941,7.3044],[81.4791,7.3208]]]}},{"type":"Feature","properties":{"n":"Medagama","d":"Monaragala","c":[81.2905,7.0523]},"geometry":{"type":"Polygon","coordinates":[[[81.285,6.9334],[81.287,6.9378],[81.3037,6.9424],[81.3077,6.9559],[81.3132,6.962],[81.3163,6.9714],[81.3134,6.975],[81.3156,6.9776],[81.315,6.9869],[81.3116,6.9919],[81.3133,6.9973],[81.3097,7.0151],[81.3208,7.014],[81.3242,7.0159],[81.3327,7.0248],[81.3361,7.0353],[81.3432,7.0435],[81.3574,7.0496],[81.3592,7.0537],[81.3566,7.0651],[81.3629,7.0697],[81.3665,7.0761],[81.3786,7.0779],[81.382,7.0813],[81.3739,7.0964],[81.3636,7.0938],[81.3445,7.1053],[81.3384,7.1306],[81.3438,7.1375],[81.3349,7.1432],[81.3323,7.1491],[81.3336,7.1552],[81.323,7.1502],[81.3051,7.1484],[81.2757,7.1388],[81.2684,7.1395],[81.2576,7.1284],[81.2522,7.1376],[81.2479,7.1351],[81.2458,7.1281],[81.2487,7.1218],[81.2475,7.1144],[81.2413,7.115],[81.2322,7.1097],[81.2313,7.1053],[81.2344,7.0982],[81.2249,7.0894],[81.2412,7.047],[81.2431,7.0221],[81.2423,7.0093],[81.2383,7.0044],[81.2349,6.991],[81.229,6.9897],[81.2317,6.9645],[81.2346,6.9625],[81.2411,6.9646],[81.251,6.9532],[81.2553,6.9559],[81.2594,6.954],[81.2606,6.9582],[81.2656,6.9498],[81.2654,6.9453],[81.2615,6.946],[81.2611,6.9444],[81.2682,6.9401],[81.2709,6.9303],[81.2781,6.9313],[81.2805,6.9366],[81.285,6.9334]]]}},{"type":"Feature","properties":{"n":"Monaragala","d":"Monaragala","c":[81.3526,6.8315]},"geometry":{"type":"Polygon","coordinates":[[[81.2623,6.7958],[81.2742,6.793],[81.2796,6.7949],[81.2818,6.7909],[81.2873,6.7895],[81.2941,6.7821],[81.2931,6.7851],[81.2962,6.7867],[81.3055,6.7838],[81.3213,6.7655],[81.3193,6.7709],[81.3221,6.7735],[81.3258,6.7667],[81.3281,6.7665],[81.3348,6.7443],[81.3461,6.7422],[81.3517,6.7433],[81.3535,6.7464],[81.3726,6.7452],[81.3729,6.7433],[81.3817,6.742],[81.4077,6.7197],[81.4165,6.7267],[81.4175,6.7314],[81.4214,6.7315],[81.4274,6.746],[81.4263,6.7533],[81.4336,6.7694],[81.4314,6.7755],[81.424,6.7843],[81.4237,6.8044],[81.4206,6.8205],[81.4218,6.8393],[81.4295,6.8554],[81.4439,6.8673],[81.4444,6.8739],[81.4482,6.881],[81.4416,6.8828],[81.4315,6.8781],[81.4242,6.8853],[81.4132,6.8784],[81.3902,6.8782],[81.3881,6.8806],[81.3849,6.9006],[81.3685,6.9049],[81.3507,6.9031],[81.3471,6.9092],[81.3387,6.9114],[81.3435,6.9137],[81.3451,6.9244],[81.3373,6.9234],[81.3316,6.9297],[81.3242,6.9334],[81.325,6.9422],[81.3205,6.9478],[81.3193,6.9563],[81.3136,6.9658],[81.3132,6.962],[81.3077,6.9559],[81.3037,6.9424],[81.287,6.9378],[81.285,6.9334],[81.2843,6.924],[81.288,6.9052],[81.2947,6.8956],[81.2973,6.88],[81.2939,6.8646],[81.2942,6.8537],[81.2872,6.8503],[81.286,6.859],[81.2782,6.8556],[81.2721,6.8419],[81.2648,6.8329],[81.2602,6.8137],[81.2623,6.7958]]]}},{"type":"Feature","properties":{"n":"Sevanagala","d":"Monaragala","c":[80.9283,6.3759]},"geometry":{"type":"Polygon","coordinates":[[[80.9185,6.2976],[80.9278,6.3045],[80.9292,6.3003],[80.9391,6.3041],[80.9404,6.3078],[80.9548,6.3164],[80.9645,6.3167],[80.969,6.3259],[80.9793,6.3264],[80.9923,6.3341],[81.0064,6.3372],[81.0172,6.3452],[81.0199,6.3591],[81.0151,6.3657],[81.0074,6.3668],[81.0057,6.3691],[81.0055,6.3771],[81.0095,6.3908],[80.9998,6.3993],[80.9976,6.3989],[80.996,6.4117],[80.9861,6.4213],[80.9592,6.4126],[80.9467,6.4184],[80.908,6.4204],[80.892,6.4302],[80.8842,6.4399],[80.8773,6.4433],[80.8624,6.4425],[80.8502,6.432],[80.8393,6.428],[80.8364,6.4244],[80.8362,6.4213],[80.8403,6.4178],[80.8423,6.4044],[80.8369,6.4017],[80.8441,6.3924],[80.8436,6.3857],[80.8492,6.3849],[80.8522,6.3816],[80.8526,6.3742],[80.8602,6.3697],[80.8653,6.3551],[80.8723,6.3559],[80.8889,6.3513],[80.8969,6.3484],[80.9012,6.344],[80.9,6.3364],[80.9076,6.3323],[80.9041,6.3271],[80.9044,6.3217],[80.9104,6.3151],[80.9185,6.2976]]]}},{"type":"Feature","properties":{"n":"Siyambalanduwa","d":"Monaragala","c":[81.525,6.8487]},"geometry":{"type":"Polygon","coordinates":[[[81.4922,6.6063],[81.5009,6.6094],[81.5074,6.6189],[81.5167,6.6151],[81.5246,6.6078],[81.5398,6.6078],[81.5571,6.6121],[81.5679,6.6098],[81.5731,6.613],[81.5802,6.6122],[81.5862,6.6106],[81.5945,6.6026],[81.6012,6.5928],[81.6026,6.5825],[81.6066,6.5798],[81.6088,6.588],[81.6126,6.6792],[81.6155,6.6911],[81.6257,6.9104],[81.6304,6.9425],[81.636,6.9582],[81.6298,6.9669],[81.6214,6.9722],[81.6159,6.9808],[81.62,6.9979],[81.613,7.0025],[81.6126,7.0174],[81.6057,7.0284],[81.6095,7.039],[81.6171,7.0488],[81.6117,7.0672],[81.6006,7.0712],[81.5952,7.0692],[81.5904,7.0708],[81.5887,7.0751],[81.578,7.0755],[81.5709,7.0817],[81.5665,7.0802],[81.5578,7.0819],[81.5264,7.0938],[81.5166,7.0998],[81.5134,7.1026],[81.5143,7.11],[81.5098,7.1173],[81.5117,7.1249],[81.5095,7.1312],[81.512,7.1362],[81.5003,7.1463],[81.4995,7.1568],[81.4798,7.164],[81.4797,7.1594],[81.4741,7.1624],[81.4735,7.1532],[81.4721,7.1563],[81.4689,7.1543],[81.4729,7.1499],[81.4683,7.1479],[81.4735,7.1429],[81.4714,7.1433],[81.4719,7.1401],[81.4633,7.1489],[81.4629,7.1458],[81.4601,7.1458],[81.463,7.142],[81.4591,7.1428],[81.4596,7.1386],[81.4564,7.1382],[81.4588,7.1371],[81.455,7.1315],[81.4596,7.1294],[81.4553,7.1265],[81.4557,7.1091],[81.4687,7.0696],[81.4687,7.0666],[81.4629,7.0639],[81.4607,7.06],[81.457,7.0614],[81.4545,7.0558],[81.4589,7.0501],[81.4583,7.0454],[81.4441,7.0591],[81.435,7.0639],[81.4238,7.0646],[81.4189,7.055],[81.432,7.0346],[81.4522,7.0272],[81.4545,7.0221],[81.4685,7.0183],[81.4798,7.0226],[81.4907,7.0163],[81.4912,7.0114],[81.4887,7.0079],[81.4932,7.0042],[81.4907,6.9994],[81.498,6.9953],[81.4993,6.9822],[81.5025,6.9821],[81.505,6.9697],[81.5094,6.9659],[81.5103,6.9574],[81.5134,6.9533],[81.5157,6.9337],[81.518,6.9312],[81.5255,6.9335],[81.5229,6.9204],[81.5263,6.92],[81.5272,6.9148],[81.5253,6.9121],[81.5204,6.9129],[81.5208,6.9158],[81.5171,6.9161],[81.514,6.9208],[81.5086,6.9172],[81.5093,6.9247],[81.4826,6.9217],[81.4871,6.9248],[81.4849,6.9349],[81.4778,6.9366],[81.4737,6.9292],[81.4704,6.9291],[81.4686,6.9335],[81.4665,6.9336],[81.4452,6.9132],[81.4416,6.9179],[81.4369,6.9165],[81.4357,6.9133],[81.4361,6.9156],[81.4324,6.9177],[81.4157,6.922],[81.4009,6.9215],[81.394,6.918],[81.3873,6.9196],[81.3835,6.9179],[81.3814,6.9112],[81.3702,6.9126],[81.3685,6.9049],[81.3849,6.9006],[81.3881,6.8806],[81.3902,6.8782],[81.4132,6.8784],[81.4242,6.8853],[81.4315,6.8781],[81.4416,6.8828],[81.4482,6.881],[81.4444,6.8739],[81.4439,6.8673],[81.4295,6.8554],[81.4218,6.8393],[81.4206,6.8205],[81.4237,6.8044],[81.424,6.7843],[81.4314,6.7755],[81.4336,6.7694],[81.4263,6.7533],[81.4274,6.746],[81.4214,6.7315],[81.4175,6.7314],[81.4165,6.7267],[81.4077,6.7197],[81.4081,6.7126],[81.4108,6.7107],[81.4109,6.6762],[81.4133,6.672],[81.4258,6.6629],[81.4326,6.6608],[81.4407,6.6501],[81.4448,6.6507],[81.4523,6.6436],[81.4576,6.6425],[81.4674,6.6336],[81.4802,6.6163],[81.4922,6.6063]]]}},{"type":"Feature","properties":{"n":"Thanamalwila","d":"Monaragala","c":[80.9985,6.4951]},"geometry":{"type":"Polygon","coordinates":[[[80.833,6.5057],[80.8275,6.4896],[80.8316,6.4757],[80.8309,6.4705],[80.8384,6.4596],[80.8358,6.4443],[80.8393,6.428],[80.8502,6.432],[80.8624,6.4425],[80.8691,6.4438],[80.8773,6.4433],[80.8842,6.4399],[80.892,6.4302],[80.908,6.4204],[80.9467,6.4184],[80.9592,6.4126],[80.9861,6.4213],[80.996,6.4117],[80.9976,6.3989],[80.9998,6.3993],[81.0095,6.3908],[81.0129,6.3951],[81.0358,6.3905],[81.0485,6.4047],[81.0502,6.4148],[81.0484,6.4202],[81.0606,6.4097],[81.0657,6.4127],[81.0712,6.4223],[81.0865,6.4225],[81.1,6.417],[81.1088,6.4193],[81.137,6.4203],[81.1367,6.4151],[81.1415,6.4096],[81.1433,6.3972],[81.1498,6.3991],[81.1538,6.3928],[81.1638,6.3925],[81.1677,6.3986],[81.1828,6.4061],[81.1894,6.4016],[81.2222,6.358],[81.2192,6.3497],[81.223,6.3437],[81.2278,6.3439],[81.233,6.3396],[81.243,6.3419],[81.2492,6.3398],[81.2523,6.344],[81.269,6.3538],[81.2727,6.3625],[81.2733,6.374],[81.2682,6.3832],[81.2481,6.3829],[81.2224,6.4845],[81.1947,6.4614],[81.1857,6.4636],[81.1767,6.4607],[81.1664,6.4548],[81.1597,6.4469],[81.1513,6.4536],[81.1402,6.4531],[81.1342,6.4465],[81.1354,6.452],[81.1326,6.4528],[81.1328,6.4572],[81.1286,6.4611],[81.1177,6.4624],[81.1061,6.4557],[81.085,6.4696],[81.0703,6.4654],[81.0627,6.46],[81.0525,6.4605],[81.049,6.4631],[81.0496,6.4723],[81.033,6.4827],[81.0172,6.4875],[81.0328,6.5063],[81.0297,6.5252],[81.0314,6.5248],[81.0215,6.5422],[80.9935,6.5766],[80.9962,6.5932],[80.9932,6.6033],[80.9974,6.6141],[80.9885,6.6201],[80.976,6.616],[80.9742,6.6209],[80.977,6.6354],[80.9742,6.6421],[80.9658,6.6531],[80.9576,6.6513],[80.9515,6.6554],[80.9496,6.6712],[80.9387,6.6768],[80.9397,6.6873],[80.937,6.6927],[80.9278,6.6917],[80.9249,6.6885],[80.9258,6.686],[80.9103,6.6718],[80.9055,6.6546],[80.9012,6.65],[80.9033,6.646],[80.9012,6.6372],[80.8919,6.634],[80.8798,6.6134],[80.8732,6.6104],[80.8767,6.6047],[80.8729,6.6012],[80.8743,6.5928],[80.8672,6.5925],[80.8672,6.587],[80.8704,6.5819],[80.864,6.5793],[80.8649,6.5727],[80.8583,6.5598],[80.8624,6.5576],[80.8631,6.552],[80.8549,6.5359],[80.8427,6.5232],[80.833,6.5057]]]}},{"type":"Feature","properties":{"n":"Wellawaya","d":"Monaragala","c":[81.1201,6.6115]},"geometry":{"type":"Polygon","coordinates":[[[81.1281,6.8324],[81.1136,6.8274],[81.1036,6.8301],[81.0949,6.8278],[81.0925,6.8237],[81.0969,6.8114],[81.0875,6.8075],[81.0839,6.8069],[81.0791,6.8135],[81.064,6.8128],[81.059,6.7802],[81.0636,6.7592],[81.0562,6.7507],[81.0509,6.7389],[81.0555,6.7346],[81.06,6.7376],[81.07,6.7377],[81.083,6.7281],[81.0769,6.7171],[81.0765,6.7043],[81.0792,6.7033],[81.0776,6.6971],[81.0707,6.6888],[81.062,6.6833],[81.0594,6.6464],[81.0654,6.6314],[81.0824,6.6159],[81.0848,6.607],[81.0749,6.6118],[81.0636,6.6037],[81.0575,6.5938],[81.0607,6.5761],[81.0513,6.5826],[81.0417,6.5855],[81.0405,6.5885],[81.0237,6.5703],[81.0253,6.5661],[81.0232,6.5617],[81.0251,6.5591],[81.0215,6.5422],[81.0314,6.5248],[81.0297,6.5252],[81.0328,6.5063],[81.0172,6.4875],[81.033,6.4827],[81.0496,6.4723],[81.049,6.4631],[81.0525,6.4605],[81.0627,6.46],[81.0703,6.4654],[81.085,6.4696],[81.1061,6.4557],[81.1177,6.4624],[81.1286,6.4611],[81.1328,6.4572],[81.1326,6.4528],[81.1354,6.452],[81.1342,6.4465],[81.1402,6.4531],[81.1513,6.4536],[81.1597,6.4469],[81.1664,6.4548],[81.1767,6.4607],[81.1857,6.4636],[81.1947,6.4614],[81.2224,6.4845],[81.2247,6.4924],[81.2275,6.4943],[81.2345,6.4938],[81.2389,6.4895],[81.2421,6.491],[81.2304,6.5037],[81.228,6.522],[81.2235,6.5234],[81.2159,6.5384],[81.2083,6.5426],[81.1994,6.5531],[81.1911,6.5547],[81.199,6.5708],[81.1872,6.5724],[81.1796,6.5858],[81.1805,6.5955],[81.1847,6.5948],[81.1851,6.5994],[81.1851,6.6195],[81.1775,6.6388],[81.1778,6.6594],[81.182,6.6634],[81.182,6.6711],[81.1758,6.6884],[81.1709,6.6908],[81.1668,6.7],[81.173,6.7076],[81.1729,6.7116],[81.1673,6.7169],[81.1691,6.7194],[81.1671,6.7301],[81.1765,6.7376],[81.1734,6.7403],[81.1722,6.7489],[81.1639,6.7519],[81.1552,6.7641],[81.1497,6.7653],[81.1475,6.7693],[81.1362,6.774],[81.1505,6.784],[81.1504,6.7879],[81.1465,6.7892],[81.1457,6.7953],[81.1501,6.7997],[81.1444,6.8004],[81.1492,6.8089],[81.1451,6.8158],[81.1449,6.822],[81.1384,6.8202],[81.1281,6.8324]]]}},{"type":"Feature","properties":{"n":"Manthai East","d":"Mullaitivu","c":[80.3076,9.0535]},"geometry":{"type":"Polygon","coordinates":[[[80.3379,8.9588],[80.3944,8.9952],[80.4325,9.0312],[80.4252,9.0448],[80.4269,9.0557],[80.4239,9.0907],[80.403,9.0905],[80.403,9.1154],[80.3996,9.1294],[80.4038,9.1346],[80.3993,9.1346],[80.3996,9.1712],[80.3337,9.2113],[80.3253,9.1728],[80.3209,9.1367],[80.3191,9.1278],[80.3169,9.128],[80.3206,9.1152],[80.3104,9.1005],[80.3024,9.0951],[80.2776,9.115],[80.2755,9.1201],[80.2605,9.1308],[80.2425,9.1331],[80.2356,9.1293],[80.2278,9.1299],[80.2256,9.1311],[80.2258,9.1355],[80.2182,9.1382],[80.2178,9.1418],[80.2152,9.142],[80.2237,9.113],[80.214,9.0971],[80.2178,9.0552],[80.2043,9.0531],[80.1928,9.0457],[80.1741,8.9964],[80.1869,8.9848],[80.188,8.9792],[80.1757,8.9725],[80.1759,8.9572],[80.1725,8.9501],[80.2474,8.9514],[80.3264,8.9594],[80.3379,8.9588]]]}},{"type":"Feature","properties":{"n":"Maritimepattu","d":"Mullaitivu","c":[80.7911,9.1643]},"geometry":{"type":"Polygon","coordinates":[[[80.6075,9.4274],[80.6736,9.383],[80.6893,9.3512],[80.7313,9.347],[80.7426,9.3292],[80.7406,9.3245],[80.7287,9.3142],[80.7265,9.3043],[80.7296,9.3003],[80.7342,9.2991],[80.7295,9.2858],[80.7192,9.2782],[80.713,9.2655],[80.7117,9.2495],[80.7049,9.2444],[80.7039,9.2361],[80.6997,9.2334],[80.6978,9.2226],[80.6934,9.2174],[80.6939,9.2108],[80.6968,9.2067],[80.7111,9.1964],[80.7139,9.1901],[80.7108,9.1832],[80.7139,9.173],[80.7172,9.1701],[80.7149,9.1646],[80.716,9.1425],[80.7135,9.139],[80.7139,9.124],[80.7125,9.1218],[80.7032,9.1217],[80.6979,9.1283],[80.6908,9.1245],[80.6892,9.1132],[80.6917,9.1064],[80.7023,9.0987],[80.7163,9.0983],[80.7164,9.1008],[80.7326,9.1075],[80.7427,9.1092],[80.7498,9.1064],[80.7407,9.069],[80.7187,9.0533],[80.7239,9.0457],[80.7981,9.0023],[80.8102,9.0044],[80.8307,9.0133],[80.8396,9.0211],[80.844,9.0311],[80.8506,9.0384],[80.8634,9.0275],[80.861,9.0242],[80.8649,9.0253],[80.8689,9.0228],[80.8705,9.0265],[80.8754,9.0273],[80.8747,9.0242],[80.8809,9.017],[80.8843,9.0166],[80.885,9.0117],[80.8871,9.0122],[80.8914,9.0074],[80.8913,9.0104],[80.8937,9.0077],[80.8923,9.0062],[80.8993,9.0042],[80.8932,8.9991],[80.9068,8.9852],[80.9147,8.9843],[80.9224,8.9882],[80.9538,8.9847],[80.9652,8.9865],[80.9426,9.0195],[80.897,9.104],[80.8905,9.1108],[80.8757,9.1356],[80.8561,9.1805],[80.8418,9.2312],[80.8182,9.2702],[80.8078,9.2933],[80.7896,9.3137],[80.7407,9.349],[80.6935,9.3932],[80.6695,9.4192],[80.6208,9.4587],[80.6085,9.4376],[80.6075,9.4274]]]}},{"type":"Feature","properties":{"n":"Oddusuddan","d":"Mullaitivu","c":[80.5325,9.2002]},"geometry":{"type":"Polygon","coordinates":[[[80.5064,9.3453],[80.4061,9.3396],[80.4048,9.305],[80.4071,9.2946],[80.4035,9.285],[80.4047,9.2785],[80.381,9.2453],[80.3654,9.2357],[80.3488,9.2326],[80.3337,9.2113],[80.3984,9.1731],[80.3993,9.1346],[80.4038,9.1346],[80.3996,9.1294],[80.403,9.1154],[80.4193,9.1132],[80.493,9.1136],[80.4985,9.1082],[80.5039,9.0967],[80.5084,9.0937],[80.5112,9.0873],[80.5102,9.0839],[80.512,9.0836],[80.5099,9.0816],[80.5107,9.0755],[80.5131,9.0751],[80.5288,9.0765],[80.559,9.1074],[80.5832,9.1119],[80.58,9.126],[80.602,9.1263],[80.6197,9.1232],[80.6316,9.1165],[80.6366,9.1196],[80.6454,9.1153],[80.6501,9.095],[80.6496,9.0777],[80.6629,9.074],[80.6721,9.0807],[80.6807,9.0836],[80.6903,9.0742],[80.6855,9.0498],[80.6748,9.0416],[80.6739,9.0352],[80.6762,9.0296],[80.6846,9.0311],[80.7154,9.0503],[80.7239,9.0457],[80.7187,9.0533],[80.7407,9.069],[80.7498,9.1064],[80.7427,9.1092],[80.7326,9.1075],[80.7164,9.1008],[80.7163,9.0983],[80.7023,9.0987],[80.6917,9.1064],[80.6892,9.1132],[80.6908,9.1245],[80.6979,9.1283],[80.7032,9.1217],[80.7125,9.1218],[80.7139,9.124],[80.7135,9.139],[80.716,9.1425],[80.7149,9.1646],[80.7172,9.1701],[80.7139,9.173],[80.7108,9.1832],[80.7139,9.1901],[80.7111,9.1964],[80.6968,9.2067],[80.6939,9.2108],[80.6934,9.2174],[80.6925,9.2133],[80.6857,9.2088],[80.6814,9.2095],[80.6792,9.2062],[80.6717,9.2057],[80.6608,9.214],[80.6587,9.2125],[80.6528,9.2142],[80.6387,9.2305],[80.6215,9.2237],[80.6054,9.2226],[80.6016,9.2194],[80.5996,9.2206],[80.5844,9.2157],[80.5816,9.2296],[80.5703,9.2419],[80.5743,9.2531],[80.5817,9.2627],[80.5796,9.2835],[80.5808,9.2895],[80.5861,9.2948],[80.5864,9.3098],[80.5894,9.3117],[80.5905,9.3207],[80.578,9.3282],[80.5426,9.3367],[80.5376,9.3314],[80.5373,9.3384],[80.5267,9.3422],[80.5206,9.3473],[80.5116,9.344],[80.5064,9.3453]]]}},{"type":"Feature","properties":{"n":"Puthukkudiyiruppu","d":"Mullaitivu","c":[80.6359,9.3137]},"geometry":{"type":"Polygon","coordinates":[[[80.5114,9.3449],[80.523,9.3463],[80.5267,9.3422],[80.5373,9.3384],[80.5376,9.3314],[80.5426,9.3367],[80.578,9.3282],[80.5905,9.3207],[80.5894,9.3117],[80.5864,9.3098],[80.5861,9.2948],[80.5808,9.2895],[80.5796,9.2835],[80.5817,9.2627],[80.5743,9.2531],[80.5703,9.2419],[80.5816,9.2296],[80.5844,9.2157],[80.5996,9.2206],[80.6016,9.2194],[80.6054,9.2226],[80.6215,9.2237],[80.6387,9.2305],[80.6528,9.2142],[80.6587,9.2125],[80.6608,9.214],[80.6717,9.2057],[80.6792,9.2062],[80.6814,9.2095],[80.6857,9.2088],[80.6957,9.2183],[80.6997,9.2334],[80.7039,9.2361],[80.7049,9.2444],[80.7117,9.2495],[80.713,9.2655],[80.7192,9.2782],[80.7295,9.2858],[80.7342,9.2991],[80.7296,9.3003],[80.7265,9.3043],[80.7287,9.3142],[80.7406,9.3245],[80.7426,9.3292],[80.7313,9.347],[80.6893,9.3512],[80.6736,9.383],[80.6075,9.4274],[80.6031,9.42],[80.5959,9.4143],[80.5924,9.4174],[80.5835,9.4085],[80.581,9.3829],[80.5834,9.3763],[80.5814,9.3695],[80.5833,9.3625],[80.5565,9.3763],[80.53,9.405],[80.5276,9.3906],[80.5257,9.3897],[80.5273,9.3795],[80.5189,9.3644],[80.5151,9.3475],[80.5114,9.3449]]]}},{"type":"Feature","properties":{"n":"Thunukkai","d":"Mullaitivu","c":[80.2855,9.2216]},"geometry":{"type":"Polygon","coordinates":[[[80.1897,9.2371],[80.1934,9.1758],[80.2152,9.142],[80.2178,9.1418],[80.2182,9.1382],[80.2258,9.1355],[80.2256,9.1311],[80.2278,9.1299],[80.2356,9.1293],[80.2425,9.1331],[80.2605,9.1308],[80.2755,9.1201],[80.2776,9.115],[80.3024,9.0951],[80.3104,9.1005],[80.3206,9.1152],[80.3169,9.128],[80.3191,9.1278],[80.3209,9.1367],[80.3253,9.1728],[80.3337,9.2113],[80.3488,9.2326],[80.3654,9.2357],[80.381,9.2453],[80.3859,9.2507],[80.4047,9.2785],[80.4035,9.285],[80.4071,9.2946],[80.4048,9.305],[80.3448,9.3056],[80.321,9.3],[80.3215,9.3075],[80.3112,9.3097],[80.2931,9.3074],[80.2793,9.3023],[80.2688,9.3052],[80.2396,9.3001],[80.2271,9.2942],[80.212,9.2712],[80.2146,9.2481],[80.2188,9.2377],[80.2159,9.2324],[80.1962,9.2336],[80.1897,9.2371]]]}},{"type":"Feature","properties":{"n":"Welioya","d":"Mullaitivu","c":[80.7916,8.9816]},"geometry":{"type":"Polygon","coordinates":[[[80.9068,8.9852],[80.8932,8.9991],[80.8993,9.0042],[80.8923,9.0062],[80.8937,9.0077],[80.8913,9.0104],[80.8914,9.0074],[80.8871,9.0122],[80.885,9.0117],[80.8843,9.0166],[80.8809,9.017],[80.8747,9.0242],[80.8754,9.0273],[80.8705,9.0265],[80.8689,9.0228],[80.8649,9.0253],[80.861,9.0242],[80.8634,9.0275],[80.8506,9.0384],[80.844,9.0311],[80.8396,9.0211],[80.8307,9.0133],[80.8102,9.0044],[80.7981,9.0023],[80.7414,9.0356],[80.7233,9.0235],[80.7288,9.0164],[80.729,9.0114],[80.7012,8.9841],[80.7102,8.9458],[80.7366,8.9295],[80.743,8.903],[80.7531,8.9056],[80.7542,8.9179],[80.7598,8.93],[80.7598,8.9359],[80.7686,8.9394],[80.7736,8.947],[80.7804,8.9464],[80.7875,8.9505],[80.7939,8.9482],[80.8014,8.9527],[80.8051,8.9512],[80.8208,8.9558],[80.8256,8.955],[80.8264,8.9585],[80.8313,8.9604],[80.8482,8.961],[80.8574,8.9576],[80.8635,8.9584],[80.8718,8.9641],[80.8724,8.9688],[80.8806,8.969],[80.8853,8.9723],[80.8877,8.9807],[80.8938,8.9816],[80.8982,8.9788],[80.8997,8.9847],[80.9068,8.9852]]]}},{"type":"Feature","properties":{"n":"Ambagamuwa","d":"Nuwara Eliya","c":[80.5678,6.8638]},"geometry":{"type":"Polygon","coordinates":[[[80.5771,6.9446],[80.5652,6.946],[80.5616,6.94],[80.5491,6.9412],[80.545,6.9512],[80.5408,6.9541],[80.5402,6.9603],[80.5274,6.9686],[80.5147,6.9814],[80.5111,6.9923],[80.5108,7.0022],[80.5036,7.0219],[80.4939,7.0274],[80.4872,7.0271],[80.4727,7.0364],[80.4667,7.0293],[80.4645,7.0166],[80.4553,7.0106],[80.4488,7.0004],[80.4356,6.998],[80.43,6.9928],[80.429,6.9863],[80.4357,6.9769],[80.4414,6.9738],[80.443,6.9642],[80.4354,6.9571],[80.4342,6.9517],[80.4367,6.9444],[80.4345,6.9404],[80.4343,6.9225],[80.43,6.9236],[80.4318,6.9192],[80.429,6.9119],[80.4403,6.9101],[80.4469,6.9052],[80.452,6.9056],[80.4577,6.8989],[80.4637,6.9015],[80.4718,6.8975],[80.4781,6.8985],[80.4814,6.8942],[80.4897,6.8921],[80.4983,6.8842],[80.4923,6.8713],[80.4978,6.8647],[80.4972,6.8573],[80.5092,6.8476],[80.5029,6.8383],[80.4931,6.8316],[80.488,6.8192],[80.4912,6.8117],[80.4973,6.8127],[80.4995,6.8086],[80.4946,6.8056],[80.4921,6.8004],[80.4845,6.7989],[80.4835,6.7955],[80.4979,6.7789],[80.5078,6.7773],[80.5248,6.7679],[80.5357,6.7764],[80.5403,6.7768],[80.5497,6.7708],[80.5576,6.771],[80.571,6.7641],[80.6113,6.7594],[80.6503,6.7513],[80.6571,6.7546],[80.6589,6.7619],[80.6736,6.7588],[80.6915,6.7592],[80.7027,6.754],[80.7139,6.7592],[80.7207,6.757],[80.7322,6.7618],[80.7441,6.7569],[80.7539,6.7618],[80.7635,6.7722],[80.7734,6.7787],[80.7647,6.7986],[80.7488,6.7937],[80.7411,6.7959],[80.7323,6.7913],[80.7058,6.7998],[80.6955,6.809],[80.6855,6.8264],[80.6705,6.8411],[80.6655,6.8432],[80.6616,6.8489],[80.6548,6.8472],[80.6492,6.8503],[80.6455,6.8485],[80.6527,6.8562],[80.6511,6.8571],[80.6534,6.8653],[80.6482,6.8676],[80.6472,6.8704],[80.6513,6.8802],[80.6362,6.8936],[80.6344,6.9042],[80.6223,6.8972],[80.6141,6.8962],[80.6084,6.8982],[80.5973,6.91],[80.5945,6.912],[80.5905,6.9107],[80.5871,6.9161],[80.5818,6.917],[80.5814,6.9211],[80.5779,6.9222],[80.5821,6.9307],[80.5801,6.9313],[80.5771,6.9446]]]}},{"type":"Feature","properties":{"n":"Hanguranketa","d":"Nuwara Eliya","c":[80.7747,7.1225]},"geometry":{"type":"Polygon","coordinates":[[[80.7074,7.1253],[80.6948,7.1091],[80.7199,7.0938],[80.7223,7.0914],[80.7214,7.0861],[80.7243,7.0814],[80.7362,7.0744],[80.735,7.0656],[80.7438,7.0437],[80.7407,7.0326],[80.7418,7.0244],[80.7514,7.019],[80.7566,7.0071],[80.7627,7.0032],[80.7761,7.003],[80.7889,7.0198],[80.7988,7.0151],[80.8031,7.0175],[80.8134,7.0144],[80.8184,7.0228],[80.811,7.0417],[80.8121,7.0438],[80.8186,7.0437],[80.8178,7.0482],[80.825,7.0591],[80.8242,7.0665],[80.8198,7.0666],[80.8169,7.0704],[80.8128,7.0674],[80.8077,7.0688],[80.8002,7.0803],[80.7976,7.0804],[80.7989,7.0831],[80.7942,7.0805],[80.7918,7.0822],[80.7984,7.0997],[80.8016,7.1022],[80.8003,7.1116],[80.804,7.1184],[80.808,7.1241],[80.8106,7.1233],[80.8146,7.1281],[80.8242,7.1323],[80.824,7.1293],[80.827,7.1301],[80.8291,7.1341],[80.8276,7.1374],[80.8327,7.139],[80.8329,7.1432],[80.8404,7.1528],[80.8376,7.1594],[80.8417,7.1681],[80.8374,7.1748],[80.8441,7.174],[80.8412,7.1796],[80.8436,7.1836],[80.8393,7.1864],[80.8443,7.1915],[80.8349,7.1946],[80.8176,7.1958],[80.8014,7.2032],[80.7994,7.206],[80.7996,7.2266],[80.7942,7.2286],[80.7862,7.2372],[80.7814,7.2472],[80.7756,7.2495],[80.7498,7.2743],[80.7481,7.2716],[80.7533,7.2563],[80.7523,7.2517],[80.7573,7.2417],[80.7653,7.2374],[80.7626,7.2336],[80.7625,7.227],[80.7668,7.2232],[80.7666,7.2168],[80.764,7.2156],[80.7694,7.2007],[80.7498,7.178],[80.7439,7.1739],[80.7364,7.1622],[80.7266,7.1582],[80.7205,7.149],[80.7177,7.138],[80.7125,7.1345],[80.7074,7.1253]]]}},{"type":"Feature","properties":{"n":"Kothmale","d":"Nuwara Eliya","c":[80.6538,7.0381]},"geometry":{"type":"Polygon","coordinates":[[[80.6903,7.0958],[80.6862,7.0924],[80.6758,7.093],[80.6647,7.1024],[80.6538,7.102],[80.648,7.1047],[80.6381,7.1014],[80.6343,7.0868],[80.6283,7.0875],[80.624,7.0805],[80.61,7.0792],[80.6076,7.081],[80.5969,7.0753],[80.5909,7.0774],[80.5834,7.0763],[80.5767,7.072],[80.5682,7.0832],[80.5596,7.0771],[80.5526,7.0823],[80.5483,7.0767],[80.542,7.0763],[80.5391,7.0728],[80.5362,7.0611],[80.5377,7.0582],[80.5397,7.0622],[80.5422,7.0593],[80.5475,7.0646],[80.5527,7.0599],[80.558,7.0492],[80.556,7.0473],[80.5596,7.0459],[80.559,7.0386],[80.5704,7.0288],[80.5723,7.0239],[80.5818,7.0179],[80.5868,7.0074],[80.5989,6.9967],[80.5989,6.992],[80.5905,6.9836],[80.5901,6.9728],[80.594,6.9705],[80.5999,6.9743],[80.5983,6.9766],[80.6004,6.9795],[80.599,6.9829],[80.6011,6.9842],[80.6072,6.9841],[80.6074,6.9857],[80.6116,6.984],[80.6149,6.9861],[80.6178,6.9844],[80.6129,6.9798],[80.6164,6.9752],[80.6232,6.9727],[80.6265,6.9746],[80.6265,6.9657],[80.6342,6.9682],[80.6353,6.965],[80.6401,6.9705],[80.6441,6.9675],[80.6435,6.9693],[80.6485,6.9692],[80.6484,6.9722],[80.6596,6.9713],[80.6619,6.9755],[80.6844,6.9812],[80.6851,6.9831],[80.6879,6.9817],[80.708,6.9892],[80.7292,6.9926],[80.7326,6.9953],[80.7239,7.0073],[80.7252,7.012],[80.7312,7.0067],[80.7357,7.0074],[80.7367,7.0125],[80.7566,7.0071],[80.7514,7.019],[80.7418,7.0244],[80.7407,7.0326],[80.7438,7.0437],[80.735,7.0656],[80.7362,7.0744],[80.7243,7.0814],[80.7214,7.0861],[80.7223,7.0914],[80.7199,7.0938],[80.7085,7.0995],[80.6989,7.108],[80.6948,7.1091],[80.6903,7.0958]]]}},{"type":"Feature","properties":{"n":"Nuwara Eliya","d":"Nuwara Eliya","c":[80.7301,6.9067]},"geometry":{"type":"Polygon","coordinates":[[[80.7734,6.7787],[80.7827,6.7732],[80.7896,6.7729],[80.7918,6.7744],[80.7919,6.78],[80.8012,6.7886],[80.8146,6.7941],[80.8254,6.7931],[80.8319,6.7996],[80.8308,6.8053],[80.8355,6.8092],[80.8325,6.8142],[80.8204,6.815],[80.8128,6.8279],[80.8171,6.8318],[80.8231,6.8294],[80.8305,6.8333],[80.8353,6.8402],[80.8346,6.8456],[80.829,6.8499],[80.8295,6.8535],[80.8242,6.8563],[80.8216,6.855],[80.822,6.8588],[80.8191,6.8608],[80.8207,6.872],[80.8232,6.8749],[80.8153,6.8812],[80.8107,6.8782],[80.8124,6.8915],[80.8024,6.8942],[80.7958,6.9046],[80.7756,6.9098],[80.7743,6.9132],[80.7791,6.921],[80.8103,6.9169],[80.8241,6.9243],[80.8306,6.9319],[80.8337,6.9548],[80.8458,6.9657],[80.8566,6.9715],[80.862,6.9785],[80.8535,6.9811],[80.8311,6.9944],[80.8287,6.9991],[80.8348,7.008],[80.8308,7.0071],[80.8265,7.016],[80.8184,7.0228],[80.8134,7.0144],[80.8031,7.0175],[80.7988,7.0151],[80.7889,7.0198],[80.7761,7.003],[80.7707,7.0018],[80.7367,7.0125],[80.7357,7.0074],[80.7312,7.0067],[80.7252,7.012],[80.7239,7.0073],[80.7326,6.9953],[80.7292,6.9926],[80.708,6.9892],[80.6879,6.9817],[80.6851,6.9831],[80.6844,6.9812],[80.6619,6.9755],[80.6596,6.9713],[80.6484,6.9722],[80.6485,6.9692],[80.6435,6.9693],[80.6441,6.9675],[80.6401,6.9705],[80.6353,6.965],[80.6342,6.9682],[80.6265,6.9657],[80.6265,6.9746],[80.6232,6.9727],[80.6164,6.9752],[80.6129,6.9798],[80.6178,6.9844],[80.6074,6.9857],[80.6072,6.9841],[80.599,6.9829],[80.5999,6.9743],[80.594,6.9705],[80.5901,6.9728],[80.5848,6.9639],[80.5738,6.9617],[80.577,6.9403],[80.5821,6.9307],[80.5779,6.9222],[80.5814,6.9211],[80.5818,6.917],[80.5871,6.9161],[80.5905,6.9107],[80.5945,6.912],[80.6036,6.9017],[80.6141,6.8962],[80.6283,6.8995],[80.6344,6.9042],[80.6362,6.8936],[80.6513,6.8802],[80.6472,6.8704],[80.6482,6.8676],[80.6534,6.8653],[80.6511,6.8571],[80.6527,6.8562],[80.6455,6.8485],[80.6492,6.8503],[80.6548,6.8472],[80.6616,6.8489],[80.6655,6.8432],[80.6705,6.8411],[80.6855,6.8264],[80.6955,6.809],[80.7058,6.7998],[80.7323,6.7913],[80.7411,6.7959],[80.7488,6.7937],[80.7647,6.7986],[80.7734,6.7787]]]}},{"type":"Feature","properties":{"n":"Walapane","d":"Nuwara Eliya","c":[80.8836,7.0924]},"geometry":{"type":"Polygon","coordinates":[[[80.8184,7.0228],[80.8265,7.016],[80.8308,7.0071],[80.8348,7.008],[80.8287,6.9991],[80.8311,6.9944],[80.8535,6.9811],[80.8727,6.974],[80.8897,6.9787],[80.8951,6.978],[80.8945,6.9758],[80.9057,6.9845],[80.9179,6.99],[80.926,7.0128],[80.9294,7.0368],[80.9379,7.0435],[80.94,7.0533],[80.9555,7.0628],[80.9552,7.0746],[80.9629,7.0787],[80.9508,7.0896],[80.9527,7.0964],[80.9495,7.1011],[80.9553,7.1066],[80.9557,7.1146],[80.9627,7.1184],[80.9642,7.1219],[80.9537,7.1298],[80.949,7.1294],[80.95,7.1352],[80.9477,7.1389],[80.9503,7.1452],[80.9607,7.1422],[80.9582,7.1474],[80.9607,7.1583],[80.9525,7.1769],[80.9475,7.1782],[80.9482,7.1851],[80.9411,7.1954],[80.9421,7.1989],[80.9457,7.1999],[80.9423,7.2025],[80.9292,7.2006],[80.9141,7.2023],[80.9003,7.1996],[80.8875,7.194],[80.8443,7.1915],[80.8393,7.1864],[80.8436,7.1836],[80.8412,7.1796],[80.8441,7.174],[80.8374,7.1748],[80.8417,7.1681],[80.8376,7.1594],[80.8404,7.1528],[80.8329,7.1432],[80.8327,7.139],[80.8276,7.1374],[80.8291,7.1341],[80.827,7.1301],[80.824,7.1293],[80.8242,7.1323],[80.8146,7.1281],[80.8106,7.1233],[80.808,7.1241],[80.804,7.1184],[80.8003,7.1116],[80.8016,7.1022],[80.7984,7.0997],[80.7918,7.0822],[80.7942,7.0805],[80.7989,7.0831],[80.7976,7.0804],[80.8002,7.0803],[80.8077,7.0688],[80.8128,7.0674],[80.8169,7.0704],[80.8198,7.0666],[80.8242,7.0665],[80.825,7.0591],[80.8178,7.0482],[80.8186,7.0437],[80.8121,7.0438],[80.811,7.0417],[80.8184,7.0228]]]}},{"type":"Feature","properties":{"n":"Dimbulagala","d":"Polonnaruwa","c":[81.1232,7.7838]},"geometry":{"type":"Polygon","coordinates":[[[81.2357,7.76],[81.2253,7.777],[81.2244,7.7826],[81.2283,7.7942],[81.2228,7.8208],[81.2302,7.8431],[81.2289,7.8609],[81.2247,7.867],[81.2264,7.8769],[81.2346,7.8868],[81.233,7.8943],[81.2359,7.9027],[81.2342,7.9063],[81.2321,7.9043],[81.233,7.9021],[81.2292,7.8986],[81.2288,7.8938],[81.2204,7.8851],[81.2204,7.8774],[81.214,7.8719],[81.2009,7.8706],[81.1945,7.8735],[81.1861,7.8737],[81.1854,7.8716],[81.176,7.8712],[81.1617,7.8585],[81.1637,7.8891],[81.1594,7.889],[81.1569,7.8838],[81.1559,7.8888],[81.1492,7.8912],[81.144,7.9073],[81.1398,7.9112],[81.1343,7.9118],[81.1324,7.9195],[81.1286,7.9183],[81.1299,7.9237],[81.1244,7.93],[81.1248,7.9323],[81.127,7.9317],[81.1251,7.9339],[81.1311,7.9385],[81.1325,7.9423],[81.1262,7.9607],[81.1337,7.9699],[81.1304,7.9736],[81.1319,7.9784],[81.1216,7.9743],[81.1227,7.9666],[81.1182,7.9603],[81.1162,7.9478],[81.1035,7.9298],[81.0887,7.9208],[81.0845,7.9024],[81.0603,7.8743],[81.0567,7.8645],[81.0586,7.851],[81.0536,7.849],[81.0207,7.8495],[80.9999,7.8244],[80.9866,7.8236],[80.9823,7.8171],[80.9807,7.7846],[80.9861,7.7252],[80.991,7.7229],[81.0016,7.7234],[81.006,7.7297],[81.0102,7.7276],[81.0119,7.722],[81.0162,7.7205],[81.0192,7.7117],[81.0264,7.72],[81.0288,7.7147],[81.0329,7.7184],[81.0367,7.7149],[81.0341,7.7104],[81.0364,7.7029],[81.0414,7.7058],[81.0436,7.7123],[81.0475,7.7123],[81.0475,7.7171],[81.0514,7.7218],[81.0543,7.722],[81.0491,7.7366],[81.0595,7.7277],[81.0628,7.7178],[81.0698,7.7161],[81.0736,7.7161],[81.0841,7.7282],[81.0903,7.726],[81.095,7.7282],[81.0976,7.7217],[81.1042,7.7215],[81.1086,7.7049],[81.1084,7.6988],[81.1058,7.698],[81.1077,7.6936],[81.0971,7.6893],[81.0948,7.6849],[81.0948,7.6791],[81.1024,7.6763],[81.0992,7.6627],[81.102,7.6602],[81.1059,7.6646],[81.1091,7.6608],[81.115,7.6644],[81.1344,7.654],[81.1452,7.6574],[81.15,7.6426],[81.1499,7.6445],[81.156,7.6439],[81.1622,7.6481],[81.165,7.6466],[81.1649,7.6437],[81.1699,7.6432],[81.1696,7.6522],[81.1754,7.6513],[81.177,7.6531],[81.1774,7.658],[81.1737,7.659],[81.1732,7.6618],[81.1756,7.667],[81.1827,7.6626],[81.1883,7.6507],[81.1911,7.6528],[81.1889,7.6579],[81.1928,7.6574],[81.211,7.6409],[81.2126,7.6422],[81.2141,7.6449],[81.2098,7.6524],[81.2189,7.6525],[81.2178,7.6601],[81.2218,7.6732],[81.2359,7.6781],[81.239,7.6812],[81.2358,7.689],[81.2394,7.6936],[81.2362,7.7077],[81.2392,7.7149],[81.2322,7.7225],[81.2384,7.7392],[81.2341,7.7507],[81.2335,7.7567],[81.2357,7.76]]]}},{"type":"Feature","properties":{"n":"Elahera","d":"Polonnaruwa","c":[80.8414,7.8149]},"geometry":{"type":"Polygon","coordinates":[[[80.768,7.8021],[80.7594,7.7917],[80.7637,7.7853],[80.7616,7.7772],[80.7614,7.7342],[80.7719,7.7059],[80.7705,7.694],[80.7683,7.6913],[80.7781,7.6781],[80.8029,7.6787],[80.8063,7.6709],[80.8186,7.6788],[80.8229,7.6776],[80.8355,7.6803],[80.8397,7.692],[80.8442,7.6929],[80.8506,7.7015],[80.8527,7.7009],[80.8498,7.6949],[80.8515,7.6886],[80.8646,7.6902],[80.8698,7.688],[80.8758,7.6812],[80.8805,7.6977],[80.8815,7.7193],[80.8874,7.7285],[80.8926,7.7667],[80.8915,7.7823],[80.9023,7.83],[80.9021,7.856],[80.9069,7.9136],[80.9138,7.9521],[80.905,7.959],[80.902,7.9536],[80.8951,7.955],[80.8896,7.9508],[80.8814,7.9514],[80.8763,7.955],[80.8755,7.958],[80.8781,7.9619],[80.8718,7.9681],[80.8721,7.9714],[80.8651,7.9754],[80.868,7.9822],[80.8419,7.9856],[80.8362,7.9839],[80.8306,7.9704],[80.8383,7.9706],[80.8507,7.9623],[80.8386,7.9595],[80.8304,7.9546],[80.8275,7.9425],[80.8157,7.9242],[80.8151,7.9046],[80.8102,7.8876],[80.8066,7.8607],[80.808,7.8528],[80.8028,7.8415],[80.8039,7.8316],[80.8013,7.8222],[80.7952,7.8181],[80.7914,7.8183],[80.7943,7.804],[80.7832,7.7992],[80.7819,7.8038],[80.7788,7.8056],[80.7747,7.8014],[80.768,7.8021]]]}},{"type":"Feature","properties":{"n":"Higurakgoda","d":"Polonnaruwa","c":[80.8674,8.1126]},"geometry":{"type":"Polygon","coordinates":[[[80.8306,7.9704],[80.8362,7.9839],[80.8419,7.9856],[80.8663,7.9829],[80.8679,7.9806],[80.8651,7.9754],[80.8707,7.973],[80.8718,7.9681],[80.8781,7.9619],[80.8755,7.958],[80.8763,7.955],[80.8814,7.9514],[80.8896,7.9508],[80.8951,7.955],[80.902,7.9536],[80.905,7.959],[80.9138,7.9521],[80.913,7.9392],[80.9314,7.9474],[80.936,7.9554],[80.9386,7.9538],[80.951,7.9569],[80.9492,7.958],[80.9503,7.9629],[80.9564,7.9653],[80.9606,7.9755],[80.9693,7.9766],[80.9688,7.9804],[80.983,7.9928],[80.9883,7.994],[80.9827,8.0055],[80.9881,8.0094],[80.9924,8.0092],[80.9938,8.0121],[80.9984,8.0118],[81.0003,8.0179],[81.0058,8.0198],[81.0141,8.0328],[81.0115,8.0346],[81.0105,8.0425],[81.0131,8.0475],[81.0043,8.0454],[80.997,8.0502],[81.0021,8.053],[81.0009,8.0578],[81.0044,8.0574],[81.0047,8.0651],[81.0101,8.0671],[81.0154,8.0646],[81.0241,8.0689],[81.0163,8.0747],[81.0032,8.0794],[81.0014,8.0776],[80.996,8.0878],[80.9795,8.0871],[80.9768,8.0894],[80.9783,8.0979],[80.9812,8.1027],[80.9884,8.105],[80.9786,8.1079],[80.9743,8.1053],[80.97,8.094],[80.9558,8.0888],[80.9514,8.0925],[80.9464,8.0916],[80.9469,8.0881],[80.9439,8.0854],[80.9479,8.0831],[80.9479,8.0742],[80.9441,8.0738],[80.9445,8.0701],[80.9326,8.0686],[80.9342,8.0835],[80.9321,8.0828],[80.9305,8.0876],[80.9362,8.1033],[80.9338,8.1054],[80.9244,8.1024],[80.9118,8.1061],[80.9046,8.1027],[80.9024,8.1084],[80.9057,8.1123],[80.9022,8.1174],[80.894,8.1216],[80.8882,8.1292],[80.8756,8.1341],[80.8893,8.1445],[80.8909,8.1556],[80.9006,8.1721],[80.9006,8.1798],[80.9063,8.1873],[80.9045,8.2026],[80.9183,8.2019],[80.9215,8.2084],[80.9251,8.2059],[80.9284,8.2094],[80.9328,8.2213],[80.9327,8.2349],[80.9348,8.2396],[80.9341,8.2453],[80.9303,8.2486],[80.9524,8.3058],[80.9667,8.317],[80.963,8.3187],[80.9632,8.3229],[80.9585,8.3249],[80.9499,8.3217],[80.9392,8.342],[80.9332,8.3454],[80.9285,8.3454],[80.9207,8.3332],[80.9096,8.3253],[80.9016,8.3008],[80.898,8.2797],[80.8038,8.2786],[80.802,8.2699],[80.7931,8.2535],[80.7844,8.2042],[80.7582,8.1507],[80.7609,8.1447],[80.7561,8.1335],[80.755,8.0698],[80.7578,8.0672],[80.7683,8.0677],[80.7686,8.0583],[80.7558,8.0431],[80.7553,8.0365],[80.7602,8.0287],[80.759,8.0204],[80.7619,8.0189],[80.7528,8.0151],[80.7536,8.0112],[80.7632,8.0007],[80.7766,7.9956],[80.7756,7.9668],[80.7842,7.9616],[80.7976,7.9579],[80.7995,7.9629],[80.7985,7.9765],[80.8118,7.9825],[80.817,7.9805],[80.8169,7.9753],[80.8212,7.97],[80.8306,7.9704]]]}},{"type":"Feature","properties":{"n":"Lankapura","d":"Polonnaruwa","c":[81.0933,8.0574]},"geometry":{"type":"Polygon","coordinates":[[[81.1319,7.9784],[81.1319,7.9868],[81.1359,7.9917],[81.1313,8.0029],[81.136,8.0046],[81.1472,8.0175],[81.1457,8.0211],[81.1391,8.023],[81.1384,8.0251],[81.1462,8.0424],[81.1441,8.0494],[81.146,8.0615],[81.1526,8.0677],[81.1538,8.0764],[81.1613,8.0755],[81.1618,8.0847],[81.1648,8.0853],[81.1668,8.0809],[81.1682,8.0817],[81.1738,8.1058],[81.1797,8.1098],[81.1817,8.1171],[81.1866,8.1223],[81.1809,8.1278],[81.1825,8.1304],[81.1887,8.1317],[81.1836,8.1365],[81.1806,8.1505],[81.1726,8.1498],[81.1698,8.1395],[81.1613,8.134],[81.1491,8.1344],[81.1436,8.1383],[81.1408,8.1359],[81.1332,8.1352],[81.1318,8.1279],[81.124,8.1182],[81.129,8.1158],[81.1274,8.1095],[81.1218,8.1091],[81.1179,8.1049],[81.1182,8.0965],[81.1158,8.0961],[81.1175,8.093],[81.1133,8.093],[81.1076,8.08],[81.0953,8.0848],[81.0877,8.0847],[81.0894,8.1037],[81.0757,8.0981],[81.0634,8.099],[81.0566,8.1026],[81.0455,8.0989],[81.036,8.1068],[81.0271,8.1063],[81.0228,8.1037],[81.0171,8.1047],[81.0149,8.0993],[81.0118,8.0991],[81.0111,8.0919],[81.0184,8.0881],[81.0163,8.0747],[81.0241,8.0689],[81.0154,8.0646],[81.0101,8.0671],[81.0047,8.0651],[81.0044,8.0574],[81.0009,8.0578],[81.0021,8.053],[80.997,8.0502],[81.0043,8.0454],[81.0131,8.0475],[81.0105,8.0425],[81.0115,8.0346],[81.0141,8.0328],[81.0113,8.0273],[81.0136,8.0233],[81.0204,8.0275],[81.0248,8.0256],[81.0275,8.0215],[81.0257,8.0161],[81.0279,8.01],[81.0443,8.0039],[81.0556,7.9964],[81.0561,7.9936],[81.064,7.9913],[81.0773,7.9974],[81.0821,8.0033],[81.0842,8.0011],[81.0872,8.0026],[81.087,8.0053],[81.0922,8.0049],[81.0979,7.995],[81.0957,7.9885],[81.0994,7.9861],[81.0908,7.9858],[81.0902,7.9794],[81.0972,7.979],[81.102,7.9739],[81.1087,7.9736],[81.1319,7.9784]]]}},{"type":"Feature","properties":{"n":"Medirigiriya","d":"Polonnaruwa","c":[81.0379,8.184]},"geometry":{"type":"Polygon","coordinates":[[[81.0163,8.0747],[81.0184,8.0881],[81.0111,8.0919],[81.0118,8.0991],[81.0149,8.0993],[81.0171,8.1047],[81.0228,8.1037],[81.0321,8.1071],[81.036,8.1068],[81.0455,8.0989],[81.0566,8.1026],[81.0634,8.099],[81.0757,8.0981],[81.0894,8.1037],[81.0877,8.0847],[81.0953,8.0848],[81.1076,8.08],[81.1133,8.093],[81.1175,8.093],[81.1158,8.0961],[81.1182,8.0965],[81.1179,8.1049],[81.1218,8.1091],[81.1274,8.1095],[81.129,8.1158],[81.124,8.1182],[81.1318,8.1279],[81.1332,8.1352],[81.1408,8.1359],[81.1436,8.1383],[81.1491,8.1344],[81.1613,8.134],[81.1698,8.1395],[81.1726,8.1498],[81.1806,8.1505],[81.1808,8.1461],[81.1832,8.1455],[81.1905,8.1514],[81.19,8.1553],[81.1968,8.1617],[81.2035,8.1614],[81.2111,8.1801],[81.2092,8.1829],[81.2029,8.1813],[81.2008,8.1832],[81.2027,8.1907],[81.1988,8.1967],[81.2039,8.2142],[81.2006,8.2275],[81.1929,8.232],[81.185,8.2269],[81.1758,8.2293],[81.1715,8.234],[81.1642,8.2332],[81.1397,8.2589],[81.1322,8.2589],[81.1306,8.2619],[81.1245,8.2635],[81.1208,8.2633],[81.1142,8.2581],[81.1103,8.2594],[81.1068,8.2549],[81.0981,8.2616],[81.0878,8.263],[81.0764,8.2724],[81.0625,8.2708],[81.0527,8.2742],[81.0472,8.2734],[81.045,8.2774],[81.0371,8.2786],[81.0235,8.2757],[81.0148,8.2781],[80.9986,8.272],[80.9863,8.2724],[80.9786,8.3123],[80.9667,8.317],[80.9524,8.3058],[80.9303,8.2486],[80.9341,8.2453],[80.9348,8.2396],[80.9327,8.2349],[80.9328,8.2213],[80.9284,8.2094],[80.9251,8.2059],[80.9215,8.2084],[80.9183,8.2019],[80.9045,8.2026],[80.9063,8.1873],[80.9006,8.1798],[80.9006,8.1721],[80.8909,8.1556],[80.8893,8.1445],[80.8756,8.1341],[80.8882,8.1292],[80.894,8.1216],[80.9022,8.1174],[80.9057,8.1123],[80.9024,8.1084],[80.9046,8.1027],[80.9118,8.1061],[80.9244,8.1024],[80.9338,8.1054],[80.9362,8.1033],[80.9305,8.0876],[80.9321,8.0828],[80.9342,8.0835],[80.9326,8.0686],[80.9445,8.0701],[80.9441,8.0738],[80.9479,8.0742],[80.9479,8.0831],[80.9439,8.0854],[80.9469,8.0881],[80.9464,8.0916],[80.9514,8.0925],[80.9558,8.0888],[80.97,8.094],[80.9743,8.1053],[80.9786,8.1079],[80.9884,8.105],[80.9812,8.1027],[80.9768,8.0894],[80.9795,8.0871],[80.996,8.0878],[81.0014,8.0776],[81.0032,8.0794],[81.0163,8.0747]]]}},{"type":"Feature","properties":{"n":"Thamankaduwa","d":"Polonnaruwa","c":[80.9851,7.8774]},"geometry":{"type":"Polygon","coordinates":[[[80.9861,7.7252],[80.9807,7.7846],[80.9823,7.8171],[80.9866,7.8236],[80.9999,7.8244],[81.0207,7.8495],[81.0536,7.849],[81.0586,7.851],[81.0567,7.8645],[81.0603,7.8743],[81.0845,7.9024],[81.0887,7.9208],[81.1071,7.934],[81.1162,7.9478],[81.1182,7.9603],[81.1227,7.9666],[81.1216,7.9743],[81.1233,7.9753],[81.102,7.9739],[81.0972,7.979],[81.0902,7.9794],[81.0908,7.9858],[81.0994,7.9861],[81.0957,7.9885],[81.0979,7.995],[81.0922,8.0049],[81.087,8.0053],[81.0872,8.0026],[81.0842,8.0011],[81.0821,8.0033],[81.0773,7.9974],[81.0613,7.9918],[81.0443,8.0039],[81.0279,8.01],[81.0257,8.0161],[81.0275,8.0215],[81.0204,8.0275],[81.0136,8.0233],[81.0113,8.0273],[81.0083,8.0263],[81.0058,8.0198],[81.0003,8.0179],[80.9984,8.0118],[80.9938,8.0121],[80.9924,8.0092],[80.9881,8.0094],[80.9827,8.0055],[80.9883,7.994],[80.983,7.9928],[80.9688,7.9804],[80.9693,7.9766],[80.9606,7.9755],[80.9564,7.9653],[80.9503,7.9629],[80.9492,7.958],[80.951,7.9569],[80.9386,7.9538],[80.936,7.9554],[80.9314,7.9474],[80.913,7.9392],[80.9069,7.9136],[80.9021,7.856],[80.9023,7.83],[80.8915,7.7823],[80.8926,7.7667],[80.8899,7.743],[80.8874,7.7285],[80.8809,7.7151],[80.9032,7.7159],[80.9099,7.7114],[80.9262,7.7083],[80.9371,7.71],[80.9394,7.7135],[80.9487,7.712],[80.962,7.7162],[80.9781,7.7156],[80.9865,7.7202],[80.9861,7.7252]]]}},{"type":"Feature","properties":{"n":"Welikanda","d":"Polonnaruwa","c":[81.2328,8.0415]},"geometry":{"type":"Polygon","coordinates":[[[81.2342,7.9063],[81.2351,7.9213],[81.2511,7.9361],[81.2606,7.9396],[81.2643,7.9366],[81.2727,7.937],[81.2863,7.9473],[81.2956,7.9464],[81.3047,7.9363],[81.3136,7.9389],[81.3252,7.9337],[81.3319,7.9371],[81.3374,7.936],[81.3379,7.9542],[81.3316,7.9682],[81.3326,7.9699],[81.33,7.9714],[81.3308,7.9737],[81.3266,7.9788],[81.3047,8.0289],[81.3123,8.248],[81.3094,8.2516],[81.296,8.255],[81.2854,8.2614],[81.2851,8.2577],[81.2785,8.2567],[81.2794,8.2497],[81.2708,8.2473],[81.2708,8.2406],[81.2643,8.2416],[81.2641,8.239],[81.268,8.2385],[81.2673,8.2345],[81.2636,8.2355],[81.2605,8.2302],[81.2553,8.2321],[81.2555,8.2248],[81.25,8.227],[81.2478,8.2257],[81.25,8.211],[81.2446,8.2014],[81.2427,8.2017],[81.2413,8.1958],[81.2357,8.1961],[81.2346,8.1914],[81.2411,8.1799],[81.239,8.178],[81.2354,8.1796],[81.2321,8.1741],[81.2305,8.1691],[81.2336,8.1684],[81.2301,8.1638],[81.2321,8.1616],[81.2296,8.1556],[81.2265,8.1585],[81.2246,8.1552],[81.2192,8.154],[81.2163,8.1564],[81.2138,8.1531],[81.2099,8.1527],[81.2091,8.1493],[81.2042,8.1479],[81.2021,8.1507],[81.1905,8.1514],[81.1832,8.1455],[81.1836,8.1365],[81.1887,8.1317],[81.1825,8.1304],[81.1809,8.1278],[81.1866,8.1223],[81.1817,8.1171],[81.1797,8.1098],[81.1738,8.1058],[81.1682,8.0817],[81.1668,8.0809],[81.1648,8.0853],[81.1618,8.0847],[81.1613,8.0755],[81.1538,8.0764],[81.1526,8.0677],[81.146,8.0615],[81.1441,8.0494],[81.1462,8.0424],[81.1384,8.0251],[81.1391,8.023],[81.1457,8.0211],[81.1472,8.0175],[81.136,8.0046],[81.1313,8.0029],[81.1359,7.9917],[81.1319,7.9868],[81.1331,7.982],[81.1304,7.9736],[81.1337,7.9699],[81.1262,7.9607],[81.1325,7.9423],[81.1311,7.9385],[81.1251,7.9339],[81.127,7.9317],[81.1248,7.9323],[81.1244,7.93],[81.1299,7.9237],[81.1286,7.9183],[81.1324,7.9195],[81.1343,7.9118],[81.1398,7.9112],[81.144,7.9073],[81.1492,7.8912],[81.1559,7.8888],[81.1569,7.8838],[81.1594,7.889],[81.1637,7.8891],[81.1617,7.8585],[81.176,7.8712],[81.1945,7.8735],[81.2082,7.8702],[81.2101,7.8727],[81.214,7.8719],[81.2176,7.8742],[81.2204,7.8774],[81.2204,7.8851],[81.2288,7.8938],[81.2292,7.8986],[81.2342,7.9063]]]}},{"type":"Feature","properties":{"n":"Anamaduwa","d":"Puttalam","c":[79.9976,7.9053]},"geometry":{"type":"Polygon","coordinates":[[[79.9961,7.9622],[79.9888,7.9605],[79.9817,7.9634],[79.9757,7.9625],[79.9752,7.9605],[79.9659,7.9614],[79.9653,7.9643],[79.9546,7.9699],[79.9546,7.9741],[79.9517,7.9764],[79.9526,7.9825],[79.9492,7.9877],[79.9447,7.9907],[79.9387,7.99],[79.9354,7.9958],[79.93,7.9994],[79.9223,7.9978],[79.9225,8.0001],[79.9187,8.0012],[79.9194,7.9921],[79.9089,7.9761],[79.9129,7.9749],[79.91,7.9725],[79.9163,7.9662],[79.9148,7.9573],[79.9188,7.9485],[79.9164,7.9434],[79.9266,7.941],[79.9316,7.9244],[79.9312,7.9212],[79.9287,7.9219],[79.9284,7.9189],[79.9252,7.9174],[79.931,7.9115],[79.9244,7.9013],[79.9284,7.8939],[79.9264,7.8856],[79.9303,7.8802],[79.9276,7.8736],[79.9396,7.876],[79.9432,7.8671],[79.9433,7.8653],[79.9332,7.8634],[79.9327,7.8576],[79.943,7.8539],[79.9476,7.8548],[79.9506,7.8502],[79.9517,7.8518],[79.9547,7.8507],[79.9561,7.8555],[79.9585,7.8558],[79.9631,7.8487],[79.9621,7.8417],[79.9674,7.8433],[79.9661,7.8345],[79.9713,7.8298],[79.9696,7.825],[79.9642,7.8224],[79.9623,7.8147],[79.9548,7.809],[79.9633,7.7956],[79.9601,7.7874],[79.9634,7.7854],[79.969,7.7863],[79.9693,7.7909],[79.9738,7.7907],[79.977,7.794],[79.9926,7.7935],[79.9965,7.8115],[80.0095,7.815],[80.0029,7.8272],[80.0057,7.8326],[80.0131,7.8338],[80.0165,7.8377],[80.036,7.8445],[80.0391,7.8585],[80.0357,7.8592],[80.0392,7.8652],[80.0472,7.8671],[80.0501,7.8727],[80.062,7.8717],[80.0648,7.8738],[80.0645,7.8882],[80.0712,7.8904],[80.072,7.8935],[80.0725,7.9071],[80.0704,7.9137],[80.0917,7.9212],[80.0904,7.9164],[80.0965,7.9143],[80.0993,7.9247],[80.1066,7.9298],[80.1045,7.9406],[80.1078,7.9498],[80.1019,7.9565],[80.0974,7.9556],[80.0915,7.9586],[80.0808,7.9561],[80.0744,7.9625],[80.0683,7.9647],[80.054,7.9633],[80.0376,7.9543],[80.0364,7.9579],[80.0276,7.9597],[80.0244,7.9632],[80.0195,7.9633],[80.0102,7.9689],[80.004,7.9679],[79.9993,7.9625],[79.9961,7.9622]]]}},{"type":"Feature","properties":{"n":"Arachchikattuwa","d":"Puttalam","c":[79.8465,7.6779]},"geometry":{"type":"Polygon","coordinates":[[[79.7906,7.7284],[79.7973,7.6843],[79.7978,7.6269],[79.7944,7.6118],[79.7901,7.6077],[79.7842,7.6065],[79.7839,7.6039],[79.8005,7.6093],[79.7981,7.6096],[79.8017,7.614],[79.8034,7.6098],[79.8009,7.6031],[79.8118,7.6031],[79.8184,7.5994],[79.8207,7.6026],[79.8174,7.6068],[79.8207,7.6115],[79.8278,7.6089],[79.8343,7.6157],[79.8443,7.6099],[79.8445,7.6176],[79.8484,7.622],[79.8541,7.6189],[79.8588,7.6225],[79.8639,7.6188],[79.8733,7.6211],[79.8815,7.6311],[79.8946,7.6258],[79.9038,7.6164],[79.9015,7.6327],[79.8991,7.6331],[79.9014,7.6341],[79.9004,7.6596],[79.898,7.6608],[79.9005,7.6632],[79.9013,7.6934],[79.9093,7.7203],[79.913,7.7211],[79.9105,7.7228],[79.9109,7.7255],[79.8909,7.7203],[79.8884,7.7215],[79.8938,7.7326],[79.8879,7.7326],[79.8888,7.7383],[79.8863,7.7396],[79.8719,7.7395],[79.8711,7.7428],[79.861,7.7443],[79.8521,7.7435],[79.8493,7.7413],[79.8498,7.7355],[79.8414,7.7356],[79.8415,7.734],[79.8389,7.7367],[79.8357,7.7328],[79.8332,7.7373],[79.8196,7.738],[79.8216,7.7423],[79.8194,7.7452],[79.8152,7.7424],[79.8116,7.7462],[79.8093,7.7444],[79.8087,7.7479],[79.7997,7.7504],[79.7973,7.7483],[79.7997,7.7476],[79.7999,7.7339],[79.8046,7.7298],[79.8032,7.7241],[79.7995,7.7235],[79.8001,7.7261],[79.7906,7.7284]]]}},{"type":"Feature","properties":{"n":"Chilaw","d":"Puttalam","c":[79.8361,7.5792]},"geometry":{"type":"Polygon","coordinates":[[[79.7839,7.6039],[79.7865,7.5455],[79.791,7.5196],[79.8115,7.5192],[79.8121,7.5118],[79.824,7.5152],[79.8206,7.5229],[79.8239,7.5248],[79.8226,7.535],[79.8303,7.5381],[79.8306,7.55],[79.8353,7.5504],[79.8359,7.5596],[79.8408,7.5626],[79.8416,7.5547],[79.8457,7.5537],[79.8455,7.5593],[79.8517,7.5555],[79.8503,7.5577],[79.8554,7.5581],[79.8641,7.556],[79.8635,7.5605],[79.871,7.5611],[79.873,7.5632],[79.8698,7.5745],[79.8726,7.5788],[79.8766,7.5779],[79.8821,7.5826],[79.8853,7.5826],[79.885,7.5858],[79.893,7.5864],[79.8963,7.5898],[79.9025,7.5874],[79.9058,7.5941],[79.9038,7.6164],[79.8946,7.6258],[79.885,7.6309],[79.8815,7.6311],[79.8733,7.6211],[79.8639,7.6188],[79.8588,7.6225],[79.8541,7.6189],[79.8484,7.622],[79.8445,7.6176],[79.8443,7.6099],[79.8343,7.6157],[79.8278,7.6089],[79.8207,7.6115],[79.8174,7.6068],[79.8207,7.6026],[79.8184,7.5994],[79.8118,7.6031],[79.8009,7.6031],[79.8034,7.6098],[79.8017,7.614],[79.7981,7.6096],[79.8005,7.6093],[79.7839,7.6039]]]}},{"type":"Feature","properties":{"n":"Dankotuwa","d":"Puttalam","c":[79.9035,7.321]},"geometry":{"type":"Polygon","coordinates":[[[79.9395,7.2759],[79.9359,7.3459],[79.9281,7.3789],[79.9175,7.375],[79.9174,7.3727],[79.9091,7.3684],[79.9016,7.3765],[79.8952,7.3709],[79.897,7.3634],[79.892,7.3627],[79.8869,7.3714],[79.8778,7.3701],[79.8723,7.3628],[79.8741,7.3541],[79.8719,7.3542],[79.8711,7.3503],[79.8744,7.3456],[79.8753,7.3373],[79.8843,7.339],[79.8835,7.3357],[79.8874,7.3352],[79.8886,7.3324],[79.8833,7.3305],[79.8845,7.3259],[79.8771,7.3236],[79.8746,7.3235],[79.874,7.3284],[79.8714,7.3278],[79.8726,7.3209],[79.8669,7.319],[79.8669,7.3106],[79.8638,7.3093],[79.8633,7.3013],[79.8583,7.2922],[79.8616,7.2815],[79.8687,7.2824],[79.8671,7.2866],[79.8673,7.284],[79.8687,7.2855],[79.8784,7.2803],[79.8831,7.2734],[79.8954,7.2745],[79.8972,7.2811],[79.9006,7.2747],[79.9038,7.2743],[79.9059,7.2799],[79.9071,7.2754],[79.9028,7.2687],[79.906,7.2649],[79.9144,7.2706],[79.9128,7.2766],[79.9215,7.2779],[79.9223,7.2714],[79.9261,7.2725],[79.921,7.282],[79.922,7.2843],[79.931,7.2779],[79.9361,7.2805],[79.9395,7.2759]]]}},{"type":"Feature","properties":{"n":"Kalpitiya","d":"Puttalam","c":[79.7554,8.2712]},"geometry":{"type":"MultiPolygon","coordinates":[[[[79.7465,8.1723],[79.7486,8.1773],[79.7461,8.1766],[79.7465,8.1723]]],[[[79.777,8.1891],[79.7729,8.1925],[79.7746,8.1901],[79.7732,8.1868],[79.7532,8.1729],[79.777,8.1891]]],[[[79.7686,8.2138],[79.763,8.2125],[79.7667,8.2073],[79.7651,8.2123],[79.7686,8.2138]]],[[[79.7812,8.2188],[79.7798,8.2157],[79.7834,8.2148],[79.7812,8.2188]]],[[[79.7783,8.2712],[79.7748,8.2748],[79.7727,8.2686],[79.7763,8.263],[79.7796,8.2621],[79.7838,8.2679],[79.7783,8.2712]]],[[[79.7593,8.2783],[79.7579,8.2777],[79.7609,8.2742],[79.7668,8.2762],[79.766,8.2783],[79.7593,8.2783]]],[[[79.7907,8.2821],[79.7931,8.2835],[79.7878,8.2858],[79.7907,8.2821]]],[[[79.7944,8.3052],[79.7915,8.3037],[79.7916,8.2988],[79.7964,8.2939],[79.7988,8.2995],[79.7933,8.2964],[79.7951,8.2992],[79.7931,8.3002],[79.7934,8.3049],[79.7992,8.3028],[79.8001,8.3042],[79.7944,8.3052]]],[[[79.8005,8.3388],[79.7975,8.3418],[79.8046,8.3201],[79.807,8.3182],[79.8118,8.32],[79.8135,8.322],[79.8067,8.3219],[79.8033,8.3269],[79.8074,8.3272],[79.8038,8.3291],[79.8079,8.3326],[79.803,8.3348],[79.8031,8.3379],[79.8082,8.337],[79.8082,8.3386],[79.8005,8.3388]]],[[[79.8202,7.9669],[79.8219,7.9704],[79.8198,7.9799],[79.8158,7.9799],[79.8126,7.976],[79.8081,7.9783],[79.7818,7.979],[79.7485,7.9902],[79.7428,7.9956],[79.7341,8.0149],[79.743,8.0344],[79.7397,8.0543],[79.7487,8.0624],[79.7529,8.0631],[79.7372,8.0706],[79.7288,8.0854],[79.7339,8.1068],[79.7321,8.1152],[79.725,8.1222],[79.7273,8.1292],[79.7259,8.1374],[79.7304,8.1438],[79.7368,8.1439],[79.7359,8.1466],[79.7392,8.1512],[79.7377,8.1578],[79.7443,8.1658],[79.741,8.1751],[79.743,8.1809],[79.7472,8.1818],[79.7458,8.188],[79.7375,8.1944],[79.7355,8.2014],[79.7381,8.2049],[79.742,8.2044],[79.7397,8.2078],[79.748,8.219],[79.755,8.2225],[79.7532,8.2224],[79.7539,8.2246],[79.7594,8.2213],[79.7604,8.2164],[79.7668,8.217],[79.7683,8.2279],[79.7635,8.2415],[79.7756,8.2588],[79.7746,8.2611],[79.7652,8.2629],[79.7617,8.2591],[79.7621,8.2555],[79.7503,8.2432],[79.7452,8.2395],[79.7475,8.2423],[79.7456,8.2415],[79.738,8.2307],[79.7291,8.2282],[79.7339,8.2334],[79.7367,8.2449],[79.7386,8.245],[79.7367,8.2499],[79.745,8.2514],[79.7511,8.2483],[79.7545,8.2534],[79.7511,8.2488],[79.7504,8.2513],[79.7487,8.2488],[79.7472,8.2509],[79.7556,8.2559],[79.7584,8.2619],[79.7577,8.2657],[79.7616,8.2681],[79.7596,8.2726],[79.7554,8.2712],[79.7543,8.273],[79.7568,8.2675],[79.7529,8.2632],[79.7483,8.2638],[79.7525,8.2731],[79.7558,8.2737],[79.7565,8.2767],[79.7517,8.2802],[79.7533,8.2839],[79.7504,8.2849],[79.7559,8.2953],[79.7598,8.2969],[79.76,8.2995],[79.7655,8.3009],[79.7561,8.3029],[79.7591,8.3116],[79.7634,8.316],[79.7624,8.3189],[79.7657,8.3262],[79.763,8.325],[79.7677,8.3322],[79.7662,8.326],[79.7698,8.3293],[79.7708,8.3395],[79.7753,8.3449],[79.7736,8.3469],[79.7758,8.3474],[79.7771,8.3552],[79.7798,8.3571],[79.783,8.3704],[79.7771,8.3775],[79.7831,8.3828],[79.7872,8.3831],[79.7837,8.3837],[79.7726,8.3764],[79.7706,8.3479],[79.7619,8.3274],[79.7584,8.3105],[79.7425,8.2815],[79.732,8.2337],[79.7275,8.2278],[79.723,8.2275],[79.7128,8.2183],[79.706,8.2175],[79.6992,8.2199],[79.6903,8.2093],[79.7028,8.1561],[79.7027,8.1217],[79.6991,8.1123],[79.7052,8.0906],[79.7039,8.0569],[79.7154,8.0232],[79.7112,8.0219],[79.7154,8.023],[79.7427,7.9341],[79.7477,7.9279],[79.7499,7.9303],[79.7612,7.9299],[79.755,7.94],[79.7554,7.9496],[79.7591,7.9494],[79.7587,7.9611],[79.7643,7.955],[79.7765,7.9533],[79.7765,7.9445],[79.7914,7.9443],[79.793,7.9584],[79.7955,7.9522],[79.8036,7.9501],[79.8085,7.9686],[79.8202,7.9669]]],[[[79.7859,8.5471],[79.7805,8.542],[79.7834,8.5363],[79.784,8.5251],[79.7797,8.5108],[79.7741,8.5019],[79.7781,8.4836],[79.7841,8.469],[79.7976,8.4493],[79.804,8.4451],[79.8058,8.4366],[79.8028,8.4297],[79.8039,8.4063],[79.8084,8.4031],[79.811,8.4068],[79.8061,8.4053],[79.8043,8.4138],[79.8048,8.425],[79.8077,8.4307],[79.8068,8.4482],[79.7976,8.4523],[79.7937,8.4627],[79.789,8.4638],[79.7902,8.4696],[79.785,8.4711],[79.7781,8.4928],[79.7805,8.4955],[79.7816,8.5078],[79.7859,8.5101],[79.7842,8.5139],[79.7875,8.5254],[79.7847,8.529],[79.785,8.5366],[79.7826,8.5402],[79.7859,8.5471]]]]}},{"type":"Feature","properties":{"n":"Karuwalagaswewa","d":"Puttalam","c":[79.998,8.1186]},"geometry":{"type":"Polygon","coordinates":[[[79.9961,7.9622],[79.9997,7.9799],[80.0044,7.986],[80.0109,7.9862],[80.0184,7.9943],[80.0311,8.0174],[80.031,8.0233],[80.0423,8.0401],[80.0474,8.052],[80.0542,8.0817],[80.0574,8.078],[80.0724,8.0794],[80.0844,8.0753],[80.1235,8.082],[80.1129,8.0963],[80.1058,8.1515],[80.0978,8.1604],[80.0969,8.1704],[80.1024,8.1809],[80.1019,8.1894],[80.0991,8.1917],[80.0941,8.2086],[80.0842,8.2106],[80.0765,8.2231],[80.061,8.2189],[80.0353,8.2363],[80.0258,8.2266],[80.0161,8.2244],[80.0055,8.2287],[79.9939,8.2287],[79.9841,8.2375],[79.9554,8.2426],[79.9514,8.2492],[79.955,8.2569],[79.9491,8.2628],[79.9453,8.2779],[79.9409,8.2822],[79.9245,8.2872],[79.9234,8.2081],[79.934,8.2056],[79.9388,8.2072],[79.9405,8.1938],[79.9382,8.1937],[79.934,8.184],[79.9359,8.1793],[79.9344,8.172],[79.9297,8.1671],[79.9285,8.169],[79.9236,8.1679],[79.9244,8.116],[79.9049,8.1151],[79.9046,8.1087],[79.9012,8.103],[79.8818,8.105],[79.8775,8.0978],[79.8851,8.0892],[79.9009,8.0844],[79.9037,8.082],[79.9036,8.0778],[79.9087,8.0758],[79.9109,8.0698],[79.9134,8.07],[79.911,8.068],[79.9149,8.0637],[79.9134,8.0598],[79.917,8.0573],[79.9208,8.0471],[79.9202,8.0397],[79.917,8.036],[79.9191,8.032],[79.9163,8.03],[79.9164,8.0241],[79.9144,8.0243],[79.9124,8.0194],[79.9187,8.0082],[79.9187,8.0012],[79.9225,8.0001],[79.9223,7.9978],[79.93,7.9994],[79.9354,7.9958],[79.9387,7.99],[79.9447,7.9907],[79.9492,7.9877],[79.9526,7.9825],[79.9517,7.9764],[79.9546,7.9741],[79.9546,7.9699],[79.9653,7.9643],[79.9659,7.9614],[79.9752,7.9605],[79.9757,7.9625],[79.9817,7.9634],[79.9888,7.9605],[79.9961,7.9622]]]}},{"type":"Feature","properties":{"n":"Madampe","d":"Puttalam","c":[79.8622,7.5178]},"geometry":{"type":"Polygon","coordinates":[[[79.9025,7.5874],[79.8963,7.5898],[79.893,7.5864],[79.885,7.5858],[79.8853,7.5826],[79.8821,7.5826],[79.8766,7.5779],[79.8726,7.5788],[79.8698,7.5745],[79.873,7.5632],[79.871,7.5611],[79.8635,7.5605],[79.8641,7.556],[79.8554,7.5581],[79.8503,7.5577],[79.8517,7.5555],[79.8455,7.5593],[79.8457,7.5537],[79.8416,7.5547],[79.8408,7.5626],[79.8359,7.5596],[79.8353,7.5504],[79.8306,7.55],[79.8303,7.5381],[79.8226,7.535],[79.8239,7.5248],[79.8206,7.5229],[79.824,7.5152],[79.8121,7.5118],[79.8145,7.4982],[79.8097,7.4881],[79.8096,7.4788],[79.8122,7.4747],[79.8171,7.4752],[79.8203,7.4712],[79.8231,7.4746],[79.8257,7.4719],[79.8295,7.4736],[79.8386,7.4692],[79.8469,7.4722],[79.8536,7.4676],[79.8562,7.4703],[79.865,7.4694],[79.8672,7.4744],[79.8703,7.4703],[79.8853,7.4733],[79.8898,7.4722],[79.8943,7.4784],[79.9039,7.4813],[79.898,7.5568],[79.8986,7.5786],[79.9025,7.5874]]]}},{"type":"Feature","properties":{"n":"Mahakumbukkadawala","d":"Puttalam","c":[79.903,7.8486]},"geometry":{"type":"Polygon","coordinates":[[[79.8686,7.7802],[79.9253,7.7693],[79.9293,7.7757],[79.9408,7.7768],[79.9493,7.77],[79.9533,7.7815],[79.96,7.7864],[79.9634,7.7854],[79.9601,7.7874],[79.9633,7.7956],[79.9548,7.809],[79.9623,7.8147],[79.9642,7.8224],[79.9696,7.825],[79.9713,7.8298],[79.9661,7.8345],[79.9674,7.8433],[79.9621,7.8417],[79.9631,7.8487],[79.9585,7.8558],[79.9561,7.8555],[79.9547,7.8507],[79.9517,7.8518],[79.9506,7.8502],[79.9476,7.8548],[79.943,7.8539],[79.9327,7.8576],[79.9332,7.8634],[79.9433,7.8653],[79.9432,7.8671],[79.9396,7.876],[79.9276,7.8736],[79.9303,7.8802],[79.9264,7.8856],[79.9284,7.8939],[79.9244,7.9013],[79.931,7.9115],[79.9252,7.9174],[79.9284,7.9189],[79.9287,7.9219],[79.9312,7.9212],[79.9316,7.9244],[79.9266,7.941],[79.9164,7.9434],[79.9188,7.9485],[79.9148,7.9573],[79.9163,7.9662],[79.91,7.9725],[79.9129,7.9749],[79.911,7.977],[79.9028,7.9764],[79.8968,7.9719],[79.8963,7.9663],[79.8908,7.9569],[79.8924,7.9467],[79.8883,7.9416],[79.886,7.9419],[79.8876,7.9366],[79.8751,7.9184],[79.872,7.9037],[79.855,7.8684],[79.8555,7.859],[79.864,7.8472],[79.8648,7.842],[79.8572,7.8333],[79.8548,7.8337],[79.8559,7.8292],[79.8506,7.8287],[79.8437,7.8117],[79.8416,7.8023],[79.8458,7.7811],[79.8372,7.7794],[79.8343,7.7757],[79.8396,7.7681],[79.8535,7.7722],[79.8686,7.7802]]]}},{"type":"Feature","properties":{"n":"Mahawewa","d":"Puttalam","c":[79.8479,7.4549]},"geometry":{"type":"Polygon","coordinates":[[[79.791,7.5196],[79.8006,7.4642],[79.8151,7.4077],[79.8365,7.4104],[79.84,7.4175],[79.8445,7.4177],[79.8444,7.4223],[79.8481,7.4255],[79.8483,7.4298],[79.8665,7.4282],[79.8737,7.4335],[79.8734,7.4382],[79.8784,7.4416],[79.8852,7.4403],[79.8835,7.4341],[79.8889,7.4309],[79.8945,7.4356],[79.9066,7.4308],[79.905,7.4266],[79.9071,7.4247],[79.9125,7.4284],[79.9118,7.4325],[79.9176,7.4329],[79.9049,7.4852],[79.9039,7.4813],[79.8943,7.4784],[79.8898,7.4722],[79.8853,7.4733],[79.8703,7.4703],[79.8672,7.4744],[79.865,7.4694],[79.8562,7.4703],[79.8536,7.4676],[79.8469,7.4722],[79.8386,7.4692],[79.8295,7.4736],[79.8257,7.4719],[79.8231,7.4746],[79.8203,7.4712],[79.8171,7.4752],[79.8122,7.4747],[79.8096,7.4788],[79.8097,7.4881],[79.8145,7.4982],[79.8115,7.5192],[79.791,7.5196]]]}},{"type":"Feature","properties":{"n":"Mundel","d":"Puttalam","c":[79.8127,7.8578]},"geometry":{"type":"Polygon","coordinates":[[[79.8202,7.9669],[79.8085,7.9686],[79.8036,7.9501],[79.7955,7.9522],[79.793,7.9584],[79.7914,7.9443],[79.7765,7.9445],[79.7765,7.9533],[79.7643,7.955],[79.7587,7.9611],[79.7591,7.9494],[79.7554,7.9496],[79.755,7.94],[79.7612,7.9299],[79.7499,7.9303],[79.7477,7.9279],[79.7427,7.9341],[79.7756,7.8027],[79.7906,7.7284],[79.8001,7.7261],[79.7995,7.7235],[79.8032,7.7241],[79.8046,7.7298],[79.7999,7.7339],[79.7997,7.7476],[79.7973,7.7483],[79.7997,7.7504],[79.8087,7.7479],[79.8093,7.7444],[79.8116,7.7462],[79.8152,7.7424],[79.8194,7.7452],[79.8216,7.7423],[79.8196,7.738],[79.8332,7.7373],[79.8357,7.7328],[79.8389,7.7367],[79.8415,7.734],[79.8414,7.7356],[79.8498,7.7355],[79.8493,7.7413],[79.8521,7.7435],[79.8711,7.7428],[79.8674,7.7463],[79.8686,7.7802],[79.8535,7.7722],[79.8396,7.7681],[79.8343,7.7757],[79.8372,7.7794],[79.8458,7.7811],[79.8416,7.8023],[79.8437,7.8117],[79.8506,7.8287],[79.8559,7.8292],[79.8548,7.8337],[79.8572,7.8333],[79.8648,7.842],[79.864,7.8472],[79.8555,7.859],[79.855,7.8684],[79.872,7.9037],[79.8751,7.9184],[79.8851,7.9331],[79.8786,7.9314],[79.8743,7.9343],[79.8743,7.9369],[79.8691,7.9395],[79.8649,7.9385],[79.8619,7.9403],[79.8623,7.9425],[79.8577,7.9441],[79.8531,7.9431],[79.8514,7.9397],[79.847,7.9403],[79.8519,7.9504],[79.8442,7.9504],[79.843,7.9533],[79.8201,7.9601],[79.8202,7.9669]]]}},{"type":"Feature","properties":{"n":"Nattandiya","d":"Puttalam","c":[79.8721,7.3965]},"geometry":{"type":"Polygon","coordinates":[[[79.9281,7.3789],[79.9268,7.3936],[79.9239,7.3983],[79.9176,7.4329],[79.9153,7.4339],[79.9118,7.4325],[79.9125,7.4284],[79.9071,7.4247],[79.905,7.4266],[79.9066,7.4308],[79.8945,7.4356],[79.8889,7.4309],[79.8835,7.4341],[79.8852,7.4403],[79.8784,7.4416],[79.8734,7.4382],[79.8737,7.4335],[79.8665,7.4282],[79.8483,7.4298],[79.8481,7.4255],[79.8444,7.4223],[79.8445,7.4177],[79.84,7.4175],[79.8365,7.4104],[79.8151,7.4077],[79.8249,7.3559],[79.8389,7.3579],[79.8466,7.352],[79.8518,7.3544],[79.853,7.358],[79.8503,7.3688],[79.86,7.3666],[79.8744,7.37],[79.8753,7.3675],[79.8778,7.3701],[79.8869,7.3714],[79.892,7.3627],[79.897,7.3634],[79.8952,7.3709],[79.9016,7.3765],[79.9091,7.3684],[79.9174,7.3727],[79.9175,7.375],[79.9281,7.3789]]]}},{"type":"Feature","properties":{"n":"Nawagattegama","d":"Puttalam","c":[80.0868,8.0123]},"geometry":{"type":"Polygon","coordinates":[[[80.1078,7.9498],[80.114,7.9502],[80.12,7.9463],[80.1307,7.9341],[80.1344,7.9377],[80.1404,7.9373],[80.1462,7.9418],[80.1389,7.9545],[80.1325,7.9593],[80.1312,7.9665],[80.1476,7.9982],[80.1414,8.0055],[80.1463,8.0176],[80.1437,8.0365],[80.1502,8.0682],[80.1403,8.0748],[80.1263,8.0776],[80.1235,8.082],[80.0844,8.0753],[80.0724,8.0794],[80.0574,8.078],[80.0542,8.0817],[80.0474,8.052],[80.0423,8.0401],[80.031,8.0233],[80.0311,8.0174],[80.0184,7.9943],[80.0109,7.9862],[80.0044,7.986],[79.9997,7.9799],[79.9961,7.9622],[79.9993,7.9625],[80.004,7.9679],[80.0102,7.9689],[80.0195,7.9633],[80.0244,7.9632],[80.0276,7.9597],[80.0364,7.9579],[80.0376,7.9543],[80.054,7.9633],[80.0683,7.9647],[80.0744,7.9625],[80.0808,7.9561],[80.0915,7.9586],[80.0974,7.9556],[80.1019,7.9565],[80.1078,7.9498]]]}},{"type":"Feature","properties":{"n":"Pallama","d":"Puttalam","c":[79.932,7.7301]},"geometry":{"type":"Polygon","coordinates":[[[79.8711,7.7428],[79.8719,7.7395],[79.8863,7.7396],[79.8888,7.7383],[79.8879,7.7326],[79.8938,7.7326],[79.8884,7.7215],[79.8909,7.7203],[79.9077,7.726],[79.9109,7.7255],[79.9105,7.7228],[79.913,7.7211],[79.9093,7.7203],[79.9013,7.6934],[79.9005,7.6632],[79.898,7.6608],[79.9004,7.6596],[79.9014,7.6341],[79.8991,7.6331],[79.9015,7.6327],[79.9037,7.6166],[79.9076,7.6256],[79.9189,7.6334],[79.9217,7.6462],[79.9314,7.6497],[79.9294,7.6532],[79.9211,7.6559],[79.9283,7.6654],[79.9262,7.6746],[79.9337,7.6811],[79.9394,7.6764],[79.9446,7.6823],[79.9466,7.6758],[79.9564,7.6731],[79.958,7.6751],[79.9579,7.6826],[79.9612,7.6865],[79.9523,7.694],[79.9368,7.6922],[79.937,7.6942],[79.9444,7.7009],[79.9522,7.7011],[79.9504,7.7131],[79.9534,7.7201],[79.9597,7.7177],[79.9739,7.7235],[79.9756,7.7309],[79.9802,7.7355],[79.9975,7.7444],[79.999,7.7493],[79.9931,7.7544],[79.9908,7.7613],[80.0002,7.7783],[79.9926,7.7935],[79.977,7.794],[79.9738,7.7907],[79.9693,7.7909],[79.969,7.7863],[79.96,7.7864],[79.9533,7.7815],[79.9493,7.77],[79.9408,7.7768],[79.9293,7.7757],[79.9253,7.7693],[79.8686,7.7802],[79.8674,7.7463],[79.8711,7.7428]]]}},{"type":"Feature","properties":{"n":"Puttalam","d":"Puttalam","c":[79.8615,8.0263]},"geometry":{"type":"Polygon","coordinates":[[[79.8851,7.9331],[79.8876,7.9366],[79.886,7.9419],[79.8883,7.9416],[79.8924,7.9467],[79.8908,7.9569],[79.8963,7.9663],[79.8968,7.9719],[79.9028,7.9764],[79.9089,7.9761],[79.9194,7.9921],[79.9173,8.0037],[79.9187,8.0082],[79.9124,8.0194],[79.9144,8.0243],[79.9164,8.0241],[79.9163,8.03],[79.9191,8.032],[79.917,8.036],[79.9202,8.0397],[79.9208,8.0471],[79.917,8.0573],[79.9134,8.0598],[79.9149,8.0637],[79.911,8.068],[79.9134,8.07],[79.9109,8.0698],[79.9087,8.0758],[79.9036,8.0778],[79.9037,8.082],[79.9009,8.0844],[79.8851,8.0892],[79.8775,8.0978],[79.8673,8.09],[79.8658,8.0837],[79.8626,8.0863],[79.8586,8.0852],[79.8478,8.0881],[79.8483,8.094],[79.843,8.0972],[79.8448,8.1018],[79.8402,8.1033],[79.84,8.1068],[79.8323,8.1126],[79.8274,8.1063],[79.8238,8.1098],[79.8158,8.1086],[79.8124,8.0987],[79.8082,8.0963],[79.7986,8.0834],[79.7932,8.0857],[79.7916,8.0836],[79.7881,8.0866],[79.7888,8.0812],[79.7907,8.0824],[79.7974,8.0782],[79.7975,8.073],[79.7908,8.0714],[79.7878,8.076],[79.7893,8.0789],[79.7875,8.0757],[79.7922,8.065],[79.8192,8.0389],[79.8322,8.0179],[79.833,8.0099],[79.83,8.0075],[79.8305,8.0039],[79.826,8.0023],[79.823,7.9976],[79.8166,7.9965],[79.8154,7.99],[79.8227,7.9786],[79.8219,7.9758],[79.8209,7.9782],[79.8201,7.9601],[79.843,7.9533],[79.8442,7.9504],[79.8519,7.9504],[79.847,7.9403],[79.8514,7.9397],[79.8531,7.9431],[79.8577,7.9441],[79.8623,7.9425],[79.8619,7.9403],[79.8649,7.9385],[79.8691,7.9395],[79.8743,7.9369],[79.8743,7.9343],[79.8786,7.9314],[79.8851,7.9331]]]}},{"type":"Feature","properties":{"n":"Vanathavilluwa","d":"Puttalam","c":[79.9085,8.3427]},"geometry":{"type":"MultiPolygon","coordinates":[[[[79.8035,8.1748],[79.8084,8.1616],[79.8104,8.1648],[79.8035,8.1748]]],[[[79.9979,8.2275],[79.9943,8.2535],[79.9805,8.2775],[79.9829,8.2859],[79.9774,8.3043],[79.9793,8.3081],[79.9739,8.3251],[79.9727,8.3381],[79.9497,8.3696],[79.9533,8.3947],[79.9618,8.3995],[79.9792,8.3993],[79.9837,8.4119],[79.9892,8.4156],[79.986,8.4188],[79.9868,8.4217],[79.9941,8.4265],[79.9979,8.4329],[80.0038,8.4335],[80.0047,8.4369],[80.0131,8.4399],[80.0147,8.444],[80.0178,8.4451],[80.0178,8.4487],[80.0302,8.4661],[80.0411,8.4988],[80.0309,8.5262],[80.0057,8.5358],[80.003,8.5422],[79.9971,8.5459],[79.9874,8.5431],[79.9752,8.5527],[79.9645,8.5501],[79.9534,8.552],[79.9451,8.5603],[79.9346,8.5559],[79.9256,8.5642],[79.9184,8.5667],[79.9168,8.5547],[79.9129,8.5486],[79.8991,8.5459],[79.895,8.5414],[79.8862,8.5377],[79.8769,8.5362],[79.8723,8.5401],[79.8687,8.5361],[79.8648,8.5166],[79.8633,8.4807],[79.8594,8.4737],[79.8624,8.4524],[79.8532,8.4431],[79.846,8.4408],[79.8408,8.4219],[79.8439,8.3919],[79.8441,8.3509],[79.8367,8.3451],[79.835,8.3386],[79.8374,8.334],[79.8303,8.3243],[79.8353,8.3125],[79.8304,8.302],[79.8315,8.2911],[79.8216,8.2826],[79.8144,8.2684],[79.8081,8.238],[79.7874,8.2329],[79.7909,8.2293],[79.7905,8.2318],[79.795,8.2307],[79.7939,8.2339],[79.7976,8.233],[79.8059,8.2267],[79.8043,8.2247],[79.8058,8.2263],[79.8086,8.2238],[79.808,8.2222],[79.8025,8.2242],[79.7966,8.2218],[79.7908,8.2278],[79.7923,8.2235],[79.8064,8.2161],[79.8168,8.2058],[79.8219,8.1821],[79.8211,8.1783],[79.8199,8.1808],[79.8139,8.1819],[79.8191,8.1737],[79.8172,8.1711],[79.818,8.1742],[79.8164,8.1731],[79.819,8.1669],[79.8171,8.1629],[79.8223,8.1611],[79.8315,8.1507],[79.828,8.1459],[79.8328,8.1382],[79.8325,8.1296],[79.8295,8.1298],[79.8209,8.1225],[79.8187,8.122],[79.8178,8.1244],[79.8182,8.1136],[79.8158,8.1086],[79.8238,8.1098],[79.8274,8.1063],[79.8323,8.1126],[79.84,8.1068],[79.8402,8.1033],[79.8448,8.1018],[79.843,8.0972],[79.8483,8.094],[79.8478,8.0881],[79.8586,8.0852],[79.8626,8.0863],[79.8658,8.0837],[79.8673,8.09],[79.8775,8.0978],[79.8818,8.105],[79.9012,8.103],[79.9046,8.1087],[79.9049,8.1151],[79.9244,8.116],[79.9236,8.1679],[79.9285,8.169],[79.9297,8.1671],[79.9344,8.172],[79.9359,8.1793],[79.934,8.184],[79.9382,8.1937],[79.9405,8.1938],[79.9388,8.2072],[79.934,8.2056],[79.9234,8.2081],[79.9245,8.2872],[79.9409,8.2822],[79.9453,8.2779],[79.9491,8.2628],[79.955,8.2569],[79.9514,8.2492],[79.9554,8.2426],[79.9841,8.2375],[79.9979,8.2275]]]]}},{"type":"Feature","properties":{"n":"Wennappuwa","d":"Puttalam","c":[79.8524,7.3233]},"geometry":{"type":"Polygon","coordinates":[[[79.8753,7.3675],[79.8744,7.37],[79.86,7.3666],[79.8503,7.3688],[79.853,7.358],[79.8518,7.3544],[79.8466,7.352],[79.8389,7.3579],[79.8249,7.3559],[79.8389,7.2726],[79.8484,7.272],[79.852,7.2767],[79.8563,7.2705],[79.8651,7.2712],[79.8684,7.28],[79.8716,7.2823],[79.8687,7.2855],[79.8673,7.284],[79.8671,7.2866],[79.8687,7.2824],[79.8616,7.2815],[79.8583,7.2922],[79.8633,7.3013],[79.8638,7.3093],[79.8669,7.3106],[79.8669,7.319],[79.8726,7.3209],[79.8714,7.3278],[79.874,7.3284],[79.8746,7.3235],[79.8771,7.3236],[79.8845,7.3259],[79.8833,7.3305],[79.8886,7.3324],[79.8874,7.3352],[79.8835,7.3357],[79.8843,7.339],[79.8753,7.3373],[79.8744,7.3456],[79.8711,7.3503],[79.8719,7.3542],[79.8741,7.3541],[79.8723,7.3628],[79.8753,7.3675]]]}},{"type":"Feature","properties":{"n":"Ayagama","d":"Ratnapura","c":[80.2897,6.651]},"geometry":{"type":"Polygon","coordinates":[[[80.2912,6.7248],[80.2764,6.7289],[80.2701,6.7347],[80.2667,6.7308],[80.2565,6.7318],[80.2544,6.7353],[80.2524,6.7293],[80.2508,6.7321],[80.2448,6.7312],[80.2372,6.7345],[80.2246,6.7285],[80.2204,6.7317],[80.2085,6.7295],[80.1971,6.731],[80.197,6.7263],[80.2026,6.7218],[80.2007,6.7201],[80.2078,6.7106],[80.214,6.6911],[80.2183,6.6911],[80.2235,6.6811],[80.2393,6.6703],[80.2474,6.6582],[80.2496,6.653],[80.2495,6.6455],[80.2468,6.642],[80.2478,6.6354],[80.2529,6.6267],[80.2586,6.622],[80.272,6.617],[80.2794,6.6181],[80.2833,6.6148],[80.296,6.5981],[80.302,6.5951],[80.3124,6.5703],[80.3269,6.5488],[80.3296,6.5583],[80.3265,6.5626],[80.3309,6.5704],[80.3281,6.5755],[80.3364,6.5785],[80.3461,6.578],[80.356,6.555],[80.3626,6.5493],[80.3733,6.5564],[80.3816,6.5565],[80.3829,6.559],[80.3774,6.5608],[80.3742,6.5698],[80.3774,6.5714],[80.3796,6.5875],[80.3695,6.5936],[80.362,6.606],[80.3609,6.6039],[80.3574,6.6068],[80.3512,6.6196],[80.345,6.6208],[80.3347,6.6332],[80.3338,6.6399],[80.3236,6.6494],[80.3131,6.6698],[80.3106,6.6791],[80.3122,6.6806],[80.3042,6.6902],[80.2946,6.7115],[80.2955,6.714],[80.2909,6.7214],[80.2912,6.7248]]]}},{"type":"Feature","properties":{"n":"Balangoda","d":"Ratnapura","c":[80.7678,6.6271]},"geometry":{"type":"Polygon","coordinates":[[[80.8254,6.6767],[80.811,6.6702],[80.7929,6.6803],[80.791,6.6748],[80.7946,6.646],[80.7937,6.6432],[80.7884,6.641],[80.7878,6.6332],[80.7856,6.6318],[80.7638,6.638],[80.7566,6.6372],[80.7579,6.6412],[80.7536,6.6388],[80.7484,6.6443],[80.7402,6.6451],[80.738,6.6491],[80.727,6.6466],[80.7234,6.6497],[80.7186,6.6489],[80.7139,6.6524],[80.7139,6.6564],[80.7039,6.6619],[80.7045,6.6655],[80.6943,6.6681],[80.6807,6.6759],[80.6793,6.6822],[80.6745,6.6878],[80.6489,6.7002],[80.642,6.711],[80.6315,6.7124],[80.6323,6.7063],[80.6185,6.7143],[80.611,6.7149],[80.604,6.7116],[80.6042,6.7029],[80.6014,6.6993],[80.6039,6.6965],[80.6038,6.6908],[80.6106,6.6868],[80.614,6.6803],[80.6104,6.6754],[80.6114,6.67],[80.598,6.6612],[80.6133,6.6547],[80.6197,6.6547],[80.6232,6.6517],[80.6373,6.6509],[80.645,6.6467],[80.6558,6.6452],[80.6612,6.6415],[80.6544,6.6315],[80.6599,6.6254],[80.6527,6.6194],[80.6553,6.6104],[80.6498,6.6046],[80.668,6.5981],[80.6701,6.6037],[80.6845,6.6081],[80.695,6.6028],[80.7057,6.6036],[80.7149,6.6015],[80.7182,6.6048],[80.7239,6.6001],[80.7243,6.5932],[80.7302,6.5876],[80.7463,6.5821],[80.7705,6.5899],[80.8027,6.5887],[80.8097,6.591],[80.8131,6.5817],[80.8091,6.5718],[80.8113,6.5673],[80.8073,6.5616],[80.8057,6.5466],[80.8024,6.5419],[80.8056,6.5371],[80.8154,6.5368],[80.8199,6.5404],[80.8299,6.5363],[80.8321,6.5325],[80.8281,6.5206],[80.8291,6.5116],[80.833,6.5057],[80.8427,6.5232],[80.8549,6.5359],[80.8631,6.552],[80.8624,6.5576],[80.8583,6.5598],[80.8649,6.5727],[80.864,6.5793],[80.8704,6.5819],[80.8672,6.587],[80.8672,6.5925],[80.8743,6.5928],[80.8729,6.6012],[80.8767,6.6047],[80.8732,6.6104],[80.8798,6.6134],[80.8919,6.634],[80.9012,6.6372],[80.9033,6.646],[80.9012,6.65],[80.9055,6.6546],[80.9103,6.6718],[80.9262,6.6877],[80.9177,6.6914],[80.9154,6.6953],[80.9121,6.692],[80.9135,6.6883],[80.9074,6.6839],[80.9059,6.6773],[80.8903,6.6745],[80.8819,6.6627],[80.8642,6.6618],[80.8612,6.6653],[80.8548,6.6568],[80.8479,6.6607],[80.846,6.6657],[80.8279,6.6684],[80.8254,6.6767]]]}},{"type":"Feature","properties":{"n":"Eheliyagoda","d":"Ratnapura","c":[80.2251,6.8376]},"geometry":{"type":"Polygon","coordinates":[[[80.209,6.9165],[80.2018,6.9126],[80.197,6.9032],[80.1924,6.904],[80.1867,6.8981],[80.1878,6.8928],[80.1819,6.8856],[80.1786,6.867],[80.1735,6.8574],[80.1927,6.8512],[80.2012,6.8264],[80.2003,6.8181],[80.197,6.814],[80.1872,6.8144],[80.1854,6.8183],[80.1835,6.8154],[80.1756,6.8155],[80.181,6.7947],[80.1842,6.793],[80.1848,6.7873],[80.1909,6.7823],[80.1917,6.7779],[80.1888,6.7706],[80.1944,6.7528],[80.2032,6.7524],[80.2042,6.7551],[80.2171,6.7589],[80.2272,6.7587],[80.2291,6.7644],[80.2353,6.7648],[80.2308,6.7687],[80.2343,6.7713],[80.241,6.7672],[80.2409,6.7627],[80.2443,6.7607],[80.2559,6.7624],[80.2596,6.7676],[80.2646,6.7673],[80.2517,6.7989],[80.2484,6.8127],[80.2573,6.8216],[80.2656,6.8211],[80.2668,6.8258],[80.2726,6.8273],[80.2704,6.8342],[80.2717,6.8363],[80.2732,6.8342],[80.2747,6.8363],[80.2776,6.8347],[80.2737,6.8372],[80.2763,6.8392],[80.2809,6.8363],[80.2849,6.8371],[80.2819,6.8413],[80.2783,6.8392],[80.2791,6.8442],[80.2839,6.8454],[80.2833,6.8529],[80.2788,6.8571],[80.2816,6.8563],[80.2832,6.8595],[80.2781,6.8649],[80.2783,6.871],[80.2687,6.8717],[80.2657,6.8742],[80.2594,6.8867],[80.2521,6.8926],[80.2494,6.9008],[80.2437,6.9014],[80.24,6.9069],[80.2324,6.9031],[80.2293,6.924],[80.2242,6.9256],[80.2236,6.9301],[80.2184,6.9262],[80.2196,6.9219],[80.2156,6.9207],[80.2143,6.916],[80.209,6.9165]]]}},{"type":"Feature","properties":{"n":"Elapatha","d":"Ratnapura","c":[80.3521,6.6626]},"geometry":{"type":"Polygon","coordinates":[[[80.3677,6.598],[80.385,6.6173],[80.3973,6.6095],[80.4048,6.6114],[80.4007,6.6254],[80.407,6.6256],[80.4035,6.6312],[80.4053,6.6387],[80.4003,6.6452],[80.4028,6.6502],[80.3902,6.6587],[80.3906,6.665],[80.377,6.6808],[80.3763,6.688],[80.37,6.6931],[80.3719,6.6962],[80.363,6.7],[80.3629,6.6967],[80.3604,6.697],[80.3585,6.6937],[80.3562,6.6979],[80.3539,6.6974],[80.3479,6.7024],[80.3412,6.7114],[80.3372,6.7134],[80.3339,6.7111],[80.3336,6.717],[80.3243,6.7171],[80.3165,6.7206],[80.314,6.7245],[80.3121,6.7236],[80.3141,6.7208],[80.3074,6.7182],[80.3068,6.7214],[80.3043,6.7193],[80.2912,6.7248],[80.2909,6.7214],[80.2955,6.714],[80.2946,6.7115],[80.3042,6.6902],[80.3122,6.6806],[80.3106,6.6791],[80.3131,6.6698],[80.3236,6.6494],[80.3338,6.6399],[80.3372,6.6297],[80.345,6.6208],[80.3512,6.6196],[80.3574,6.6068],[80.3609,6.6039],[80.362,6.606],[80.3677,6.598]]]}},{"type":"Feature","properties":{"n":"Embilipitiya","d":"Ratnapura","c":[80.8115,6.3547]},"geometry":{"type":"Polygon","coordinates":[[[80.9505,6.2401],[80.947,6.2427],[80.9449,6.2528],[80.9395,6.2591],[80.9391,6.2701],[80.9315,6.2734],[80.9322,6.2802],[80.9294,6.2875],[80.9185,6.2976],[80.9104,6.3151],[80.9044,6.3217],[80.9041,6.3271],[80.9076,6.3323],[80.9,6.3364],[80.9012,6.344],[80.8969,6.3484],[80.8889,6.3513],[80.8723,6.3559],[80.8653,6.3551],[80.8602,6.3697],[80.8526,6.3742],[80.8522,6.3816],[80.8492,6.3849],[80.8436,6.3857],[80.8441,6.3924],[80.8369,6.4017],[80.8423,6.4044],[80.8403,6.4178],[80.8362,6.4213],[80.8393,6.428],[80.8358,6.4443],[80.8384,6.4596],[80.8309,6.4705],[80.8316,6.4757],[80.8253,6.4746],[80.8175,6.481],[80.7936,6.4877],[80.7855,6.4821],[80.769,6.4803],[80.7474,6.4821],[80.7457,6.4859],[80.7365,6.4896],[80.7217,6.4858],[80.7054,6.4898],[80.7036,6.4822],[80.7081,6.4803],[80.7101,6.4754],[80.7119,6.478],[80.7147,6.4748],[80.7205,6.4759],[80.7205,6.4707],[80.7288,6.4625],[80.7282,6.4563],[80.7347,6.4557],[80.7355,6.452],[80.7405,6.4482],[80.7441,6.4489],[80.7516,6.4422],[80.7515,6.4385],[80.7363,6.4356],[80.7387,6.4233],[80.7465,6.4125],[80.7403,6.4133],[80.7313,6.4186],[80.7269,6.4163],[80.7254,6.4224],[80.7193,6.4261],[80.7129,6.4215],[80.7245,6.4138],[80.7266,6.4035],[80.7239,6.3988],[80.7299,6.4015],[80.7422,6.396],[80.751,6.3975],[80.7513,6.3871],[80.7543,6.3824],[80.7449,6.3744],[80.7325,6.3716],[80.7382,6.3601],[80.7358,6.3578],[80.7264,6.357],[80.7265,6.3543],[80.7209,6.3491],[80.7099,6.3517],[80.7059,6.346],[80.713,6.3457],[80.716,6.3441],[80.718,6.3379],[80.738,6.3306],[80.7408,6.3273],[80.741,6.3194],[80.7284,6.3169],[80.7162,6.3215],[80.7052,6.3195],[80.6996,6.3214],[80.6918,6.3165],[80.6871,6.3078],[80.7014,6.3064],[80.7091,6.2995],[80.7179,6.2997],[80.7313,6.2957],[80.7407,6.2884],[80.7816,6.274],[80.7857,6.2698],[80.7932,6.2683],[80.792,6.2663],[80.8005,6.2681],[80.8245,6.2649],[80.8312,6.2682],[80.8386,6.2682],[80.8399,6.2705],[80.8423,6.2682],[80.8529,6.2718],[80.8685,6.2624],[80.876,6.2541],[80.8797,6.2458],[80.8885,6.2503],[80.9072,6.2382],[80.9304,6.2393],[80.9323,6.2316],[80.938,6.2284],[80.9443,6.2361],[80.9504,6.2353],[80.9505,6.2401]]]}},{"type":"Feature","properties":{"n":"Godakawela","d":"Ratnapura","c":[80.6402,6.4977]},"geometry":{"type":"Polygon","coordinates":[[[80.7054,6.4898],[80.7021,6.499],[80.7026,6.5064],[80.6983,6.5127],[80.6913,6.5158],[80.6827,6.5244],[80.6741,6.5243],[80.662,6.5299],[80.6509,6.527],[80.6431,6.5304],[80.6421,6.5394],[80.6478,6.5454],[80.6483,6.5493],[80.6297,6.5584],[80.6208,6.5673],[80.6078,6.5696],[80.606,6.5763],[80.6023,6.5766],[80.6001,6.5813],[80.5965,6.5796],[80.5921,6.5821],[80.5903,6.5792],[80.5842,6.5808],[80.5774,6.5787],[80.5807,6.5783],[80.5812,6.5752],[80.5756,6.563],[80.5782,6.5608],[80.5781,6.5565],[80.5852,6.5482],[80.5884,6.551],[80.5932,6.5508],[80.5985,6.5386],[80.5912,6.5342],[80.5937,6.5292],[80.5881,6.5306],[80.5876,6.5226],[80.5764,6.5061],[80.5861,6.4985],[80.5841,6.4954],[80.5779,6.4956],[80.5802,6.4908],[80.5796,6.4732],[80.5825,6.4696],[80.5824,6.4641],[80.5807,6.4625],[80.575,6.4659],[80.569,6.462],[80.5721,6.4549],[80.5798,6.4517],[80.5775,6.4464],[80.5792,6.4442],[80.5836,6.4437],[80.5859,6.4469],[80.5938,6.4499],[80.6073,6.4448],[80.6207,6.456],[80.6304,6.4583],[80.6343,6.4571],[80.6397,6.4606],[80.6464,6.4563],[80.6646,6.4543],[80.6927,6.4418],[80.6982,6.4489],[80.6967,6.4559],[80.701,6.4588],[80.7086,6.4532],[80.7145,6.4533],[80.7249,6.4413],[80.7363,6.4356],[80.7515,6.4385],[80.7516,6.4422],[80.7441,6.4489],[80.7405,6.4482],[80.7355,6.452],[80.7347,6.4557],[80.7282,6.4563],[80.7288,6.4625],[80.7205,6.4707],[80.7205,6.4759],[80.7147,6.4748],[80.7119,6.478],[80.7101,6.4754],[80.7081,6.4803],[80.7036,6.4822],[80.7054,6.4898]]]}},{"type":"Feature","properties":{"n":"Imbulpe","d":"Ratnapura","c":[80.7323,6.7148]},"geometry":{"type":"Polygon","coordinates":[[[80.6113,6.7594],[80.6064,6.7546],[80.6006,6.7544],[80.5913,6.7463],[80.5877,6.7459],[80.5871,6.7393],[80.5831,6.7348],[80.5844,6.7241],[80.5864,6.7216],[80.593,6.7211],[80.5906,6.7154],[80.604,6.7116],[80.611,6.7149],[80.6185,6.7143],[80.6323,6.7063],[80.6315,6.7124],[80.642,6.711],[80.6489,6.7002],[80.6745,6.6878],[80.6793,6.6822],[80.6807,6.6759],[80.6943,6.6681],[80.7045,6.6655],[80.7039,6.6619],[80.7139,6.6564],[80.7139,6.6524],[80.7186,6.6489],[80.7234,6.6497],[80.727,6.6466],[80.738,6.6491],[80.7402,6.6451],[80.7484,6.6443],[80.7536,6.6388],[80.7579,6.6412],[80.7566,6.6372],[80.7638,6.638],[80.7856,6.6318],[80.7878,6.6332],[80.7884,6.641],[80.7937,6.6432],[80.7946,6.646],[80.791,6.6748],[80.7929,6.6803],[80.811,6.6702],[80.8254,6.6767],[80.8238,6.6897],[80.8135,6.6954],[80.8122,6.7036],[80.8417,6.7169],[80.8508,6.7188],[80.8518,6.7219],[80.8484,6.7307],[80.8511,6.7306],[80.8565,6.7371],[80.8526,6.7451],[80.8347,6.7436],[80.8255,6.7594],[80.8121,6.7541],[80.8064,6.7744],[80.8091,6.7836],[80.8066,6.7914],[80.7919,6.78],[80.7918,6.7744],[80.7896,6.7729],[80.7827,6.7732],[80.7734,6.7787],[80.7635,6.7722],[80.7539,6.7618],[80.7441,6.7569],[80.7322,6.7618],[80.7207,6.757],[80.7139,6.7592],[80.7027,6.754],[80.6915,6.7592],[80.6736,6.7588],[80.6589,6.7619],[80.6571,6.7546],[80.6503,6.7513],[80.6113,6.7594]]]}},{"type":"Feature","properties":{"n":"Kahawattha","d":"Ratnapura","c":[80.5433,6.5276]},"geometry":{"type":"Polygon","coordinates":[[[80.5774,6.5787],[80.5753,6.5817],[80.5675,6.582],[80.5674,6.58],[80.5474,6.5782],[80.5397,6.574],[80.5353,6.5749],[80.5349,6.5772],[80.5225,6.5762],[80.5138,6.5785],[80.5244,6.5662],[80.5192,6.567],[80.515,6.5723],[80.5089,6.5749],[80.504,6.5663],[80.5008,6.5668],[80.4973,6.5632],[80.4964,6.5607],[80.4995,6.5587],[80.4978,6.5582],[80.4981,6.5543],[80.4892,6.5454],[80.4859,6.5457],[80.4798,6.5368],[80.4826,6.5316],[80.4901,6.5269],[80.5053,6.5252],[80.5099,6.518],[80.4993,6.4986],[80.501,6.4931],[80.4984,6.4882],[80.5093,6.4911],[80.525,6.4861],[80.5326,6.478],[80.5501,6.4723],[80.5556,6.4726],[80.5807,6.4625],[80.5824,6.4641],[80.5825,6.4696],[80.5796,6.4732],[80.5802,6.4908],[80.5779,6.4956],[80.5841,6.4954],[80.5861,6.4985],[80.5764,6.5061],[80.5876,6.5226],[80.5881,6.5306],[80.5937,6.5292],[80.5912,6.5342],[80.5985,6.5386],[80.5932,6.5508],[80.5884,6.551],[80.5852,6.5482],[80.5781,6.5565],[80.5782,6.5608],[80.5756,6.563],[80.5812,6.5752],[80.5807,6.5783],[80.5774,6.5787]]]}},{"type":"Feature","properties":{"n":"Kalawana","d":"Ratnapura","c":[80.4508,6.4634]},"geometry":{"type":"Polygon","coordinates":[[[80.3124,6.5703],[80.3069,6.5703],[80.3044,6.5671],[80.2962,6.5662],[80.2932,6.5637],[80.3025,6.5456],[80.3037,6.5378],[80.3118,6.5317],[80.3598,6.4571],[80.3783,6.4345],[80.3767,6.4297],[80.3788,6.4257],[80.4016,6.4037],[80.4192,6.3906],[80.4295,6.3885],[80.4357,6.394],[80.4394,6.3942],[80.4509,6.3867],[80.4638,6.386],[80.4702,6.3784],[80.489,6.3799],[80.4923,6.3774],[80.4937,6.3678],[80.503,6.3679],[80.5062,6.3707],[80.5115,6.3698],[80.5315,6.374],[80.5323,6.3889],[80.5423,6.3886],[80.543,6.3945],[80.5472,6.3957],[80.5513,6.3955],[80.5525,6.3895],[80.5656,6.3942],[80.5781,6.3909],[80.5918,6.3974],[80.6172,6.3965],[80.6257,6.3921],[80.6289,6.3959],[80.6267,6.3993],[80.6274,6.4096],[80.6247,6.4087],[80.6224,6.4126],[80.6194,6.41],[80.6124,6.4133],[80.6121,6.4156],[80.6168,6.4167],[80.6087,6.4226],[80.6109,6.4316],[80.6086,6.4368],[80.612,6.44],[80.6039,6.4473],[80.5958,6.4476],[80.5938,6.4499],[80.5859,6.4469],[80.5836,6.4437],[80.5792,6.4442],[80.5775,6.4464],[80.5798,6.4517],[80.5721,6.4549],[80.569,6.462],[80.575,6.4659],[80.567,6.4666],[80.5602,6.4712],[80.5326,6.478],[80.525,6.4861],[80.5093,6.4911],[80.5012,6.4882],[80.4869,6.4885],[80.4782,6.4928],[80.4781,6.4876],[80.4805,6.4851],[80.4744,6.4796],[80.4753,6.4749],[80.4569,6.4869],[80.4564,6.4896],[80.4371,6.5024],[80.4439,6.5082],[80.4384,6.5118],[80.4437,6.5201],[80.4461,6.5311],[80.438,6.5349],[80.4371,6.54],[80.4281,6.5449],[80.425,6.5432],[80.4147,6.5554],[80.3837,6.5808],[80.3778,6.5798],[80.3774,6.5714],[80.3742,6.5698],[80.3774,6.5608],[80.3829,6.559],[80.3816,6.5565],[80.3733,6.5564],[80.3626,6.5493],[80.356,6.555],[80.3461,6.578],[80.3364,6.5785],[80.3281,6.5755],[80.3309,6.5704],[80.3265,6.5626],[80.3296,6.5583],[80.3269,6.5488],[80.3124,6.5703]]]}},{"type":"Feature","properties":{"n":"Kiriella","d":"Ratnapura","c":[80.2732,6.7573]},"geometry":{"type":"Polygon","coordinates":[[[80.2912,6.7248],[80.3043,6.7193],[80.3068,6.7214],[80.3074,6.7182],[80.3141,6.7208],[80.3121,6.7236],[80.314,6.7245],[80.3165,6.7206],[80.3243,6.7171],[80.3336,6.717],[80.3339,6.7111],[80.3372,6.7134],[80.3412,6.7114],[80.3539,6.6974],[80.3562,6.6979],[80.3569,6.7029],[80.3493,6.712],[80.3423,6.7256],[80.3391,6.7255],[80.3372,6.7342],[80.3278,6.7395],[80.3249,6.7475],[80.3181,6.7429],[80.3147,6.7436],[80.3088,6.7552],[80.3049,6.756],[80.3004,6.7616],[80.292,6.795],[80.2946,6.7957],[80.2926,6.7999],[80.2974,6.8021],[80.2939,6.805],[80.2929,6.8119],[80.2863,6.8091],[80.2809,6.8107],[80.2716,6.8197],[80.2573,6.8216],[80.2484,6.8127],[80.2517,6.7989],[80.2646,6.7673],[80.2596,6.7676],[80.2559,6.7624],[80.2443,6.7607],[80.2409,6.7627],[80.241,6.7672],[80.2343,6.7713],[80.2308,6.7687],[80.2353,6.7648],[80.2291,6.7644],[80.2272,6.7587],[80.2171,6.7589],[80.2042,6.7551],[80.2032,6.7524],[80.1944,6.7528],[80.2014,6.7401],[80.2032,6.7301],[80.2204,6.7317],[80.2246,6.7285],[80.2372,6.7345],[80.2448,6.7312],[80.2508,6.7321],[80.2524,6.7293],[80.2544,6.7353],[80.2565,6.7318],[80.2667,6.7308],[80.2701,6.7347],[80.2764,6.7289],[80.2912,6.7248]]]}},{"type":"Feature","properties":{"n":"Kolonna","d":"Ratnapura","c":[80.6774,6.3903]},"geometry":{"type":"Polygon","coordinates":[[[80.7363,6.4356],[80.7249,6.4413],[80.7145,6.4533],[80.7086,6.4532],[80.701,6.4588],[80.6967,6.4559],[80.6982,6.4489],[80.6927,6.4418],[80.6646,6.4543],[80.6464,6.4563],[80.6397,6.4606],[80.6343,6.4571],[80.6304,6.4583],[80.6207,6.456],[80.6073,6.4448],[80.612,6.44],[80.6086,6.4368],[80.6109,6.4316],[80.6087,6.4226],[80.6168,6.4167],[80.6121,6.4156],[80.6124,6.4133],[80.6194,6.41],[80.6224,6.4126],[80.6247,6.4087],[80.6274,6.4096],[80.6267,6.3993],[80.6289,6.3959],[80.6257,6.3921],[80.6189,6.3943],[80.6189,6.3841],[80.615,6.3825],[80.6135,6.378],[80.6166,6.3695],[80.6043,6.3612],[80.61,6.3454],[80.6287,6.3519],[80.6603,6.3539],[80.6624,6.3452],[80.6607,6.3411],[80.6632,6.3389],[80.6562,6.3367],[80.659,6.3325],[80.661,6.3329],[80.6635,6.3273],[80.6699,6.3267],[80.6734,6.3222],[80.6681,6.3174],[80.6687,6.3052],[80.6871,6.3078],[80.6918,6.3165],[80.6996,6.3214],[80.7052,6.3195],[80.7162,6.3215],[80.7284,6.3169],[80.741,6.3194],[80.7408,6.3273],[80.738,6.3306],[80.718,6.3379],[80.716,6.3441],[80.713,6.3457],[80.7059,6.346],[80.7099,6.3517],[80.7209,6.3491],[80.7265,6.3543],[80.7264,6.357],[80.7358,6.3578],[80.7382,6.3601],[80.7325,6.3716],[80.7449,6.3744],[80.7543,6.3824],[80.7513,6.3871],[80.751,6.3975],[80.7422,6.396],[80.7299,6.4015],[80.7239,6.3988],[80.7266,6.4035],[80.7245,6.4138],[80.7129,6.4215],[80.7193,6.4261],[80.7254,6.4224],[80.7269,6.4163],[80.7313,6.4186],[80.7403,6.4133],[80.7465,6.4125],[80.7387,6.4233],[80.7363,6.4356]]]}},{"type":"Feature","properties":{"n":"Kuruvita","d":"Ratnapura","c":[80.353,6.7994]},"geometry":{"type":"Polygon","coordinates":[[[80.2833,6.8529],[80.2839,6.8454],[80.2777,6.8425],[80.2783,6.8392],[80.2819,6.8413],[80.2849,6.8371],[80.2809,6.8363],[80.2763,6.8392],[80.2737,6.8372],[80.2776,6.8347],[80.2747,6.8363],[80.2732,6.8342],[80.2717,6.8363],[80.2704,6.8342],[80.2726,6.8273],[80.2668,6.8258],[80.2656,6.8211],[80.2716,6.8197],[80.2809,6.8107],[80.2863,6.8091],[80.2929,6.8119],[80.2939,6.805],[80.2974,6.8021],[80.2926,6.7999],[80.2946,6.7957],[80.292,6.795],[80.3004,6.7616],[80.3049,6.756],[80.3088,6.7552],[80.3147,6.7436],[80.3181,6.7429],[80.3249,6.7475],[80.3278,6.7395],[80.335,6.7368],[80.3391,6.7255],[80.3423,6.7256],[80.3479,6.7157],[80.3498,6.7153],[80.3476,6.7206],[80.3492,6.7235],[80.3532,6.7154],[80.3652,6.7149],[80.3695,6.7295],[80.3797,6.7288],[80.3824,6.7357],[80.378,6.7411],[80.3759,6.7495],[80.3812,6.7472],[80.3913,6.7525],[80.4003,6.7527],[80.3905,6.7856],[80.3852,6.7875],[80.3798,6.787],[80.3774,6.7836],[80.3724,6.7859],[80.3681,6.7844],[80.3692,6.7873],[80.3647,6.7924],[80.3652,6.7999],[80.3742,6.8043],[80.3776,6.7937],[80.3925,6.7906],[80.3988,6.7931],[80.4003,6.7916],[80.4033,6.7945],[80.4066,6.7927],[80.4104,6.8012],[80.4194,6.8007],[80.4246,6.8097],[80.4307,6.8083],[80.4372,6.8167],[80.4404,6.8149],[80.4512,6.8157],[80.4473,6.8302],[80.4414,6.8321],[80.4379,6.8406],[80.4314,6.8432],[80.4302,6.8467],[80.4283,6.8423],[80.4213,6.8387],[80.4192,6.8442],[80.4111,6.8478],[80.3997,6.8596],[80.386,6.85],[80.3833,6.8497],[80.3781,6.8543],[80.3604,6.8483],[80.3555,6.8489],[80.3556,6.8458],[80.347,6.841],[80.3475,6.8334],[80.3402,6.833],[80.3383,6.8296],[80.3377,6.8343],[80.3356,6.8315],[80.3277,6.8343],[80.3176,6.8503],[80.3042,6.8636],[80.3004,6.8585],[80.293,6.8586],[80.2908,6.8543],[80.2859,6.8554],[80.2833,6.8529]]]}},{"type":"Feature","properties":{"n":"Nivithigala","d":"Ratnapura","c":[80.455,6.5691]},"geometry":{"type":"Polygon","coordinates":[[[80.3798,6.5807],[80.3837,6.5808],[80.3868,6.5766],[80.393,6.5746],[80.4147,6.5554],[80.425,6.5432],[80.4281,6.5449],[80.4371,6.54],[80.438,6.5349],[80.4461,6.5311],[80.4437,6.5201],[80.4384,6.5118],[80.4439,6.5082],[80.4371,6.5024],[80.4439,6.4968],[80.4753,6.4749],[80.4744,6.4796],[80.4805,6.4851],[80.4781,6.4876],[80.4782,6.4928],[80.4869,6.4885],[80.4984,6.4882],[80.501,6.4931],[80.4993,6.4986],[80.5099,6.518],[80.5053,6.5252],[80.4901,6.5269],[80.4826,6.5316],[80.4798,6.5368],[80.4859,6.5457],[80.4892,6.5454],[80.4981,6.5543],[80.4978,6.5582],[80.4995,6.5587],[80.4964,6.5607],[80.4973,6.5632],[80.5008,6.5668],[80.504,6.5663],[80.5089,6.5749],[80.515,6.5723],[80.5192,6.567],[80.5244,6.5662],[80.5189,6.574],[80.5051,6.586],[80.5113,6.59],[80.5237,6.5892],[80.5237,6.5967],[80.5191,6.5951],[80.5176,6.5966],[80.5162,6.6051],[80.5183,6.6092],[80.5157,6.6112],[80.5122,6.6091],[80.506,6.6102],[80.4883,6.622],[80.4843,6.6279],[80.4642,6.6365],[80.4431,6.6264],[80.4364,6.6316],[80.4312,6.6312],[80.4264,6.6241],[80.4178,6.6218],[80.4135,6.6153],[80.4092,6.6133],[80.403,6.616],[80.4048,6.6114],[80.3973,6.6095],[80.385,6.6173],[80.3677,6.598],[80.3695,6.5936],[80.3796,6.5875],[80.3798,6.5807]]]}},{"type":"Feature","properties":{"n":"Opanayake","d":"Ratnapura","c":[80.6237,6.6099]},"geometry":{"type":"Polygon","coordinates":[[[80.598,6.6612],[80.5922,6.6636],[80.5805,6.6631],[80.5771,6.6565],[80.5834,6.6517],[80.5835,6.6469],[80.5736,6.6318],[80.58,6.6296],[80.5775,6.6246],[80.5817,6.6134],[80.5912,6.6064],[80.5944,6.5981],[80.6029,6.5945],[80.601,6.5878],[80.6057,6.5861],[80.6001,6.5813],[80.6023,6.5766],[80.606,6.5763],[80.6078,6.5696],[80.6208,6.5673],[80.6297,6.5584],[80.645,6.5497],[80.6598,6.5548],[80.6577,6.572],[80.6624,6.5729],[80.6716,6.5691],[80.6764,6.5721],[80.6752,6.5843],[80.6625,6.5902],[80.6579,6.5899],[80.6521,6.5978],[80.6457,6.6012],[80.6374,6.6019],[80.6394,6.6063],[80.6454,6.6065],[80.6486,6.604],[80.6553,6.6104],[80.6527,6.6194],[80.6599,6.6254],[80.6544,6.6315],[80.6612,6.6415],[80.6558,6.6452],[80.645,6.6467],[80.6373,6.6509],[80.6232,6.6517],[80.6197,6.6547],[80.6133,6.6547],[80.598,6.6612]]]}},{"type":"Feature","properties":{"n":"Pelmadulla","d":"Ratnapura","c":[80.507,6.6354]},"geometry":{"type":"Polygon","coordinates":[[[80.403,6.616],[80.4092,6.6133],[80.4135,6.6153],[80.4178,6.6218],[80.4264,6.6241],[80.4312,6.6312],[80.4364,6.6316],[80.4431,6.6264],[80.4642,6.6365],[80.4843,6.6279],[80.4883,6.622],[80.506,6.6102],[80.5122,6.6091],[80.5157,6.6112],[80.5183,6.6092],[80.5162,6.6051],[80.5176,6.5966],[80.5191,6.5951],[80.5237,6.5967],[80.5237,6.5892],[80.5113,6.59],[80.5051,6.586],[80.5138,6.5785],[80.5225,6.5762],[80.5349,6.5772],[80.5353,6.5749],[80.5397,6.574],[80.5474,6.5782],[80.5674,6.58],[80.5675,6.582],[80.5753,6.5817],[80.5774,6.5787],[80.5842,6.5808],[80.5903,6.5792],[80.5921,6.5821],[80.5965,6.5796],[80.6057,6.5861],[80.601,6.5878],[80.6029,6.5945],[80.5944,6.5981],[80.5912,6.6064],[80.5817,6.6134],[80.5775,6.6246],[80.58,6.6296],[80.5736,6.6318],[80.5835,6.6469],[80.5834,6.6517],[80.5771,6.6565],[80.5598,6.6618],[80.549,6.6604],[80.5427,6.6658],[80.5272,6.6661],[80.5225,6.6746],[80.5157,6.6766],[80.5149,6.6799],[80.5042,6.6763],[80.4954,6.6776],[80.4875,6.6752],[80.4817,6.681],[80.4808,6.6872],[80.4756,6.6877],[80.4745,6.6925],[80.464,6.6977],[80.4587,6.6971],[80.452,6.7032],[80.4499,6.7021],[80.4494,6.6937],[80.4436,6.6892],[80.4432,6.6828],[80.4512,6.669],[80.4573,6.6638],[80.4398,6.6623],[80.4282,6.6643],[80.4254,6.6676],[80.4155,6.671],[80.4132,6.6695],[80.4081,6.6738],[80.4053,6.6707],[80.405,6.6667],[80.4074,6.662],[80.412,6.6597],[80.4133,6.6524],[80.4091,6.6501],[80.4035,6.6531],[80.4001,6.6474],[80.4053,6.6387],[80.4035,6.6312],[80.407,6.6256],[80.4007,6.6254],[80.403,6.616]]]}},{"type":"Feature","properties":{"n":"Ratnapura","d":"Ratnapura","c":[80.4805,6.7314]},"geometry":{"type":"Polygon","coordinates":[[[80.4931,6.8316],[80.4766,6.8288],[80.4633,6.8298],[80.4553,6.8339],[80.4473,6.8302],[80.4512,6.8157],[80.4404,6.8149],[80.4372,6.8167],[80.4307,6.8083],[80.4246,6.8097],[80.4194,6.8007],[80.4104,6.8012],[80.4066,6.7927],[80.4033,6.7945],[80.4003,6.7916],[80.3988,6.7931],[80.3925,6.7906],[80.3776,6.7937],[80.3742,6.8043],[80.3652,6.7999],[80.3647,6.7924],[80.3692,6.7873],[80.3681,6.7844],[80.3724,6.7859],[80.3774,6.7836],[80.3798,6.787],[80.3852,6.7875],[80.3905,6.7856],[80.4003,6.7527],[80.3913,6.7525],[80.3812,6.7472],[80.3759,6.7495],[80.378,6.7411],[80.3824,6.7357],[80.3797,6.7288],[80.3695,6.7295],[80.3652,6.7149],[80.3532,6.7154],[80.3492,6.7235],[80.3476,6.7206],[80.3498,6.7153],[80.3479,6.7157],[80.3569,6.7029],[80.3562,6.6979],[80.3585,6.6937],[80.3604,6.697],[80.3629,6.6967],[80.363,6.7],[80.3719,6.6962],[80.37,6.6931],[80.3763,6.688],[80.377,6.6808],[80.3906,6.665],[80.3902,6.6587],[80.3994,6.6511],[80.4028,6.6502],[80.4035,6.6531],[80.4091,6.6501],[80.4133,6.6524],[80.412,6.6597],[80.4074,6.662],[80.405,6.6667],[80.4081,6.6738],[80.4132,6.6695],[80.4155,6.671],[80.4254,6.6676],[80.4282,6.6643],[80.4398,6.6623],[80.4573,6.6638],[80.4512,6.669],[80.4432,6.6828],[80.4436,6.6892],[80.4494,6.6937],[80.4499,6.7021],[80.452,6.7032],[80.4587,6.6971],[80.464,6.6977],[80.4745,6.6925],[80.4756,6.6877],[80.4808,6.6872],[80.4817,6.681],[80.4875,6.6752],[80.4954,6.6776],[80.5042,6.6763],[80.5149,6.6799],[80.5157,6.6766],[80.5225,6.6746],[80.5272,6.6661],[80.5427,6.6658],[80.549,6.6604],[80.5598,6.6618],[80.5771,6.6565],[80.5805,6.6631],[80.5922,6.6636],[80.598,6.6612],[80.6114,6.67],[80.6104,6.6754],[80.614,6.6803],[80.6106,6.6868],[80.6038,6.6908],[80.6039,6.6965],[80.6014,6.6993],[80.6042,6.7029],[80.604,6.7116],[80.5906,6.7154],[80.593,6.7211],[80.5864,6.7216],[80.5844,6.7241],[80.5831,6.7348],[80.5871,6.7393],[80.5877,6.7459],[80.5913,6.7463],[80.6006,6.7544],[80.6064,6.7546],[80.6113,6.7594],[80.571,6.7641],[80.5576,6.771],[80.5497,6.7708],[80.5403,6.7768],[80.5357,6.7764],[80.5248,6.7679],[80.5078,6.7773],[80.4979,6.7789],[80.4835,6.7955],[80.4845,6.7989],[80.4921,6.8004],[80.4946,6.8056],[80.4995,6.8086],[80.4973,6.8127],[80.4912,6.8117],[80.4885,6.8143],[80.488,6.8192],[80.4931,6.8316]]]}},{"type":"Feature","properties":{"n":"Weligepola","d":"Ratnapura","c":[80.7424,6.5411]},"geometry":{"type":"Polygon","coordinates":[[[80.6498,6.6046],[80.6394,6.6063],[80.6374,6.6019],[80.6418,6.6024],[80.6521,6.5978],[80.6579,6.5899],[80.6731,6.5861],[80.6752,6.5843],[80.6764,6.5721],[80.6716,6.5691],[80.6624,6.5729],[80.6577,6.572],[80.6598,6.5548],[80.6483,6.5493],[80.6478,6.5454],[80.6421,6.5394],[80.6431,6.5304],[80.6509,6.527],[80.662,6.5299],[80.6741,6.5243],[80.6827,6.5244],[80.6913,6.5158],[80.6983,6.5127],[80.7026,6.5064],[80.7021,6.499],[80.7054,6.4898],[80.7217,6.4858],[80.7365,6.4896],[80.7457,6.4859],[80.7474,6.4821],[80.769,6.4803],[80.7855,6.4821],[80.7936,6.4877],[80.8175,6.481],[80.8253,6.4746],[80.8316,6.4757],[80.8275,6.4896],[80.833,6.5057],[80.8291,6.5116],[80.8281,6.5206],[80.8321,6.5325],[80.8299,6.5363],[80.8199,6.5404],[80.8154,6.5368],[80.8056,6.5371],[80.8024,6.5419],[80.8057,6.5466],[80.8073,6.5616],[80.8113,6.5673],[80.8091,6.5718],[80.8131,6.5817],[80.8097,6.591],[80.8027,6.5887],[80.7705,6.5899],[80.7463,6.5821],[80.7302,6.5876],[80.7243,6.5932],[80.7239,6.6001],[80.7182,6.6048],[80.7149,6.6015],[80.7057,6.6036],[80.695,6.6028],[80.6845,6.6081],[80.6701,6.6037],[80.668,6.5981],[80.6498,6.6046]]]}},{"type":"Feature","properties":{"n":"Gomarankadawala","d":"Trincomalee","c":[80.9638,8.7456]},"geometry":{"type":"Polygon","coordinates":[[[81.0577,8.7334],[81.061,8.7373],[81.0606,8.7408],[81.0649,8.7427],[81.0587,8.7558],[81.0089,8.8055],[81.0067,8.8088],[81.0095,8.8129],[81.0076,8.8195],[80.9941,8.8185],[80.9891,8.8207],[80.9887,8.8242],[80.9683,8.828],[80.969,8.8361],[80.951,8.8521],[80.9453,8.8678],[80.9358,8.856],[80.9306,8.8562],[80.9318,8.8521],[80.9294,8.849],[80.9188,8.8479],[80.92,8.8413],[80.9109,8.8351],[80.9101,8.8226],[80.8949,8.8091],[80.8892,8.7944],[80.8863,8.794],[80.8816,8.7874],[80.8805,8.7714],[80.8781,8.766],[80.8783,8.7506],[80.8809,8.7456],[80.8905,8.7419],[80.8918,8.7328],[80.8891,8.7236],[80.9023,8.6973],[80.9096,8.6881],[80.911,8.6823],[80.9084,8.6749],[80.9104,8.6722],[80.9073,8.6619],[80.913,8.6548],[80.9149,8.6574],[80.9144,8.6653],[80.9172,8.6677],[80.9258,8.6655],[80.9269,8.657],[80.9415,8.6528],[80.9457,8.6487],[80.966,8.6516],[80.9753,8.658],[80.9934,8.662],[81.0023,8.6544],[81.002,8.6491],[81.0089,8.6451],[81.0115,8.6401],[81.0165,8.6396],[81.0227,8.6503],[81.0294,8.656],[81.0273,8.6604],[81.0291,8.6697],[81.0272,8.6711],[81.0265,8.6816],[81.0295,8.6925],[81.0294,8.7044],[81.0329,8.7078],[81.0318,8.7118],[81.0362,8.7132],[81.0385,8.719],[81.0518,8.7231],[81.0532,8.7325],[81.0577,8.7334]]]}},{"type":"Feature","properties":{"n":"Kantale","d":"Trincomalee","c":[81.056,8.3461]},"geometry":{"type":"Polygon","coordinates":[[[80.9667,8.317],[80.9786,8.3123],[80.9863,8.2724],[80.9986,8.272],[81.0148,8.2781],[81.0235,8.2757],[81.0371,8.2786],[81.045,8.2774],[81.0472,8.2734],[81.0527,8.2742],[81.0625,8.2708],[81.0764,8.2724],[81.0878,8.263],[81.0981,8.2616],[81.1068,8.2549],[81.1103,8.2594],[81.1142,8.2581],[81.1208,8.2633],[81.1245,8.2635],[81.1306,8.2619],[81.1322,8.2589],[81.1397,8.2589],[81.1642,8.2332],[81.1715,8.234],[81.1758,8.2293],[81.1798,8.2294],[81.1774,8.2322],[81.1838,8.2385],[81.1838,8.2426],[81.1691,8.2535],[81.1699,8.2559],[81.1754,8.2549],[81.1776,8.2579],[81.1645,8.2686],[81.1674,8.2767],[81.1667,8.2868],[81.1628,8.2951],[81.1583,8.2986],[81.1637,8.3066],[81.1698,8.3073],[81.1685,8.3106],[81.1705,8.3176],[81.1673,8.3302],[81.1767,8.3364],[81.1896,8.337],[81.1945,8.3445],[81.1947,8.3483],[81.1915,8.3512],[81.2066,8.3661],[81.2072,8.3692],[81.2045,8.3674],[81.1989,8.3684],[81.1921,8.3751],[81.1857,8.3695],[81.179,8.3685],[81.1551,8.3745],[81.153,8.382],[81.1504,8.383],[81.1449,8.3802],[81.1369,8.382],[81.1291,8.3793],[81.1243,8.3869],[81.1059,8.3971],[81.1094,8.4041],[81.1072,8.4061],[81.1078,8.4093],[81.11,8.4112],[81.0879,8.4086],[81.0717,8.4151],[81.0544,8.4105],[81.0544,8.4151],[81.0489,8.4187],[81.0487,8.4234],[81.0469,8.4251],[81.0441,8.4238],[81.0378,8.4318],[81.0278,8.4387],[81.024,8.4366],[80.9662,8.4463],[80.9605,8.4489],[80.9497,8.4307],[80.9418,8.4096],[80.9367,8.4066],[80.9264,8.3877],[80.9307,8.3794],[80.9248,8.3663],[80.9276,8.3508],[80.9347,8.3487],[80.9499,8.3217],[80.9585,8.3249],[80.9632,8.3229],[80.963,8.3187],[80.9667,8.317]]]}},{"type":"Feature","properties":{"n":"Kinniya","d":"Trincomalee","c":[81.1616,8.4347]},"geometry":{"type":"Polygon","coordinates":[[[81.2072,8.3692],[81.2037,8.3729],[81.2051,8.3753],[81.2116,8.3758],[81.2089,8.3825],[81.2171,8.3828],[81.2121,8.3878],[81.2151,8.3928],[81.2121,8.3981],[81.2164,8.4038],[81.21,8.4025],[81.2087,8.404],[81.2166,8.4095],[81.2096,8.4158],[81.2078,8.4204],[81.2099,8.4229],[81.2189,8.4205],[81.222,8.422],[81.2215,8.4263],[81.2143,8.4291],[81.2151,8.4394],[81.2206,8.4426],[81.2223,8.4495],[81.2183,8.457],[81.2286,8.4603],[81.2204,8.4604],[81.2032,8.4689],[81.1918,8.4861],[81.1889,8.5052],[81.1683,8.5137],[81.1507,8.5058],[81.1476,8.5071],[81.1465,8.4995],[81.1424,8.4927],[81.1376,8.4918],[81.1387,8.4818],[81.1363,8.4766],[81.1329,8.4754],[81.1292,8.4782],[81.1251,8.4722],[81.1185,8.4702],[81.1158,8.4646],[81.1047,8.4611],[81.1033,8.4577],[81.1064,8.4553],[81.1015,8.4521],[81.0966,8.4431],[81.0985,8.434],[81.0905,8.4109],[81.0946,8.409],[81.11,8.4112],[81.1078,8.4093],[81.1072,8.4061],[81.1094,8.4041],[81.1059,8.3971],[81.1243,8.3869],[81.1291,8.3793],[81.1369,8.382],[81.1449,8.3802],[81.1504,8.383],[81.153,8.382],[81.1551,8.3745],[81.179,8.3685],[81.1857,8.3695],[81.1921,8.3751],[81.1989,8.3684],[81.2045,8.3674],[81.2072,8.3692]]]}},{"type":"Feature","properties":{"n":"Kuchchaweli","d":"Trincomalee","c":[81.0454,8.8144]},"geometry":{"type":"Polygon","coordinates":[[[81.0577,8.7334],[81.0641,8.7281],[81.0879,8.6913],[81.0972,8.6826],[81.1112,8.6599],[81.1108,8.6557],[81.1214,8.657],[81.1344,8.643],[81.1336,8.6347],[81.136,8.6277],[81.1428,8.6291],[81.1513,8.6356],[81.1539,8.6489],[81.1628,8.6516],[81.1725,8.6475],[81.1723,8.6404],[81.1834,8.626],[81.1999,8.637],[81.1995,8.6392],[81.215,8.6547],[81.2155,8.6585],[81.2129,8.6659],[81.1996,8.681],[81.1728,8.7332],[81.157,8.7469],[81.1452,8.7659],[81.1459,8.7682],[81.1433,8.7663],[81.1385,8.7689],[81.1205,8.7914],[81.1176,8.7918],[81.0998,8.8215],[81.097,8.8219],[81.0887,8.8387],[81.0875,8.8496],[81.0823,8.8552],[81.0834,8.86],[81.0801,8.8589],[81.0755,8.8621],[81.0777,8.8685],[81.0723,8.8615],[81.0644,8.8572],[81.0383,8.8791],[81.024,8.899],[81.0056,8.9382],[81.0016,8.9352],[80.9953,8.9408],[80.9652,8.9865],[80.9538,8.9847],[80.9224,8.9882],[80.9147,8.9843],[80.909,8.9863],[80.8997,8.9847],[80.8982,8.9788],[80.8969,8.9809],[80.891,8.9802],[80.888,8.9759],[80.8892,8.9729],[80.8957,8.9705],[80.8962,8.9627],[80.8908,8.9589],[80.8879,8.9611],[80.8871,8.9553],[80.8944,8.9501],[80.888,8.9482],[80.8928,8.9328],[80.8905,8.9291],[80.8942,8.9287],[80.8936,8.9117],[80.8991,8.9107],[80.9022,8.9066],[80.9063,8.9109],[80.9123,8.912],[80.9023,8.9065],[80.9026,8.9043],[80.9045,8.9004],[80.9091,8.9005],[80.9118,8.8912],[80.9113,8.8832],[80.9244,8.8672],[80.9268,8.8587],[80.9292,8.8587],[80.9304,8.8546],[80.9328,8.8574],[80.9358,8.856],[80.9453,8.8678],[80.951,8.8521],[80.969,8.8361],[80.9683,8.828],[80.9887,8.8242],[80.9891,8.8207],[80.9941,8.8185],[81.0076,8.8195],[81.0095,8.8129],[81.0067,8.8088],[81.0089,8.8055],[81.0587,8.7558],[81.0649,8.7427],[81.0606,8.7408],[81.061,8.7373],[81.0577,8.7334]]]}},{"type":"Feature","properties":{"n":"Morawewa","d":"Trincomalee","c":[81.0167,8.6261]},"geometry":{"type":"Polygon","coordinates":[[[80.9083,8.6674],[80.8975,8.6618],[80.8985,8.6586],[80.8944,8.6534],[80.8893,8.6376],[80.895,8.6334],[80.8921,8.6218],[80.9119,8.6097],[80.9117,8.5903],[80.917,8.5821],[80.9401,8.5599],[80.9477,8.5687],[80.9835,8.5521],[81.0208,8.5433],[81.0286,8.5501],[81.041,8.5698],[81.0631,8.5915],[81.0705,8.6034],[81.071,8.609],[81.089,8.61],[81.1016,8.6002],[81.1104,8.5888],[81.1244,8.5864],[81.1365,8.6308],[81.1336,8.6347],[81.1344,8.643],[81.1214,8.657],[81.1108,8.6557],[81.1112,8.6599],[81.0972,8.6826],[81.0879,8.6913],[81.0641,8.7281],[81.0577,8.7334],[81.0532,8.7325],[81.0518,8.7231],[81.0385,8.719],[81.0362,8.7132],[81.0318,8.7118],[81.0329,8.7078],[81.0294,8.7044],[81.0295,8.6925],[81.0265,8.6816],[81.0272,8.6711],[81.0291,8.6697],[81.0273,8.6604],[81.0294,8.656],[81.0227,8.6503],[81.0165,8.6396],[81.0115,8.6401],[81.0089,8.6451],[81.002,8.6491],[81.0023,8.6544],[80.9934,8.662],[80.9753,8.658],[80.966,8.6516],[80.9457,8.6487],[80.9415,8.6528],[80.9269,8.657],[80.9258,8.6655],[80.9208,8.6678],[80.9144,8.6653],[80.9149,8.6574],[80.913,8.6548],[80.9073,8.6619],[80.9083,8.6674]]]}},{"type":"Feature","properties":{"n":"Muthur","d":"Trincomalee","c":[81.288,8.4314]},"geometry":{"type":"Polygon","coordinates":[[[81.1936,8.3535],[81.2156,8.3525],[81.213,8.3546],[81.2111,8.3695],[81.2271,8.3626],[81.2406,8.3715],[81.2479,8.373],[81.2528,8.378],[81.2518,8.3851],[81.2684,8.373],[81.2617,8.3715],[81.2616,8.3605],[81.2664,8.3644],[81.2709,8.3625],[81.2741,8.3639],[81.2742,8.3575],[81.2704,8.3529],[81.2706,8.3443],[81.2677,8.3378],[81.2695,8.3349],[81.2768,8.3347],[81.2778,8.3408],[81.29,8.3506],[81.2914,8.3597],[81.3015,8.3678],[81.3051,8.3849],[81.3034,8.387],[81.3108,8.3907],[81.3088,8.394],[81.3129,8.3993],[81.3107,8.4029],[81.3251,8.4059],[81.3367,8.4039],[81.3443,8.4122],[81.3519,8.4154],[81.3611,8.4061],[81.3708,8.4093],[81.3595,8.4613],[81.3511,8.4842],[81.3516,8.4956],[81.3283,8.5139],[81.3191,8.525],[81.3145,8.5239],[81.3108,8.5191],[81.3106,8.5146],[81.3,8.5091],[81.2784,8.507],[81.2819,8.5002],[81.2819,8.4921],[81.2862,8.4853],[81.2831,8.4744],[81.2768,8.4651],[81.2486,8.4615],[81.2318,8.4627],[81.2255,8.458],[81.2183,8.457],[81.2223,8.4495],[81.2206,8.4426],[81.2156,8.441],[81.2143,8.4291],[81.2215,8.4263],[81.222,8.422],[81.2189,8.4205],[81.2099,8.4229],[81.2078,8.4204],[81.2096,8.4158],[81.2166,8.4095],[81.2087,8.404],[81.21,8.4025],[81.2164,8.4038],[81.2121,8.3981],[81.2151,8.3928],[81.2121,8.3878],[81.2171,8.3828],[81.2089,8.3825],[81.2116,8.3758],[81.2051,8.3753],[81.2037,8.3729],[81.2072,8.3692],[81.2066,8.3661],[81.1936,8.3535]]]}},{"type":"Feature","properties":{"n":"Padavi Sri Pura","d":"Trincomalee","c":[80.854,8.9151]},"geometry":{"type":"Polygon","coordinates":[[[80.9304,8.8546],[80.9244,8.8635],[80.9244,8.8672],[80.9113,8.8832],[80.9118,8.8912],[80.9091,8.9005],[80.9045,8.9004],[80.9026,8.9043],[80.9023,8.9065],[80.9123,8.912],[80.9063,8.9109],[80.9022,8.9066],[80.8991,8.9107],[80.8936,8.9117],[80.8942,8.9287],[80.8905,8.9291],[80.8928,8.9328],[80.888,8.9482],[80.8944,8.9501],[80.8871,8.9553],[80.8879,8.9611],[80.8908,8.9589],[80.8962,8.9627],[80.8957,8.9705],[80.8892,8.9729],[80.888,8.9759],[80.8938,8.9816],[80.8877,8.9807],[80.8853,8.9723],[80.8806,8.969],[80.8724,8.9688],[80.8718,8.9641],[80.8635,8.9584],[80.8574,8.9576],[80.8482,8.961],[80.8313,8.9604],[80.8264,8.9585],[80.8256,8.955],[80.8208,8.9558],[80.8051,8.9512],[80.8014,8.9527],[80.7939,8.9482],[80.7875,8.9505],[80.7804,8.9464],[80.7736,8.947],[80.7686,8.9394],[80.7598,8.9359],[80.7598,8.93],[80.7542,8.9179],[80.7531,8.9056],[80.7758,8.9149],[80.7842,8.9214],[80.8097,8.9162],[80.8169,8.909],[80.822,8.9078],[80.8278,8.8997],[80.8378,8.8972],[80.8518,8.8878],[80.8607,8.8849],[80.8718,8.8784],[80.8769,8.8717],[80.883,8.8693],[80.897,8.8467],[80.9106,8.8324],[80.9109,8.8351],[80.92,8.8413],[80.9188,8.8479],[80.9294,8.849],[80.9318,8.8521],[80.9304,8.8546]]]}},{"type":"Feature","properties":{"n":"Seruvila","d":"Trincomalee","c":[81.2524,8.2945]},"geometry":{"type":"Polygon","coordinates":[[[81.1798,8.2294],[81.185,8.2269],[81.1929,8.232],[81.2006,8.2275],[81.2039,8.2142],[81.1988,8.1967],[81.2027,8.1907],[81.2008,8.1832],[81.2029,8.1813],[81.2092,8.1829],[81.2111,8.1801],[81.2035,8.1614],[81.1968,8.1617],[81.19,8.1553],[81.1905,8.1514],[81.2021,8.1507],[81.2042,8.1479],[81.2091,8.1493],[81.2099,8.1527],[81.2138,8.1531],[81.2163,8.1564],[81.2192,8.154],[81.2246,8.1552],[81.2265,8.1585],[81.2296,8.1556],[81.2321,8.1616],[81.2301,8.1638],[81.2336,8.1684],[81.2305,8.1691],[81.2321,8.1741],[81.2354,8.1796],[81.239,8.178],[81.2411,8.1799],[81.2346,8.1914],[81.2357,8.1961],[81.2413,8.1958],[81.2427,8.2017],[81.2446,8.2014],[81.25,8.211],[81.2478,8.2257],[81.25,8.227],[81.2555,8.2248],[81.2553,8.2321],[81.2605,8.2302],[81.2636,8.2355],[81.2673,8.2345],[81.268,8.2385],[81.2641,8.239],[81.2643,8.2416],[81.2708,8.2406],[81.2708,8.2473],[81.2794,8.2497],[81.2785,8.2567],[81.2851,8.2577],[81.2845,8.261],[81.296,8.255],[81.3094,8.2516],[81.3228,8.2623],[81.3197,8.2741],[81.3208,8.2943],[81.3316,8.3072],[81.3404,8.3067],[81.3454,8.3123],[81.3419,8.321],[81.3453,8.3224],[81.3465,8.3276],[81.3445,8.336],[81.349,8.3487],[81.3496,8.3755],[81.3602,8.3713],[81.3487,8.3845],[81.3472,8.3885],[81.3497,8.3913],[81.3372,8.3985],[81.3367,8.4039],[81.3251,8.4059],[81.3107,8.4029],[81.3129,8.3993],[81.3088,8.394],[81.3108,8.3907],[81.3034,8.387],[81.3051,8.3849],[81.3015,8.3678],[81.2914,8.3597],[81.29,8.3506],[81.2778,8.3408],[81.2768,8.3347],[81.2695,8.3349],[81.2677,8.3378],[81.2706,8.3443],[81.2704,8.3529],[81.2742,8.3575],[81.2741,8.3639],[81.2709,8.3625],[81.2664,8.3644],[81.2616,8.3605],[81.2617,8.3715],[81.2684,8.373],[81.2518,8.3851],[81.2528,8.378],[81.2479,8.373],[81.2406,8.3715],[81.2271,8.3626],[81.2111,8.3695],[81.213,8.3546],[81.2156,8.3525],[81.1936,8.3535],[81.1915,8.3512],[81.1947,8.3483],[81.1945,8.3445],[81.1896,8.337],[81.1767,8.3364],[81.1673,8.3302],[81.1705,8.3176],[81.1685,8.3106],[81.1698,8.3073],[81.1637,8.3066],[81.1583,8.2986],[81.1628,8.2951],[81.1667,8.2868],[81.1674,8.2767],[81.1645,8.2686],[81.1776,8.2579],[81.1754,8.2549],[81.1699,8.2559],[81.1691,8.2535],[81.1838,8.2426],[81.1838,8.2385],[81.1774,8.2322],[81.1798,8.2294]]]}},{"type":"Feature","properties":{"n":"Thambalagamuwa","d":"Trincomalee","c":[81.047,8.5066]},"geometry":{"type":"Polygon","coordinates":[[[80.9605,8.4489],[80.9662,8.4463],[81.024,8.4366],[81.0278,8.4387],[81.0378,8.4318],[81.0441,8.4238],[81.0469,8.4251],[81.0487,8.4234],[81.0489,8.4187],[81.0544,8.4151],[81.0544,8.4105],[81.0717,8.4151],[81.0879,8.4086],[81.0917,8.4098],[81.0913,8.4162],[81.0985,8.434],[81.0966,8.4431],[81.1015,8.4521],[81.1064,8.4553],[81.1033,8.4577],[81.1047,8.4611],[81.1158,8.4646],[81.1185,8.4702],[81.1251,8.4722],[81.1292,8.4782],[81.1329,8.4754],[81.1363,8.4766],[81.1387,8.4818],[81.1376,8.4918],[81.1366,8.4885],[81.1338,8.4885],[81.129,8.4931],[81.126,8.4929],[81.1186,8.5047],[81.118,8.5086],[81.1209,8.5104],[81.1309,8.5122],[81.1257,8.5173],[81.126,8.5201],[81.1235,8.5208],[81.1247,8.5233],[81.1198,8.5267],[81.1195,8.5315],[81.1132,8.5407],[81.1129,8.5551],[81.1167,8.5714],[81.1244,8.5864],[81.1104,8.5888],[81.1016,8.6002],[81.089,8.61],[81.071,8.609],[81.0705,8.6034],[81.0631,8.5915],[81.041,8.5698],[81.0286,8.5501],[81.0208,8.5433],[80.9835,8.5521],[80.9477,8.5687],[80.9401,8.5599],[80.9448,8.5559],[80.9441,8.5518],[80.9468,8.5461],[80.9479,8.5357],[80.9449,8.5163],[80.947,8.5079],[80.9633,8.4989],[80.9649,8.4896],[80.9633,8.4872],[80.9838,8.4861],[80.9914,8.4833],[80.9909,8.4731],[80.9877,8.4687],[80.9826,8.4664],[80.9735,8.4686],[80.972,8.466],[80.9744,8.4609],[80.9663,8.457],[80.9605,8.4489]]]}},{"type":"Feature","properties":{"n":"Town & Gravets","d":"Trincomalee","c":[81.1732,8.5821]},"geometry":{"type":"Polygon","coordinates":[[[81.136,8.6277],[81.1129,8.5551],[81.1132,8.5407],[81.1195,8.5315],[81.1198,8.5267],[81.1247,8.5233],[81.1235,8.5208],[81.126,8.5201],[81.1257,8.5173],[81.1309,8.5122],[81.1314,8.5159],[81.1406,8.5228],[81.1474,8.5317],[81.146,8.5366],[81.1502,8.5395],[81.1507,8.5461],[81.1642,8.5393],[81.1756,8.5256],[81.1795,8.5318],[81.1776,8.5358],[81.18,8.5373],[81.1828,8.5358],[81.1868,8.5304],[81.1837,8.5232],[81.1838,8.5118],[81.1884,8.513],[81.1901,8.5085],[81.1956,8.5057],[81.2039,8.5098],[81.2109,8.5089],[81.2079,8.5139],[81.2087,8.517],[81.2055,8.5194],[81.2068,8.5262],[81.2031,8.5271],[81.2057,8.5298],[81.1984,8.5304],[81.1993,8.5347],[81.202,8.5337],[81.2034,8.5355],[81.2,8.5392],[81.1991,8.5367],[81.1964,8.5368],[81.1972,8.5411],[81.1999,8.5404],[81.2008,8.5424],[81.1967,8.5455],[81.1897,8.544],[81.1919,8.549],[81.2044,8.5537],[81.2037,8.5556],[81.1985,8.5557],[81.1912,8.5533],[81.1898,8.5555],[81.1917,8.5589],[81.1893,8.5597],[81.1909,8.5613],[81.1884,8.5613],[81.1944,8.5659],[81.1965,8.5616],[81.1984,8.563],[81.1949,8.566],[81.1971,8.5694],[81.1906,8.5678],[81.1903,8.5713],[81.1933,8.5742],[81.1986,8.5722],[81.1964,8.5736],[81.1983,8.5787],[81.1995,8.575],[81.2028,8.5752],[81.2008,8.5679],[81.218,8.5841],[81.22,8.5813],[81.209,8.5716],[81.2056,8.5651],[81.2156,8.5694],[81.2223,8.5757],[81.2311,8.5654],[81.2324,8.5606],[81.2198,8.5425],[81.2303,8.5471],[81.2247,8.5389],[81.2253,8.5354],[81.2305,8.5359],[81.231,8.5384],[81.2441,8.5461],[81.2444,8.5484],[81.2422,8.555],[81.2445,8.5593],[81.2413,8.5608],[81.2414,8.5644],[81.2382,8.5651],[81.2369,8.5702],[81.2383,8.5742],[81.2432,8.5763],[81.2441,8.5824],[81.2386,8.5761],[81.231,8.5799],[81.2238,8.5913],[81.2185,8.6061],[81.2173,8.6202],[81.225,8.6286],[81.2212,8.639],[81.2239,8.6506],[81.2211,8.6571],[81.2145,8.6621],[81.215,8.6547],[81.1995,8.6392],[81.1999,8.637],[81.1834,8.626],[81.1723,8.6404],[81.1725,8.6475],[81.1628,8.6516],[81.1539,8.6489],[81.1513,8.6356],[81.1428,8.6291],[81.136,8.6277]]]}},{"type":"Feature","properties":{"n":"Verugal","d":"Trincomalee","c":[81.3635,8.3189]},"geometry":{"type":"Polygon","coordinates":[[[81.4017,8.2657],[81.3935,8.3022],[81.3934,8.313],[81.3889,8.3198],[81.3868,8.3299],[81.387,8.3557],[81.391,8.3592],[81.3848,8.3648],[81.3805,8.3731],[81.3708,8.4093],[81.3611,8.4061],[81.3519,8.4154],[81.3443,8.4122],[81.3405,8.4062],[81.3383,8.4063],[81.3372,8.3985],[81.3497,8.3913],[81.3472,8.3885],[81.3487,8.3845],[81.3602,8.3713],[81.3496,8.3755],[81.349,8.3487],[81.3445,8.336],[81.3465,8.3276],[81.3453,8.3224],[81.3419,8.321],[81.3454,8.3123],[81.3404,8.3067],[81.3316,8.3072],[81.3208,8.2943],[81.3197,8.2741],[81.3228,8.2623],[81.3289,8.2654],[81.3341,8.2633],[81.3449,8.264],[81.3522,8.2686],[81.3553,8.2652],[81.3527,8.2572],[81.3594,8.2551],[81.3609,8.2574],[81.365,8.257],[81.3714,8.2527],[81.3747,8.2535],[81.3754,8.2566],[81.3839,8.2531],[81.3853,8.2563],[81.3836,8.2585],[81.3908,8.2614],[81.3943,8.2539],[81.3914,8.2518],[81.3944,8.2481],[81.399,8.2491],[81.3992,8.2605],[81.4017,8.2657]]]}},{"type":"Feature","properties":{"n":"Vavuniya","d":"Vavuniya","c":[80.4541,8.8343]},"geometry":{"type":"Polygon","coordinates":[[[80.5942,8.8697],[80.5908,8.8703],[80.5965,8.8833],[80.5967,8.911],[80.5832,8.9102],[80.5743,8.9256],[80.5438,8.9378],[80.5164,8.9272],[80.5106,8.9409],[80.494,8.9529],[80.4843,8.955],[80.4199,8.9604],[80.393,8.9604],[80.3827,8.9734],[80.3729,8.9799],[80.3379,8.9588],[80.3393,8.9562],[80.3475,8.956],[80.3509,8.9514],[80.3562,8.9507],[80.3606,8.9467],[80.3648,8.9479],[80.3745,8.9416],[80.3741,8.9374],[80.3776,8.9364],[80.383,8.9046],[80.3966,8.876],[80.3986,8.8599],[80.3873,8.848],[80.375,8.8453],[80.3615,8.8378],[80.3544,8.8416],[80.3534,8.8391],[80.3482,8.8389],[80.3351,8.8325],[80.3153,8.8297],[80.2952,8.8197],[80.2701,8.8222],[80.2865,8.7876],[80.3036,8.7667],[80.2999,8.7676],[80.297,8.7609],[80.3014,8.7525],[80.3389,8.7703],[80.3474,8.7571],[80.3528,8.7424],[80.3636,8.741],[80.3672,8.7359],[80.3706,8.7372],[80.3714,8.7328],[80.3745,8.7345],[80.3747,8.7378],[80.3854,8.7346],[80.3845,8.7247],[80.3934,8.7271],[80.3971,8.7309],[80.4123,8.7278],[80.4142,8.7306],[80.4276,8.7349],[80.4345,8.7251],[80.4405,8.7224],[80.4418,8.7151],[80.4477,8.7136],[80.4475,8.7103],[80.4497,8.7093],[80.4562,8.7147],[80.4628,8.7127],[80.469,8.7157],[80.4726,8.7247],[80.4743,8.7227],[80.4877,8.7206],[80.4966,8.7215],[80.5008,8.7253],[80.4976,8.704],[80.4853,8.6929],[80.4893,8.6903],[80.4873,8.6856],[80.493,8.6826],[80.4991,8.6869],[80.5041,8.687],[80.5098,8.6832],[80.5229,8.6662],[80.5286,8.6744],[80.5412,8.6785],[80.5451,8.682],[80.5509,8.6957],[80.5396,8.7037],[80.5322,8.704],[80.5323,8.7058],[80.5266,8.708],[80.5283,8.7151],[80.5174,8.7257],[80.5207,8.7312],[80.5252,8.7296],[80.5225,8.7342],[80.5243,8.7374],[80.5208,8.7459],[80.5222,8.7491],[80.5149,8.7505],[80.5175,8.755],[80.5143,8.7563],[80.5292,8.7732],[80.5406,8.7685],[80.5424,8.7805],[80.5516,8.8017],[80.5508,8.8058],[80.5483,8.8064],[80.5352,8.8056],[80.5396,8.7986],[80.5384,8.7777],[80.5266,8.7793],[80.5194,8.7855],[80.5155,8.794],[80.5175,8.7984],[80.5162,8.8059],[80.51,8.806],[80.51,8.8084],[80.5033,8.8099],[80.504,8.824],[80.51,8.8257],[80.5226,8.822],[80.5238,8.8131],[80.5191,8.8067],[80.5345,8.8062],[80.5283,8.8213],[80.5445,8.8245],[80.548,8.8231],[80.5601,8.8076],[80.5598,8.8112],[80.5635,8.8159],[80.5705,8.8151],[80.585,8.8065],[80.5917,8.813],[80.5978,8.8268],[80.6039,8.8281],[80.6089,8.8331],[80.6164,8.8287],[80.6211,8.8301],[80.6296,8.8281],[80.6233,8.8384],[80.6033,8.841],[80.5903,8.8464],[80.5889,8.8511],[80.5942,8.8697]],[[80.4961,8.8063],[80.5048,8.8038],[80.5024,8.791],[80.4966,8.7929],[80.4973,8.7984],[80.4909,8.8027],[80.4961,8.8063]]]}},{"type":"Feature","properties":{"n":"Vavuniya North","d":"Vavuniya","c":[80.5739,9.004]},"geometry":{"type":"Polygon","coordinates":[[[80.6661,8.8718],[80.6809,8.8803],[80.6879,8.8879],[80.7115,8.8993],[80.7231,8.8979],[80.743,8.903],[80.7366,8.9295],[80.7102,8.9458],[80.7012,8.9841],[80.729,9.0114],[80.7288,9.0164],[80.7233,9.0235],[80.7414,9.0356],[80.7154,9.0503],[80.6846,9.0311],[80.6762,9.0296],[80.6739,9.0352],[80.6748,9.0416],[80.6855,9.0498],[80.6903,9.0742],[80.6807,9.0836],[80.6721,9.0807],[80.6629,9.074],[80.6496,9.0777],[80.6501,9.095],[80.6454,9.1153],[80.6366,9.1196],[80.6316,9.1165],[80.6197,9.1232],[80.602,9.1263],[80.58,9.126],[80.5832,9.1119],[80.559,9.1074],[80.5288,9.0765],[80.5131,9.0751],[80.5107,9.0755],[80.5099,9.0816],[80.512,9.0836],[80.5102,9.0839],[80.5112,9.0873],[80.5084,9.0937],[80.5039,9.0967],[80.4985,9.1082],[80.493,9.1136],[80.4193,9.1132],[80.403,9.1154],[80.403,9.0905],[80.4239,9.0907],[80.4269,9.0557],[80.4252,9.0448],[80.4325,9.0312],[80.3944,8.9952],[80.3729,8.9799],[80.3827,8.9734],[80.3873,8.9656],[80.393,8.9604],[80.4746,8.9568],[80.494,8.9529],[80.5106,8.9409],[80.5164,8.9272],[80.5438,8.9378],[80.5743,8.9256],[80.5832,8.9102],[80.5967,8.911],[80.5965,8.8833],[80.5918,8.8687],[80.6432,8.868],[80.6661,8.8718]]]}},{"type":"Feature","properties":{"n":"Vavuniya South","d":"Vavuniya","c":[80.5722,8.7716]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.379,8.5882],[80.3719,8.5909],[80.3698,8.595],[80.3589,8.5972],[80.3579,8.5944],[80.3481,8.5918],[80.3439,8.5782],[80.3427,8.5693],[80.3444,8.5661],[80.3506,8.5722],[80.3582,8.5755],[80.3622,8.5727],[80.3683,8.5743],[80.3768,8.5803],[80.379,8.5882]]],[[[80.3867,8.6257],[80.3821,8.6339],[80.3714,8.6273],[80.3701,8.6227],[80.3779,8.6206],[80.3867,8.6257]]],[[[80.5229,8.6662],[80.5098,8.6832],[80.5041,8.687],[80.4991,8.6869],[80.493,8.6826],[80.4873,8.6856],[80.4893,8.6903],[80.4853,8.6929],[80.4976,8.704],[80.5008,8.7253],[80.4966,8.7215],[80.4877,8.7206],[80.4743,8.7227],[80.4726,8.7247],[80.469,8.7157],[80.4628,8.7127],[80.4562,8.7147],[80.4497,8.7093],[80.4529,8.7071],[80.4476,8.703],[80.4406,8.7033],[80.4371,8.6978],[80.416,8.6918],[80.4131,8.6928],[80.4112,8.6896],[80.4061,8.6994],[80.4091,8.7048],[80.4067,8.7078],[80.4089,8.7118],[80.4056,8.7165],[80.3981,8.7192],[80.4008,8.7229],[80.3977,8.7254],[80.3942,8.7243],[80.3912,8.728],[80.3845,8.7247],[80.3772,8.7159],[80.3771,8.7118],[80.3716,8.7069],[80.3737,8.7006],[80.3688,8.6975],[80.3638,8.6993],[80.3602,8.6966],[80.3526,8.696],[80.3511,8.6934],[80.3618,8.685],[80.3563,8.6756],[80.3578,8.6715],[80.3659,8.6686],[80.3757,8.6757],[80.3837,8.6724],[80.3865,8.6697],[80.3853,8.6669],[80.3814,8.6671],[80.3787,8.6578],[80.382,8.656],[80.4005,8.6558],[80.3948,8.6484],[80.4019,8.6427],[80.4072,8.6589],[80.42,8.6622],[80.4223,8.6737],[80.4254,8.673],[80.4481,8.693],[80.4688,8.6827],[80.4777,8.6739],[80.4836,8.6713],[80.4842,8.6685],[80.4952,8.6656],[80.504,8.6579],[80.5116,8.6601],[80.518,8.6587],[80.5229,8.6662]],[[80.3988,8.7069],[80.4004,8.7078],[80.4005,8.7049],[80.4053,8.7011],[80.3995,8.6958],[80.3926,8.6924],[80.3901,8.6937],[80.3912,8.6959],[80.3874,8.7014],[80.3988,8.7069]]],[[[80.3596,8.7402],[80.3563,8.7399],[80.3577,8.7376],[80.3555,8.7344],[80.3431,8.7343],[80.3404,8.7155],[80.3485,8.7094],[80.3505,8.7159],[80.3545,8.7165],[80.3547,8.719],[80.3635,8.7193],[80.3635,8.7235],[80.3593,8.7285],[80.3623,8.7361],[80.3672,8.7359],[80.3636,8.741],[80.3596,8.7402]]],[[[80.4961,8.8063],[80.4909,8.8027],[80.4973,8.7984],[80.4966,8.7929],[80.5024,8.791],[80.5048,8.8038],[80.4961,8.8063]]],[[[80.6296,8.8281],[80.6211,8.8301],[80.6164,8.8287],[80.6089,8.8331],[80.6039,8.8281],[80.5978,8.8268],[80.5917,8.813],[80.585,8.8065],[80.5705,8.8151],[80.5635,8.8159],[80.5598,8.8112],[80.5601,8.8076],[80.548,8.8231],[80.5445,8.8245],[80.5283,8.8213],[80.5345,8.8062],[80.5191,8.8067],[80.5238,8.8131],[80.5226,8.822],[80.51,8.8257],[80.504,8.824],[80.5033,8.8099],[80.51,8.8084],[80.51,8.806],[80.5162,8.8059],[80.5175,8.7984],[80.5155,8.794],[80.5194,8.7855],[80.5299,8.7779],[80.5384,8.7777],[80.5396,8.7986],[80.5352,8.8056],[80.5508,8.8058],[80.5516,8.8017],[80.5424,8.7805],[80.5406,8.7685],[80.5292,8.7732],[80.5143,8.7563],[80.5175,8.755],[80.5149,8.7505],[80.5222,8.7491],[80.5208,8.7459],[80.5243,8.7374],[80.5225,8.7342],[80.5252,8.7296],[80.5207,8.7312],[80.5174,8.7257],[80.5283,8.7151],[80.5266,8.708],[80.5323,8.7058],[80.5322,8.704],[80.5396,8.7037],[80.5509,8.6957],[80.557,8.6993],[80.5668,8.7],[80.5695,8.7173],[80.588,8.7234],[80.5999,8.7455],[80.6148,8.7517],[80.621,8.7671],[80.6321,8.7809],[80.6454,8.787],[80.6508,8.7975],[80.6327,8.8174],[80.6296,8.8281]]]]}},{"type":"Feature","properties":{"n":"Vengalacheddikulam","d":"Vavuniya","c":[80.2892,8.6908]},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.3988,8.7069],[80.3874,8.7014],[80.3912,8.6959],[80.3901,8.6937],[80.3926,8.6924],[80.3995,8.6958],[80.4053,8.7011],[80.4005,8.7049],[80.4004,8.7078],[80.3988,8.7069]]],[[[80.3934,8.7271],[80.3942,8.7243],[80.3977,8.7254],[80.4008,8.7229],[80.3981,8.7192],[80.4056,8.7165],[80.4089,8.7118],[80.4067,8.7078],[80.4091,8.7048],[80.4061,8.6994],[80.4112,8.6896],[80.4131,8.6928],[80.416,8.6918],[80.4371,8.6978],[80.4406,8.7033],[80.4476,8.703],[80.4529,8.7071],[80.4475,8.7103],[80.4477,8.7136],[80.4418,8.7151],[80.4405,8.7224],[80.4345,8.7251],[80.4276,8.7349],[80.4142,8.7306],[80.4123,8.7278],[80.3971,8.7309],[80.3934,8.7271]]],[[[80.2331,8.6802],[80.2353,8.6697],[80.2334,8.6671],[80.2363,8.664],[80.231,8.6527],[80.2366,8.637],[80.2339,8.629],[80.2385,8.6284],[80.2435,8.6212],[80.2431,8.6183],[80.2477,8.6149],[80.251,8.614],[80.2563,8.6179],[80.2724,8.6098],[80.2718,8.5992],[80.2756,8.5899],[80.2793,8.5896],[80.2773,8.5832],[80.2826,8.5795],[80.2842,8.5709],[80.2822,8.5678],[80.2857,8.5591],[80.2921,8.5609],[80.2962,8.558],[80.3027,8.5585],[80.3091,8.5555],[80.3096,8.5512],[80.3151,8.5478],[80.32,8.5494],[80.3247,8.5473],[80.3261,8.5492],[80.3303,8.5459],[80.3379,8.547],[80.338,8.5542],[80.3444,8.5661],[80.3427,8.5693],[80.3439,8.5782],[80.3481,8.5918],[80.3579,8.5944],[80.3589,8.5972],[80.3698,8.595],[80.3719,8.5909],[80.379,8.5882],[80.3756,8.5961],[80.3809,8.6012],[80.3761,8.6103],[80.3779,8.6206],[80.3701,8.6227],[80.3714,8.6273],[80.3821,8.6339],[80.3867,8.6257],[80.3972,8.6337],[80.4019,8.6427],[80.3948,8.6484],[80.4005,8.6558],[80.382,8.656],[80.3787,8.6578],[80.3814,8.6671],[80.3853,8.6669],[80.3865,8.6697],[80.3837,8.6724],[80.3757,8.6757],[80.3659,8.6686],[80.3578,8.6715],[80.3563,8.6756],[80.3618,8.685],[80.3511,8.6934],[80.3526,8.696],[80.3602,8.6966],[80.3638,8.6993],[80.3688,8.6975],[80.3737,8.7006],[80.3716,8.7069],[80.3771,8.7118],[80.3772,8.7159],[80.3845,8.7247],[80.3854,8.7346],[80.3747,8.7378],[80.3745,8.7345],[80.3714,8.7328],[80.3706,8.7372],[80.3623,8.7361],[80.3593,8.7285],[80.3635,8.7235],[80.3635,8.7193],[80.3547,8.719],[80.3545,8.7165],[80.3505,8.7159],[80.3485,8.7094],[80.3404,8.7155],[80.3431,8.7343],[80.3555,8.7344],[80.3577,8.7376],[80.3563,8.7399],[80.3596,8.7402],[80.3528,8.7424],[80.3474,8.7571],[80.3389,8.7703],[80.3014,8.7525],[80.297,8.7609],[80.2999,8.7676],[80.3036,8.7667],[80.2865,8.7876],[80.2701,8.8222],[80.2262,8.8267],[80.2053,8.7884],[80.1971,8.7652],[80.1789,8.7731],[80.1742,8.7602],[80.1669,8.7522],[80.1701,8.7465],[80.1822,8.7408],[80.1866,8.7342],[80.1921,8.7328],[80.2006,8.7163],[80.2099,8.7095],[80.214,8.7015],[80.2195,8.6998],[80.2248,8.6874],[80.2295,8.6858],[80.2331,8.6802]]]]}}]}';
+const EARTH_GEO_DISTRICTS = '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"n":"Jaffna"},"geometry":{"type":"MultiPolygon","coordinates":[[[[79.7152,9.5295],[79.7001,9.5289],[79.6922,9.5314],[79.6874,9.5373],[79.6849,9.5364],[79.6841,9.5393],[79.6799,9.5402],[79.6705,9.554],[79.6637,9.5524],[79.6596,9.5561],[79.651,9.5473],[79.655,9.5051],[79.7046,9.4758],[79.7201,9.4744],[79.7292,9.4826],[79.7316,9.4922],[79.7262,9.5113],[79.7254,9.5239],[79.7234,9.5273],[79.7152,9.5295]]],[[[79.7827,9.6873],[79.7711,9.6751],[79.7641,9.6605],[79.7646,9.6538],[79.7698,9.6511],[79.78,9.6555],[79.7797,9.6588],[79.787,9.6658],[79.7834,9.67],[79.7827,9.6873]]],[[[79.8129,9.69],[79.8118,9.7025],[79.8148,9.711],[79.814,9.7159],[79.8096,9.7084],[79.8073,9.6951],[79.8094,9.687],[79.8131,9.6857],[79.8129,9.69]]],[[[79.8553,9.7457],[79.8605,9.7372],[79.8613,9.7266],[79.8502,9.7131],[79.8741,9.7038],[79.8803,9.7037],[79.8927,9.7137],[79.8883,9.7276],[79.8973,9.7539],[79.8919,9.7637],[79.8961,9.765],[79.8999,9.7629],[79.9019,9.7668],[79.8799,9.7614],[79.8632,9.762],[79.8554,9.7515],[79.8553,9.7457]]],[[[80.6216,9.4595],[80.5498,9.5121],[80.3614,9.6646],[80.3223,9.7109],[80.267,9.7932],[80.2538,9.8235],[80.2468,9.8286],[80.2354,9.8281],[80.2121,9.8358],[80.1948,9.8294],[80.1691,9.8249],[80.1397,9.8253],[80.1117,9.8108],[80.1011,9.8089],[80.0444,9.8162],[80.0366,9.8181],[80.0303,9.8234],[80.0267,9.823],[80.0309,9.823],[80.0364,9.8178],[80.0304,9.816],[80.0194,9.817],[79.9981,9.8111],[79.992,9.8119],[79.9706,9.8054],[79.9481,9.7949],[79.9433,9.7901],[79.9436,9.7864],[79.9356,9.7809],[79.9216,9.7746],[79.9145,9.7763],[79.9071,9.7694],[79.9088,9.767],[79.9052,9.7613],[79.9081,9.754],[79.9139,9.7516],[79.9256,9.7386],[79.9232,9.7354],[79.9327,9.7221],[79.9304,9.7139],[79.9395,9.6961],[79.9445,9.6944],[79.9452,9.6926],[79.9421,9.6921],[79.9455,9.6895],[79.9528,9.6911],[79.9546,9.6885],[79.955,9.6924],[79.9638,9.7014],[79.9672,9.7073],[79.9673,9.7164],[79.973,9.7208],[79.9717,9.7292],[79.9734,9.7324],[79.9742,9.7207],[79.9675,9.7133],[79.9668,9.6982],[79.9804,9.6848],[79.9861,9.6857],[79.9888,9.6919],[79.9979,9.6881],[80.0001,9.6785],[79.9976,9.672],[80.0037,9.6635],[80.0116,9.6581],[80.0131,9.654],[80.0241,9.648],[80.0398,9.6458],[80.043,9.6499],[80.0468,9.6498],[80.0712,9.6381],[80.0961,9.6189],[80.1316,9.6064],[80.1356,9.6099],[80.1183,9.6137],[80.1122,9.6234],[80.1007,9.6296],[80.098,9.635],[80.0825,9.6405],[80.0781,9.6445],[80.0774,9.6596],[80.0911,9.6486],[80.1372,9.6264],[80.1489,9.6187],[80.1554,9.6099],[80.1679,9.5997],[80.1998,9.5808],[80.2089,9.5837],[80.2084,9.5862],[80.1843,9.5955],[80.185,9.6002],[80.1725,9.6299],[80.1727,9.6362],[80.1694,9.6383],[80.1625,9.6361],[80.1612,9.6421],[80.1566,9.6454],[80.1615,9.6525],[80.1697,9.6565],[80.1741,9.6552],[80.1933,9.6448],[80.2269,9.6316],[80.255,9.6146],[80.2955,9.6913],[80.3078,9.6747],[80.3321,9.6495],[80.4006,9.611],[80.447,9.5748],[80.4558,9.5553],[80.4548,9.5399],[80.4725,9.5212],[80.6011,9.4592],[80.6135,9.4566],[80.6216,9.4595]]],[[[79.8393,9.6116],[79.8417,9.6065],[79.8542,9.6041],[79.8419,9.6056],[79.8412,9.6016],[79.8501,9.5959],[79.8461,9.5948],[79.8368,9.5989],[79.8351,9.5983],[79.8347,9.5916],[79.8253,9.5961],[79.8201,9.6016],[79.8204,9.6259],[79.8177,9.6242],[79.8182,9.6207],[79.8153,9.6216],[79.8135,9.6268],[79.8104,9.6249],[79.8069,9.6109],[79.8086,9.6058],[79.8051,9.6014],[79.8106,9.5987],[79.8076,9.5936],[79.8088,9.5896],[79.8031,9.59],[79.8032,9.5775],[79.843,9.5675],[79.857,9.568],[79.8614,9.5711],[79.8593,9.5773],[79.8621,9.5853],[79.8586,9.5928],[79.8642,9.6031],[79.8624,9.6069],[79.8436,9.6194],[79.8428,9.6127],[79.8393,9.6116]]],[[[79.7747,9.596],[79.773,9.5987],[79.7754,9.6195],[79.7706,9.622],[79.7628,9.6134],[79.7635,9.5897],[79.7739,9.5846],[79.776,9.5912],[79.7747,9.596]]],[[[79.8581,9.6292],[79.8554,9.6349],[79.8521,9.6338],[79.8541,9.6234],[79.8611,9.6168],[79.862,9.6184],[79.8595,9.618],[79.863,9.6223],[79.861,9.6234],[79.862,9.6265],[79.8581,9.6292]]],[[[79.9824,9.6222],[79.9852,9.6307],[79.9837,9.6358],[79.9801,9.6355],[79.9809,9.6319],[79.9632,9.6343],[79.9336,9.6559],[79.9232,9.6611],[79.9264,9.6656],[79.932,9.6655],[79.9279,9.669],[79.9307,9.6709],[79.9312,9.6776],[79.9325,9.6739],[79.935,9.6767],[79.9292,9.68],[79.9188,9.6802],[79.9231,9.6767],[79.9064,9.6718],[79.9054,9.668],[79.9108,9.6662],[79.9147,9.6603],[79.9085,9.6642],[79.9061,9.6642],[79.9064,9.6625],[79.9101,9.6611],[79.9145,9.6516],[79.9039,9.6619],[79.8964,9.6741],[79.8994,9.684],[79.8934,9.6879],[79.8913,9.6952],[79.8866,9.6991],[79.8835,9.6995],[79.8779,9.6939],[79.8725,9.6931],[79.8624,9.7035],[79.8501,9.7007],[79.8413,9.7034],[79.8409,9.6979],[79.8495,9.6911],[79.8439,9.6854],[79.8468,9.6762],[79.8571,9.6613],[79.8619,9.658],[79.8682,9.6586],[79.8728,9.6697],[79.878,9.6664],[79.8733,9.6574],[79.8663,9.6566],[79.8645,9.6537],[79.8688,9.6443],[79.8688,9.6391],[79.8722,9.6349],[79.8743,9.6361],[79.88,9.6335],[79.9003,9.6163],[79.9081,9.6175],[79.9133,9.6292],[79.918,9.6329],[79.9354,9.6307],[79.9489,9.6249],[79.9622,9.6142],[79.9706,9.6125],[79.9748,9.6123],[79.9748,9.6159],[79.9813,9.6218],[79.9835,9.6208],[79.9854,9.6129],[79.9817,9.6127],[79.978,9.6054],[79.968,9.6057],[79.9656,9.6109],[79.965,9.6079],[79.9754,9.6],[79.9878,9.5971],[80.0007,9.6036],[80.0066,9.6152],[80.0039,9.6132],[80.0029,9.6169],[80.0027,9.6146],[80.003,9.6197],[80.0084,9.6287],[80.0039,9.6426],[79.9947,9.6508],[79.9912,9.641],[79.9855,9.6429],[79.9888,9.6397],[79.99,9.6297],[79.9878,9.625],[79.9824,9.6222]]]]}},{"type":"Feature","properties":{"n":"Kilinochchi"},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.0101,9.4724],[80.0096,9.467],[80.0149,9.467],[80.0178,9.4812],[80.0143,9.4846],[80.0054,9.4847],[80.004,9.4802],[80.0101,9.4724]]],[[[79.984,9.3067],[79.9782,9.2979],[79.9717,9.2957],[79.9718,9.2859],[79.9776,9.2801],[79.9841,9.2846],[79.9912,9.2841],[79.9962,9.2808],[79.9998,9.2706],[80.0021,9.2714],[80.0068,9.2773],[80.0053,9.2868],[79.998,9.29],[79.9962,9.2858],[79.9919,9.2883],[79.9916,9.2915],[79.9949,9.2928],[79.9886,9.2997],[79.9882,9.3049],[79.984,9.3067]]],[[[80.0554,9.3309],[80.0588,9.3296],[80.0607,9.3314],[80.0578,9.3331],[80.0594,9.3407],[80.0566,9.3482],[80.0519,9.3382],[80.0554,9.3309]]],[[[80.255,9.6146],[80.3077,9.5845],[80.3421,9.561],[80.372,9.5314],[80.3847,9.5132],[80.3881,9.5142],[80.3902,9.5195],[80.3982,9.5203],[80.4013,9.5178],[80.405,9.5196],[80.4058,9.5157],[80.4027,9.5129],[80.3907,9.5153],[80.397,9.5039],[80.3927,9.4988],[80.3895,9.484],[80.3826,9.4841],[80.3787,9.4804],[80.3756,9.4811],[80.368,9.4724],[80.3521,9.4672],[80.34,9.4734],[80.3363,9.4643],[80.3387,9.4607],[80.3325,9.4553],[80.3119,9.4618],[80.3059,9.4579],[80.3074,9.4528],[80.3105,9.4523],[80.3134,9.4478],[80.3078,9.4513],[80.3059,9.45],[80.3088,9.4478],[80.3093,9.4428],[80.3071,9.442],[80.3047,9.4462],[80.3064,9.4484],[80.3021,9.4556],[80.2922,9.4587],[80.2899,9.4552],[80.2925,9.4516],[80.2863,9.4505],[80.2898,9.4533],[80.2882,9.4561],[80.286,9.454],[80.2805,9.4549],[80.2671,9.4594],[80.2538,9.4674],[80.2443,9.4674],[80.2358,9.4743],[80.2453,9.4769],[80.2573,9.4711],[80.2653,9.4768],[80.2777,9.475],[80.2553,9.4884],[80.2475,9.4977],[80.2485,9.5061],[80.2608,9.4972],[80.2642,9.4993],[80.2818,9.4951],[80.2406,9.5203],[80.2238,9.5346],[80.2214,9.5351],[80.223,9.5331],[80.2206,9.5275],[80.1975,9.5383],[80.1945,9.5418],[80.196,9.5454],[80.1871,9.545],[80.1796,9.5409],[80.1706,9.5437],[80.143,9.5592],[80.1262,9.5778],[80.1199,9.5778],[80.1207,9.5736],[80.1134,9.5751],[80.1136,9.5774],[80.1074,9.5829],[80.1076,9.5856],[80.103,9.5882],[80.0977,9.5882],[80.0923,9.5934],[80.0656,9.5999],[80.0617,9.6035],[80.0648,9.6082],[80.0616,9.6115],[80.0583,9.6045],[80.052,9.5992],[80.0899,9.5789],[80.147,9.5353],[80.1754,9.5039],[80.186,9.4856],[80.1805,9.4714],[80.17,9.4668],[80.1548,9.4453],[80.1451,9.4364],[80.1216,9.4255],[80.111,9.4167],[80.083,9.4046],[80.0726,9.4026],[80.0577,9.3943],[80.0536,9.3896],[80.0531,9.3796],[80.0562,9.3744],[80.0545,9.3652],[80.0622,9.3563],[80.0588,9.3495],[80.0634,9.3425],[80.0612,9.337],[80.0634,9.3309],[80.0729,9.3256],[80.0892,9.3256],[80.1142,9.3082],[80.1228,9.2974],[80.1199,9.289],[80.1141,9.2851],[80.11,9.2757],[80.1112,9.2699],[80.1186,9.2621],[80.1208,9.2538],[80.1163,9.2429],[80.1204,9.2258],[80.117,9.2168],[80.12,9.2124],[80.1154,9.2091],[80.1177,9.2086],[80.1201,9.2117],[80.149,9.2111],[80.1918,9.2373],[80.2181,9.2341],[80.2202,9.2386],[80.2164,9.2497],[80.2136,9.2767],[80.2337,9.2951],[80.2407,9.2974],[80.2642,9.3029],[80.2794,9.2978],[80.3213,9.3085],[80.3874,9.3001],[80.395,9.301],[80.4065,9.308],[80.4078,9.3395],[80.5187,9.3451],[80.5185,9.3591],[80.5291,9.3795],[80.5276,9.3896],[80.532,9.4052],[80.5586,9.3765],[80.5854,9.3627],[80.5871,9.3761],[80.5842,9.3819],[80.5861,9.3918],[80.584,9.3957],[80.5864,9.4083],[80.5951,9.4175],[80.5996,9.4147],[80.6095,9.4257],[80.6142,9.4434],[80.6074,9.4488],[80.6125,9.4451],[80.6155,9.4478],[80.6135,9.4566],[80.6011,9.4592],[80.4725,9.5212],[80.4548,9.5399],[80.4558,9.5553],[80.447,9.5748],[80.4006,9.611],[80.3321,9.6495],[80.3078,9.6747],[80.2955,9.6913],[80.255,9.6146]]]]}},{"type":"Feature","properties":{"n":"Mannar"},"geometry":{"type":"MultiPolygon","coordinates":[[[[80.1154,9.2091],[80.1103,9.1974],[80.1074,9.2008],[80.1046,9.1936],[80.1067,9.1818],[80.1012,9.1719],[80.1,9.1598],[80.0862,9.1429],[80.0811,9.13],[80.0763,9.127],[80.0754,9.1246],[80.0788,9.1214],[80.0759,9.117],[80.0747,9.1046],[80.0771,9.1014],[80.0737,9.0975],[80.0742,9.0936],[80.0692,9.0883],[80.072,9.0783],[80.0514,9.041],[80.0485,9.0298],[80.0386,9.0192],[80.0415,9.0163],[80.0378,9.0143],[80.0302,9.0166],[80.0158,9.0126],[80.0138,9.0116],[80.0167,9.0103],[80.0145,9.007],[80.0102,9.0076],[80.0059,9.0022],[79.9906,8.9957],[79.9916,8.9901],[79.9871,8.9763],[79.968,8.9694],[79.9475,8.9473],[79.9317,8.9429],[79.9206,8.9456],[79.9112,8.9388],[79.9146,8.9384],[79.9173,8.9335],[79.9165,8.9303],[79.9185,8.932],[79.9199,8.9284],[79.9178,8.9271],[79.9321,8.9164],[79.9272,8.9115],[79.9287,8.9074],[79.9333,8.9084],[79.9327,8.9042],[79.9356,8.9012],[79.9308,8.9036],[79.9278,8.9023],[79.9315,8.8985],[79.9286,8.8958],[79.9294,8.8735],[79.92,8.8353],[79.9155,8.8263],[79.915,8.8126],[79.9174,8.8036],[79.9347,8.7805],[79.939,8.7651],[79.9598,8.7241],[79.9503,8.7117],[79.9514,8.693],[79.9498,8.6896],[79.9523,8.6798],[79.9495,8.6659],[79.9441,8.6607],[79.9425,8.6514],[79.9476,8.6322],[79.9409,8.6161],[79.9321,8.6104],[79.9204,8.5939],[79.9198,8.5673],[79.9275,8.5645],[79.9376,8.556],[79.949,8.5593],[79.9566,8.5526],[79.9651,8.5501],[79.9776,8.5529],[79.9919,8.5419],[80.0009,8.5445],[80.008,8.5357],[80.0228,8.5326],[80.0324,8.5272],[80.0336,8.5244],[80.0433,8.5222],[80.0504,8.5219],[80.0517,8.5939],[80.0553,8.637],[80.0444,8.6732],[80.062,8.664],[80.0636,8.6608],[80.0725,8.659],[80.0801,8.6536],[80.0866,8.6562],[80.0951,8.6524],[80.1005,8.6537],[80.1049,8.6506],[80.1138,8.6494],[80.2354,8.6804],[80.2329,8.6851],[80.2255,8.6903],[80.2212,8.7007],[80.2158,8.7022],[80.2131,8.7091],[80.203,8.717],[80.1942,8.7335],[80.1875,8.7365],[80.1854,8.7415],[80.1709,8.7488],[80.17,8.7522],[80.176,8.7634],[80.1778,8.7746],[80.198,8.7647],[80.2073,8.7891],[80.2297,8.8279],[80.2974,8.8203],[80.3175,8.8306],[80.3359,8.8317],[80.3572,8.8392],[80.3713,8.84],[80.3939,8.8491],[80.4025,8.8569],[80.4005,8.8758],[80.3861,8.9071],[80.3802,8.9364],[80.3759,8.9384],[80.3754,8.9427],[80.3677,8.948],[80.3531,8.9522],[80.3497,8.9567],[80.3285,8.9596],[80.2495,8.9516],[80.175,8.9503],[80.178,8.955],[80.1771,8.9713],[80.1901,8.9794],[80.189,8.985],[80.1762,8.9966],[80.1949,9.0459],[80.2061,9.0519],[80.22,9.0548],[80.2161,9.0973],[80.2257,9.1132],[80.2171,9.1432],[80.1955,9.176],[80.1918,9.2373],[80.149,9.2111],[80.1201,9.2117],[80.1177,9.2086],[80.1154,9.2091]]],[[[79.9138,8.9418],[79.9183,8.9548],[79.9131,8.9569],[79.9029,8.9424],[79.9062,8.939],[79.9138,8.9418]]],[[[79.9023,8.9468],[79.9092,8.9556],[79.9027,8.9617],[79.8959,8.9602],[79.8913,8.9557],[79.8922,8.9522],[79.9023,8.9468]]],[[[79.8907,8.9556],[79.8864,8.965],[79.8945,8.9622],[79.897,8.9652],[79.8963,8.9679],[79.907,8.9711],[79.9126,8.9755],[79.9265,8.9755],[79.9265,8.9825],[79.9014,8.9959],[79.8827,9.0131],[79.8717,9.0295],[79.8679,9.0426],[79.8631,9.0443],[79.86,9.0531],[79.8531,9.0611],[79.86,9.0574],[79.8624,9.047],[79.8698,9.0431],[79.8705,9.0374],[79.9135,9.0169],[79.9183,9.0103],[79.9275,9.0097],[79.9097,9.0239],[79.9026,9.036],[79.8918,9.045],[79.8917,9.0478],[79.8621,9.0726],[79.8513,9.0786],[79.7981,9.0963],[79.7499,9.1064],[79.7313,9.1078],[79.7099,9.1048],[79.6987,9.1],[79.6929,9.0948],[79.6968,9.0958],[79.6952,9.0935],[79.6898,9.0915],[79.691,9.0871],[79.6937,9.0893],[79.6981,9.0829],[79.6954,9.0805],[79.6877,9.0813],[79.6841,9.0784],[79.6862,9.076],[79.6938,9.0784],[79.7135,9.0769],[79.7468,9.0682],[79.7739,9.057],[79.8117,9.0351],[79.8612,8.9945],[79.8761,8.9773],[79.8907,8.9556]]]]}},{"type":"Feature","properties":{"n":"Mullaitivu"},"geometry":{"type":"Polygon","coordinates":[[[80.6135,9.4566],[80.6155,9.4478],[80.6125,9.4451],[80.6074,9.4488],[80.6142,9.4434],[80.6095,9.4257],[80.5996,9.4147],[80.5951,9.4175],[80.5864,9.4083],[80.584,9.3957],[80.5861,9.3918],[80.5842,9.3819],[80.5871,9.3761],[80.5854,9.3627],[80.5586,9.3765],[80.532,9.4052],[80.5276,9.3896],[80.5291,9.3795],[80.5185,9.3591],[80.5187,9.3451],[80.4078,9.3395],[80.4065,9.308],[80.395,9.301],[80.3874,9.3001],[80.3213,9.3085],[80.2794,9.2978],[80.2642,9.3029],[80.2337,9.2951],[80.2136,9.2767],[80.2164,9.2497],[80.2202,9.2386],[80.2181,9.2341],[80.1918,9.2373],[80.1955,9.176],[80.2171,9.1432],[80.2257,9.1132],[80.2161,9.0973],[80.22,9.0548],[80.2061,9.0519],[80.1949,9.0459],[80.1762,8.9966],[80.189,8.985],[80.1901,8.9794],[80.1771,8.9713],[80.178,8.955],[80.175,8.9503],[80.2495,8.9516],[80.3285,8.9596],[80.3401,8.959],[80.3909,8.9911],[80.4338,9.03],[80.4288,9.0541],[80.4262,9.0909],[80.4043,9.0908],[80.404,9.1152],[80.4912,9.1176],[80.5027,9.1044],[80.5044,9.0983],[80.5102,9.0936],[80.5129,9.0766],[80.53,9.0761],[80.5599,9.1074],[80.5849,9.1108],[80.5855,9.1172],[80.5817,9.126],[80.6224,9.1239],[80.6342,9.1159],[80.6371,9.1204],[80.6465,9.117],[80.6516,9.0957],[80.6521,9.0782],[80.6681,9.0747],[80.6723,9.0796],[80.6823,9.0831],[80.6916,9.0745],[80.6912,9.0632],[80.6863,9.0507],[80.6768,9.0414],[80.6772,9.0317],[80.6852,9.0308],[80.7018,9.0392],[80.7176,9.0515],[80.787,9.0102],[80.7658,8.937],[80.7755,8.9467],[80.8276,8.9555],[80.8334,8.9605],[80.8496,8.9612],[80.8599,8.9579],[80.8697,8.9595],[80.8692,8.9623],[80.8739,8.9642],[80.8742,8.9684],[80.8831,8.9692],[80.8871,8.9729],[80.8896,8.9812],[80.8964,8.9815],[80.9001,8.9787],[80.9018,8.9849],[80.9203,8.9863],[80.9269,8.9921],[80.9188,8.9921],[80.9195,8.9986],[80.9243,9.0048],[80.9213,9.0103],[80.9173,9.0121],[80.9161,9.006],[80.9122,9.004],[80.9106,9.0053],[80.9104,8.9999],[80.908,8.9984],[80.8883,9.0133],[80.8766,9.0254],[80.8782,9.0316],[80.8912,9.0374],[80.8895,9.0435],[80.8966,9.0498],[80.9016,9.0485],[80.9144,9.0323],[80.9267,9.0216],[80.9334,9.0089],[80.9508,8.9889],[80.9535,8.987],[80.9631,8.9909],[80.9643,8.9894],[80.9362,9.0348],[80.8992,9.1043],[80.8788,9.1338],[80.8596,9.1768],[80.8446,9.231],[80.8193,9.2724],[80.8108,9.293],[80.7921,9.3124],[80.7451,9.3473],[80.7061,9.383],[80.6709,9.4199],[80.6713,9.4112],[80.7109,9.3728],[80.7169,9.3615],[80.7232,9.3556],[80.7217,9.3502],[80.7158,9.3542],[80.7095,9.3695],[80.6651,9.4045],[80.6631,9.4095],[80.6708,9.4187],[80.67,9.4207],[80.6216,9.4595],[80.6135,9.4566]]]}},{"type":"Feature","properties":{"n":"Vavuniya"},"geometry":{"type":"Polygon","coordinates":[[[80.2354,8.6804],[80.2356,8.6681],[80.238,8.6634],[80.2334,8.6521],[80.239,8.6373],[80.2372,8.629],[80.2407,8.6289],[80.2499,8.6162],[80.2533,8.615],[80.2597,8.618],[80.2745,8.611],[80.2739,8.6006],[80.2783,8.5903],[80.2818,8.5903],[80.2797,8.5846],[80.2847,8.5812],[80.2871,8.5717],[80.2855,8.5685],[80.2885,8.5606],[80.3135,8.5507],[80.3376,8.546],[80.3402,8.5477],[80.3404,8.5558],[80.3518,8.5728],[80.3596,8.576],[80.3696,8.575],[80.38,8.5838],[80.3815,8.5914],[80.3786,8.5976],[80.3827,8.6021],[80.3789,8.6113],[80.381,8.6218],[80.3994,8.6341],[80.4105,8.6595],[80.4219,8.662],[80.4242,8.674],[80.4277,8.6731],[80.4444,8.6891],[80.4513,8.6925],[80.469,8.6849],[80.487,8.6699],[80.4972,8.6663],[80.5067,8.6584],[80.5197,8.6588],[80.5302,8.6728],[80.5454,8.6797],[80.5507,8.6881],[80.57,8.7004],[80.5698,8.7087],[80.5736,8.7167],[80.5893,8.7221],[80.6012,8.7444],[80.6185,8.7526],[80.6237,8.7668],[80.6339,8.7799],[80.6476,8.7871],[80.6531,8.7948],[80.6513,8.8034],[80.6372,8.8154],[80.6271,8.8371],[80.5996,8.843],[80.5923,8.8479],[80.5954,8.8697],[80.646,8.868],[80.6675,8.8714],[80.677,8.8761],[80.6921,8.8893],[80.7119,8.8985],[80.726,8.898],[80.753,8.9051],[80.7621,8.9361],[80.7658,8.937],[80.787,9.0102],[80.7176,9.0515],[80.7018,9.0392],[80.6852,9.0308],[80.6772,9.0317],[80.6768,9.0414],[80.6863,9.0507],[80.6912,9.0632],[80.6916,9.0745],[80.6823,9.0831],[80.6723,9.0796],[80.6681,9.0747],[80.6521,9.0782],[80.6516,9.0957],[80.6465,9.117],[80.6371,9.1204],[80.6342,9.1159],[80.6224,9.1239],[80.5817,9.126],[80.5855,9.1172],[80.5849,9.1108],[80.5599,9.1074],[80.53,9.0761],[80.5129,9.0766],[80.5102,9.0936],[80.5044,9.0983],[80.5027,9.1044],[80.4912,9.1176],[80.404,9.1152],[80.4043,9.0908],[80.4262,9.0909],[80.4288,9.0541],[80.4338,9.03],[80.3909,8.9911],[80.3401,8.959],[80.3497,8.9567],[80.3531,8.9522],[80.3622,8.948],[80.3677,8.948],[80.3754,8.9427],[80.3759,8.9384],[80.3802,8.9364],[80.3861,8.9071],[80.4005,8.8758],[80.4025,8.8569],[80.3939,8.8491],[80.3713,8.84],[80.3572,8.8392],[80.3359,8.8317],[80.3175,8.8306],[80.2974,8.8203],[80.2297,8.8279],[80.2073,8.7891],[80.198,8.7647],[80.1778,8.7746],[80.176,8.7634],[80.17,8.7522],[80.1709,8.7488],[80.1854,8.7415],[80.1875,8.7365],[80.1942,8.7335],[80.203,8.717],[80.2131,8.7091],[80.2158,8.7022],[80.2212,8.7007],[80.2255,8.6903],[80.2329,8.6851],[80.2354,8.6804]]]}},{"type":"Feature","properties":{"n":"Galle"},"geometry":{"type":"Polygon","coordinates":[[[79.9876,6.4404],[79.9938,6.4296],[79.9958,6.4199],[79.9941,6.4168],[80.0042,6.3995],[80.0037,6.395],[80.009,6.3801],[80.008,6.3767],[80.0113,6.3703],[80.0102,6.3677],[80.0284,6.331],[80.0305,6.3215],[80.0284,6.3139],[80.0336,6.3064],[80.0378,6.2928],[80.0335,6.2843],[80.0354,6.276],[80.033,6.2694],[80.0413,6.2501],[80.0516,6.2361],[80.0531,6.2268],[80.0635,6.2028],[80.0616,6.195],[80.063,6.1907],[80.0886,6.1661],[80.0913,6.156],[80.0987,6.1484],[80.0989,6.141],[80.0964,6.1429],[80.0994,6.1401],[80.1,6.131],[80.1231,6.1112],[80.1242,6.1018],[80.1524,6.0774],[80.174,6.0626],[80.18,6.0521],[80.1914,6.0427],[80.2092,6.0359],[80.2174,6.0236],[80.2199,6.0263],[80.2175,6.0312],[80.2224,6.0361],[80.2271,6.0365],[80.228,6.0338],[80.2275,6.036],[80.2313,6.0349],[80.2324,6.0322],[80.2268,6.032],[80.2293,6.0304],[80.2386,6.0324],[80.2425,6.0282],[80.2396,6.0188],[80.2348,6.0174],[80.2431,6.0053],[80.2454,6.0092],[80.2495,6.0095],[80.2646,5.9986],[80.3149,5.9914],[80.3706,5.9672],[80.3793,5.9649],[80.3848,5.9673],[80.3853,5.9764],[80.3822,5.9783],[80.3819,5.9837],[80.3867,5.9922],[80.3912,6.0087],[80.3987,6.0131],[80.4111,6.0116],[80.4123,6.0155],[80.4233,6.0187],[80.4121,6.0323],[80.3963,6.0309],[80.3916,6.0339],[80.3893,6.0546],[80.3942,6.0576],[80.3991,6.0516],[80.4047,6.0529],[80.4108,6.0691],[80.4275,6.083],[80.4367,6.0864],[80.4389,6.0937],[80.4229,6.1044],[80.4238,6.1083],[80.4206,6.1106],[80.4129,6.1097],[80.4061,6.114],[80.4004,6.1284],[80.3894,6.1327],[80.3862,6.1379],[80.3825,6.1534],[80.3847,6.1652],[80.3856,6.1669],[80.3913,6.1661],[80.3961,6.1716],[80.3909,6.1776],[80.3879,6.1862],[80.4031,6.1904],[80.3979,6.2051],[80.3834,6.221],[80.3845,6.2226],[80.3869,6.2197],[80.3927,6.2216],[80.4078,6.2166],[80.4158,6.2172],[80.4208,6.2141],[80.4267,6.2142],[80.44,6.226],[80.4355,6.2366],[80.4413,6.2405],[80.4352,6.2483],[80.4392,6.2546],[80.4219,6.2727],[80.4226,6.2761],[80.4149,6.2853],[80.4132,6.2929],[80.3935,6.3034],[80.3864,6.3101],[80.3775,6.3251],[80.3855,6.3313],[80.3928,6.3291],[80.399,6.3336],[80.4046,6.3337],[80.4144,6.3233],[80.4291,6.3155],[80.4326,6.3076],[80.4461,6.3013],[80.4539,6.2888],[80.4613,6.2895],[80.4674,6.2819],[80.4751,6.2804],[80.4801,6.2862],[80.4857,6.2845],[80.4869,6.2919],[80.4957,6.2996],[80.4855,6.3213],[80.4784,6.3234],[80.4752,6.3302],[80.4644,6.3387],[80.4605,6.3515],[80.4648,6.3518],[80.4781,6.3652],[80.4824,6.3667],[80.4883,6.3639],[80.4953,6.3676],[80.4939,6.3777],[80.491,6.3801],[80.4813,6.381],[80.4721,6.3782],[80.4652,6.386],[80.4513,6.3877],[80.4405,6.3947],[80.4315,6.3893],[80.4191,6.3924],[80.3813,6.4256],[80.376,6.4277],[80.3689,6.4268],[80.3567,6.4173],[80.3521,6.4192],[80.3346,6.411],[80.3133,6.3969],[80.3046,6.3955],[80.299,6.3977],[80.2902,6.3918],[80.2903,6.3704],[80.3009,6.3354],[80.299,6.3258],[80.2968,6.3249],[80.2856,6.3348],[80.2759,6.3491],[80.2693,6.3499],[80.2531,6.3656],[80.2473,6.3675],[80.2411,6.3766],[80.2175,6.3801],[80.212,6.3715],[80.2067,6.372],[80.2074,6.3596],[80.1894,6.3545],[80.1868,6.3581],[80.1693,6.3601],[80.1546,6.3672],[80.136,6.3662],[80.1323,6.3679],[80.1307,6.3657],[80.1285,6.369],[80.1222,6.3712],[80.1138,6.386],[80.0875,6.4018],[80.0822,6.4023],[80.0769,6.3983],[80.0697,6.398],[80.0614,6.4085],[80.044,6.4152],[80.0388,6.4198],[80.0302,6.4197],[80.0233,6.4316],[80.0191,6.4341],[80.0078,6.437],[80.004,6.4293],[79.999,6.427],[79.992,6.4398],[79.9876,6.4404]]]}},{"type":"Feature","properties":{"n":"Hambantota"},"geometry":{"type":"Polygon","coordinates":[[[80.6701,6.306],[80.6567,6.3026],[80.6634,6.2931],[80.6636,6.2873],[80.6543,6.2765],[80.6527,6.271],[80.6609,6.26],[80.645,6.2569],[80.6385,6.2526],[80.6285,6.24],[80.6252,6.2245],[80.611,6.2072],[80.6083,6.1996],[80.6115,6.1885],[80.6193,6.1826],[80.6288,6.1813],[80.6348,6.1768],[80.6371,6.17],[80.6518,6.1693],[80.6602,6.1736],[80.6623,6.1664],[80.656,6.1562],[80.6551,6.1487],[80.6466,6.1408],[80.6481,6.1334],[80.6541,6.1329],[80.6605,6.1285],[80.6638,6.1192],[80.6871,6.1238],[80.6941,6.1207],[80.696,6.1155],[80.6842,6.1088],[80.6802,6.1021],[80.6834,6.0955],[80.682,6.0895],[80.6937,6.0758],[80.6904,6.0717],[80.6933,6.0689],[80.6921,6.0632],[80.6879,6.0596],[80.683,6.0629],[80.6724,6.0545],[80.6615,6.0524],[80.655,6.0431],[80.6638,6.0389],[80.6666,6.0253],[80.6917,6.0265],[80.6948,6.0205],[80.6986,6.0185],[80.697,6.0126],[80.6869,6.0086],[80.6896,5.9947],[80.6883,5.9907],[80.7029,5.9932],[80.7241,5.9787],[80.7306,5.979],[80.7343,5.9742],[80.7321,5.9781],[80.7359,5.9761],[80.7344,5.972],[80.7378,5.972],[80.7392,5.9782],[80.7364,5.9787],[80.7362,5.9817],[80.7412,5.9873],[80.7501,5.9889],[80.7451,5.9906],[80.7486,5.9983],[80.7548,6.0014],[80.7645,6.0005],[80.767,6.0049],[80.7706,6.0028],[80.7739,6.0061],[80.7812,6.0062],[80.7807,6.0093],[80.7872,6.0125],[80.7865,6.0151],[80.79,6.016],[80.79,6.0184],[80.7924,6.0175],[80.8014,6.0227],[80.7984,6.0246],[80.799,6.0303],[80.8071,6.0372],[80.819,6.0415],[80.8471,6.0454],[80.8567,6.0449],[80.8607,6.0421],[80.8667,6.0469],[80.8656,6.0504],[80.8713,6.0582],[80.8859,6.0625],[80.9041,6.0639],[80.9288,6.0748],[80.9365,6.0749],[80.9365,6.0804],[80.9433,6.0838],[80.977,6.0871],[81.0009,6.1012],[81.0505,6.1068],[81.0569,6.1106],[81.0701,6.1092],[81.0878,6.113],[81.0893,6.1102],[81.0941,6.1089],[81.0967,6.1144],[81.1043,6.1129],[81.0975,6.1144],[81.0999,6.1187],[81.1016,6.1183],[81.0972,6.1216],[81.0972,6.1278],[81.106,6.1274],[81.1044,6.1233],[81.1062,6.1167],[81.1068,6.1193],[81.1276,6.1199],[81.1311,6.1212],[81.1266,6.126],[81.1304,6.1321],[81.1445,6.1358],[81.1507,6.1422],[81.1686,6.1455],[81.1785,6.1555],[81.1876,6.1586],[81.2108,6.1641],[81.2261,6.1651],[81.227,6.1707],[81.2328,6.173],[81.2327,6.1773],[81.2358,6.1795],[81.2707,6.1848],[81.2801,6.1909],[81.2915,6.1931],[81.2946,6.1957],[81.3241,6.1988],[81.3255,6.2048],[81.3398,6.2142],[81.3374,6.2166],[81.3404,6.2195],[81.3365,6.2176],[81.3415,6.2235],[81.3732,6.2351],[81.3742,6.2409],[81.3797,6.2442],[81.3949,6.2468],[81.3958,6.2493],[81.4015,6.2507],[81.4043,6.2563],[81.4164,6.2647],[81.4208,6.2748],[81.4268,6.2777],[81.4275,6.2841],[81.4353,6.2891],[81.4383,6.2941],[81.4539,6.3021],[81.4813,6.3107],[81.4841,6.3142],[81.4833,6.322],[81.4947,6.3289],[81.4949,6.3319],[81.501,6.3378],[81.498,6.3397],[81.4977,6.3431],[81.5035,6.3499],[81.5297,6.3625],[81.5569,6.3672],[81.567,6.3732],[81.5636,6.3757],[81.5675,6.3819],[81.5997,6.3995],[81.6073,6.4088],[81.6191,6.4166],[81.6199,6.4186],[81.6145,6.4224],[81.616,6.4281],[81.6241,6.4348],[81.6495,6.4457],[81.6585,6.4546],[81.6614,6.4643],[81.6931,6.4865],[81.7046,6.5012],[81.7079,6.5107],[81.6993,6.5146],[81.6884,6.5136],[81.6772,6.5197],[81.671,6.5256],[81.6684,6.5335],[81.6623,6.5404],[81.656,6.5405],[81.6502,6.545],[81.6425,6.5413],[81.638,6.5422],[81.633,6.5525],[81.6217,6.5644],[81.6209,6.5711],[81.6154,6.5723],[81.6083,6.58],[81.6049,6.5688],[81.5997,6.5613],[81.5936,6.5626],[81.5887,6.5608],[81.5867,6.5555],[81.5811,6.5508],[81.5652,6.5545],[81.5469,6.5365],[81.539,6.5382],[81.5329,6.5359],[81.524,6.5197],[81.5021,6.5107],[81.4821,6.4958],[81.4784,6.4868],[81.4805,6.4772],[81.4793,6.4731],[81.4862,6.4643],[81.4842,6.4579],[81.4762,6.4488],[81.4791,6.4395],[81.4779,6.4288],[81.4798,6.4193],[81.4721,6.4081],[81.4667,6.4071],[81.461,6.4133],[81.4481,6.4137],[81.4449,6.4182],[81.4397,6.4199],[81.4364,6.4168],[81.4276,6.4181],[81.4199,6.4092],[81.4008,6.4064],[81.3988,6.4139],[81.3933,6.4147],[81.384,6.3985],[81.3733,6.3981],[81.3673,6.3906],[81.352,6.3898],[81.3406,6.3822],[81.3321,6.3798],[81.3274,6.3823],[81.317,6.3753],[81.3125,6.38],[81.298,6.3735],[81.2891,6.373],[81.2784,6.3691],[81.2755,6.3663],[81.2735,6.3551],[81.2535,6.3408],[81.2457,6.3434],[81.2353,6.3414],[81.2256,6.3447],[81.2211,6.3495],[81.2244,6.3578],[81.211,6.3672],[81.2035,6.3784],[81.2034,6.3833],[81.1975,6.3868],[81.1916,6.395],[81.1902,6.4017],[81.1843,6.4055],[81.1701,6.4028],[81.1661,6.3929],[81.1569,6.3926],[81.1506,6.3997],[81.1468,6.3965],[81.1446,6.3975],[81.1423,6.4095],[81.1378,6.4144],[81.1369,6.4211],[81.1105,6.4209],[81.1012,6.4183],[81.0891,6.4241],[81.0709,6.4238],[81.0673,6.4139],[81.0616,6.4113],[81.0491,6.4218],[81.0512,6.4174],[81.0487,6.4134],[81.0494,6.4068],[81.037,6.3913],[81.0132,6.396],[81.0083,6.3878],[81.0075,6.3692],[81.015,6.3687],[81.0225,6.3589],[81.0182,6.3447],[80.9825,6.3283],[80.968,6.3254],[80.9653,6.3197],[80.9561,6.3137],[80.9292,6.3033],[80.9214,6.2965],[80.9311,6.2883],[80.9344,6.2805],[80.9342,6.2729],[80.9413,6.2706],[80.9417,6.2593],[80.9469,6.253],[80.9477,6.2451],[80.9531,6.2388],[80.9505,6.2348],[80.9459,6.2362],[80.9397,6.2279],[80.9348,6.2317],[80.9311,6.2401],[80.9104,6.2381],[80.8926,6.2491],[80.882,6.2463],[80.8692,6.2667],[80.8579,6.272],[80.8316,6.2691],[80.8246,6.2654],[80.798,6.2671],[80.7871,6.27],[80.7831,6.2748],[80.771,6.2796],[80.7598,6.2811],[80.7411,6.2896],[80.7324,6.2966],[80.7118,6.3008],[80.704,6.3065],[80.6953,6.3083],[80.6701,6.306]]]}},{"type":"Feature","properties":{"n":"Matara"},"geometry":{"type":"Polygon","coordinates":[[[80.3818,5.9653],[80.3903,5.965],[80.4098,5.9571],[80.4127,5.9588],[80.4186,5.9547],[80.4262,5.9703],[80.438,5.9725],[80.449,5.9678],[80.4539,5.9633],[80.4518,5.9479],[80.4483,5.9477],[80.4506,5.9503],[80.4437,5.9465],[80.4538,5.9412],[80.4575,5.9447],[80.4743,5.9374],[80.4856,5.9368],[80.4938,5.9402],[80.5197,5.9354],[80.5265,5.9359],[80.5294,5.9386],[80.5331,5.9375],[80.5435,5.9431],[80.5573,5.9415],[80.5777,5.9346],[80.5844,5.9276],[80.5825,5.9243],[80.5852,5.925],[80.5854,5.9211],[80.5819,5.9232],[80.584,5.9198],[80.5915,5.919],[80.5944,5.9195],[80.5929,5.9222],[80.595,5.9261],[80.6036,5.9263],[80.6133,5.9303],[80.6136,5.9329],[80.616,5.9302],[80.62,5.9325],[80.6173,5.9369],[80.6213,5.9389],[80.6226,5.9453],[80.6291,5.9469],[80.6338,5.9454],[80.6361,5.948],[80.6402,5.9442],[80.6436,5.9525],[80.6495,5.9548],[80.6731,5.9595],[80.6845,5.9599],[80.6862,5.9581],[80.6883,5.9624],[80.6974,5.9634],[80.6995,5.9592],[80.7067,5.9592],[80.7081,5.9628],[80.7098,5.9597],[80.7187,5.9614],[80.722,5.9598],[80.7173,5.9645],[80.7193,5.9663],[80.7199,5.9636],[80.7185,5.9685],[80.7231,5.9734],[80.7221,5.977],[80.7241,5.9787],[80.722,5.9816],[80.7029,5.9932],[80.6883,5.9907],[80.6896,5.9947],[80.6869,6.0086],[80.697,6.0126],[80.6986,6.0185],[80.6948,6.0205],[80.6936,6.0252],[80.6857,6.0274],[80.6666,6.0253],[80.6638,6.0389],[80.655,6.0431],[80.6615,6.0524],[80.6724,6.0545],[80.683,6.0629],[80.6879,6.0596],[80.6921,6.0632],[80.6933,6.0689],[80.6904,6.0717],[80.6937,6.0758],[80.682,6.0895],[80.6834,6.0955],[80.6802,6.1021],[80.6842,6.1088],[80.696,6.1155],[80.6941,6.1207],[80.6871,6.1238],[80.6638,6.1192],[80.6605,6.1285],[80.6541,6.1329],[80.6481,6.1334],[80.6466,6.1408],[80.6551,6.1487],[80.656,6.1562],[80.6623,6.1664],[80.6602,6.1736],[80.6518,6.1693],[80.6371,6.17],[80.6348,6.1768],[80.6288,6.1813],[80.6193,6.1826],[80.6115,6.1885],[80.6083,6.1996],[80.611,6.2072],[80.6252,6.2245],[80.6285,6.24],[80.6385,6.2526],[80.645,6.2569],[80.6609,6.26],[80.6527,6.271],[80.6543,6.2765],[80.6636,6.2873],[80.6634,6.2931],[80.6567,6.3026],[80.6701,6.306],[80.6697,6.3187],[80.6752,6.3218],[80.6708,6.327],[80.6645,6.3273],[80.6572,6.3372],[80.6634,6.3398],[80.6613,6.3538],[80.6314,6.3515],[80.6112,6.3459],[80.6065,6.3597],[80.6096,6.3658],[80.6175,6.3711],[80.6156,6.3811],[80.6201,6.3867],[80.6188,6.3963],[80.6143,6.395],[80.597,6.3975],[80.5788,6.3906],[80.5653,6.3943],[80.5549,6.3895],[80.5496,6.3961],[80.5452,6.3946],[80.5447,6.3891],[80.5338,6.3882],[80.5337,6.3743],[80.5133,6.3697],[80.5088,6.3708],[80.4883,6.3639],[80.4824,6.3667],[80.4781,6.3652],[80.4648,6.3518],[80.4605,6.3515],[80.4644,6.3387],[80.4752,6.3302],[80.4784,6.3234],[80.4855,6.3213],[80.4957,6.2996],[80.4869,6.2919],[80.4857,6.2845],[80.4801,6.2862],[80.4751,6.2804],[80.4674,6.2819],[80.4613,6.2895],[80.4539,6.2888],[80.4461,6.3013],[80.4326,6.3076],[80.4291,6.3155],[80.4144,6.3233],[80.4046,6.3337],[80.399,6.3336],[80.3928,6.3291],[80.3855,6.3313],[80.3789,6.3276],[80.3775,6.3251],[80.3864,6.3101],[80.3935,6.3034],[80.4132,6.2929],[80.4149,6.2853],[80.4226,6.2761],[80.4219,6.2727],[80.4392,6.2546],[80.4352,6.2483],[80.4413,6.2405],[80.4355,6.2366],[80.44,6.226],[80.4267,6.2142],[80.4208,6.2141],[80.4158,6.2172],[80.4078,6.2166],[80.3927,6.2216],[80.3869,6.2197],[80.3845,6.2226],[80.3834,6.221],[80.3979,6.2051],[80.4031,6.1904],[80.3879,6.1862],[80.3909,6.1776],[80.3961,6.1716],[80.3913,6.1661],[80.3856,6.1669],[80.3847,6.1652],[80.3825,6.1534],[80.3862,6.1379],[80.3894,6.1327],[80.4004,6.1284],[80.4061,6.114],[80.4129,6.1097],[80.4206,6.1106],[80.4238,6.1083],[80.4229,6.1044],[80.4389,6.0937],[80.4367,6.0864],[80.4275,6.083],[80.4108,6.0691],[80.4047,6.0529],[80.3991,6.0516],[80.3942,6.0576],[80.3893,6.0546],[80.3916,6.0339],[80.3963,6.0309],[80.4121,6.0323],[80.4233,6.0187],[80.4123,6.0155],[80.4111,6.0116],[80.3987,6.0131],[80.3912,6.0087],[80.3867,5.9922],[80.3819,5.9837],[80.3822,5.9783],[80.3858,5.9733],[80.3848,5.9673],[80.3818,5.9653]]]}},{"type":"Feature","properties":{"n":"Ampara"},"geometry":{"type":"Polygon","coordinates":[[[81.7079,6.5107],[81.7168,6.5279],[81.725,6.5369],[81.7239,6.5388],[81.7291,6.5481],[81.7284,6.5525],[81.7403,6.5699],[81.7387,6.5706],[81.7401,6.5742],[81.7629,6.5965],[81.7607,6.6086],[81.7716,6.6266],[81.7777,6.6469],[81.771,6.6595],[81.773,6.6717],[81.7866,6.6934],[81.8002,6.7082],[81.8027,6.7336],[81.8122,6.7491],[81.826,6.7642],[81.8234,6.7751],[81.8246,6.7809],[81.8191,6.7884],[81.8241,6.8033],[81.8229,6.8137],[81.8268,6.8231],[81.8402,6.837],[81.8394,6.8398],[81.8338,6.8413],[81.8322,6.852],[81.835,6.8588],[81.8463,6.872],[81.8442,6.8871],[81.8483,6.8978],[81.8451,6.8992],[81.8454,6.9106],[81.8679,6.9724],[81.8658,6.9853],[81.879,7.0223],[81.8689,7.0489],[81.8668,7.0662],[81.8581,7.1005],[81.8571,7.1215],[81.8609,7.1544],[81.8648,7.2577],[81.8698,7.2751],[81.8667,7.2803],[81.8683,7.2923],[81.8658,7.3244],[81.8387,7.415],[81.8234,7.4369],[81.8144,7.4804],[81.7935,7.4705],[81.7764,7.4819],[81.7607,7.4598],[81.749,7.4552],[81.725,7.4553],[81.709,7.4371],[81.6905,7.4209],[81.6741,7.4139],[81.6703,7.4012],[81.6636,7.3987],[81.6611,7.4037],[81.6628,7.4141],[81.6596,7.4213],[81.6606,7.4473],[81.6573,7.4613],[81.6606,7.4725],[81.6541,7.48],[81.6545,7.4915],[81.648,7.5025],[81.6484,7.5105],[81.6459,7.5163],[81.6496,7.5251],[81.6192,7.5081],[81.5182,7.5087],[81.4943,7.5152],[81.4992,7.5216],[81.452,7.5428],[81.4335,7.57],[81.4336,7.5809],[81.4427,7.5988],[81.4408,7.6064],[81.4475,7.6197],[81.4429,7.6338],[81.4456,7.642],[81.3834,7.6567],[81.3678,7.6673],[81.3637,7.6767],[81.3457,7.7024],[81.3387,7.7065],[81.3287,7.7195],[81.3285,7.7299],[81.3261,7.7334],[81.2632,7.7358],[81.2544,7.7308],[81.2514,7.736],[81.2413,7.7391],[81.2337,7.722],[81.2347,7.7178],[81.2394,7.7134],[81.2379,7.7053],[81.2404,7.6951],[81.2365,7.6879],[81.2394,7.6798],[81.2226,7.6721],[81.2196,7.6598],[81.2208,7.6537],[81.2179,7.6481],[81.214,7.647],[81.1979,7.6611],[81.1519,7.6796],[81.1451,7.6763],[81.1176,7.6899],[81.1106,7.6977],[81.0944,7.7252],[81.0687,7.7308],[81.0493,7.7188],[81.024,7.7231],[81.0108,7.7183],[80.9891,7.7217],[80.9926,7.6987],[80.9875,7.6888],[80.9928,7.6777],[80.9947,7.6615],[80.9817,7.6432],[80.9779,7.625],[80.9847,7.6173],[80.9856,7.6112],[81.0074,7.6024],[81.0133,7.5959],[81.0147,7.5791],[81.0127,7.5686],[81.0155,7.5529],[81.0219,7.5419],[81.0295,7.5379],[81.0303,7.5313],[81.036,7.5258],[81.0418,7.5053],[81.0556,7.5061],[81.0584,7.5077],[81.0567,7.5104],[81.0631,7.5124],[81.0648,7.5152],[81.0763,7.5121],[81.1132,7.5449],[81.1316,7.5562],[81.1636,7.5699],[81.171,7.5692],[81.1879,7.5741],[81.2054,7.5554],[81.2039,7.5514],[81.2072,7.5365],[81.2068,7.5163],[81.1989,7.5009],[81.1992,7.4715],[81.1925,7.4661],[81.1948,7.4598],[81.1826,7.4442],[81.1887,7.4383],[81.192,7.4233],[81.1943,7.4213],[81.1943,7.4124],[81.201,7.3963],[81.2013,7.3877],[81.1944,7.3853],[81.1937,7.3776],[81.2037,7.368],[81.2097,7.3493],[81.2146,7.3478],[81.2201,7.3329],[81.2304,7.3346],[81.2372,7.3418],[81.2461,7.3353],[81.2455,7.326],[81.2639,7.3077],[81.2716,7.2913],[81.2672,7.2823],[81.2792,7.2615],[81.2774,7.2554],[81.2866,7.2486],[81.2843,7.2435],[81.2855,7.2406],[81.3051,7.2574],[81.323,7.2631],[81.319,7.2779],[81.325,7.2991],[81.3181,7.3129],[81.3216,7.3275],[81.3192,7.333],[81.3213,7.3334],[81.3207,7.3375],[81.3242,7.3341],[81.3445,7.3356],[81.3545,7.3375],[81.367,7.3435],[81.3631,7.3523],[81.3651,7.3575],[81.3745,7.3585],[81.3864,7.3709],[81.3814,7.3775],[81.3803,7.3878],[81.3737,7.3976],[81.375,7.4104],[81.3888,7.4079],[81.4003,7.4156],[81.4057,7.4167],[81.4089,7.4224],[81.4075,7.4331],[81.4219,7.4358],[81.4248,7.4415],[81.4363,7.4436],[81.4564,7.4584],[81.4788,7.4547],[81.462,7.4304],[81.465,7.4255],[81.4771,7.4217],[81.4726,7.4054],[81.4724,7.393],[81.4798,7.379],[81.4908,7.3378],[81.4798,7.328],[81.479,7.3247],[81.4977,7.3044],[81.5125,7.2983],[81.5188,7.2903],[81.5207,7.2847],[81.5176,7.2805],[81.5242,7.2705],[81.524,7.2628],[81.5276,7.2536],[81.5231,7.2429],[81.534,7.24],[81.5381,7.2332],[81.545,7.2305],[81.5531,7.2176],[81.542,7.2136],[81.5224,7.1976],[81.5148,7.1842],[81.5114,7.1821],[81.5001,7.1548],[81.5003,7.1489],[81.5134,7.1363],[81.5111,7.131],[81.5131,7.1256],[81.5113,7.1179],[81.5157,7.109],[81.5154,7.103],[81.5211,7.0975],[81.5332,7.0904],[81.5365,7.0948],[81.5394,7.0901],[81.5598,7.082],[81.5733,7.0813],[81.5797,7.0763],[81.5893,7.0746],[81.5961,7.0696],[81.6142,7.0685],[81.6192,7.0492],[81.6115,7.0417],[81.6072,7.0259],[81.6126,7.0164],[81.6139,7.0037],[81.6209,6.9984],[81.6178,6.9791],[81.6372,6.96],[81.6287,6.913],[81.6281,6.8707],[81.6191,6.7561],[81.6175,6.6966],[81.6083,6.58],[81.6154,6.5723],[81.6209,6.5711],[81.6217,6.5644],[81.633,6.5525],[81.638,6.5422],[81.6425,6.5413],[81.6502,6.545],[81.656,6.5405],[81.6623,6.5404],[81.6684,6.5335],[81.671,6.5256],[81.6772,6.5197],[81.6884,6.5136],[81.6993,6.5146],[81.7079,6.5107]]]}},{"type":"Feature","properties":{"n":"Anuradhapura"},"geometry":{"type":"Polygon","coordinates":[[[80.0324,8.5272],[80.0428,8.5],[80.0428,8.4934],[80.0319,8.4654],[80.0205,8.4505],[80.0197,8.445],[80.0152,8.4407],[80.0075,8.439],[80.006,8.4342],[80.0006,8.4339],[79.9963,8.4266],[79.9901,8.4232],[79.9887,8.421],[79.992,8.4175],[79.9905,8.4139],[79.9853,8.4121],[79.9771,8.3975],[79.9618,8.398],[79.9562,8.3943],[79.9523,8.3751],[79.9528,8.3694],[79.9748,8.3371],[79.9757,8.3265],[79.9817,8.3076],[79.9781,8.3029],[79.9804,8.3008],[79.9841,8.2843],[79.9819,8.2773],[79.9958,8.2542],[80.0001,8.2285],[80.0083,8.2297],[80.0178,8.2248],[80.0276,8.227],[80.0378,8.2379],[80.0619,8.2198],[80.0795,8.2236],[80.0865,8.2107],[80.0967,8.2095],[80.1019,8.1973],[80.1077,8.1959],[80.1101,8.1888],[80.1169,8.1866],[80.123,8.1813],[80.1343,8.1793],[80.1377,8.1766],[80.1509,8.1756],[80.1655,8.1641],[80.1839,8.1621],[80.1859,8.1599],[80.1851,8.1541],[80.1882,8.1515],[80.2071,8.1535],[80.2151,8.1436],[80.2326,8.1401],[80.2512,8.1332],[80.2664,8.1154],[80.2806,8.1159],[80.286,8.1188],[80.294,8.1186],[80.3012,8.1155],[80.3081,8.1171],[80.3172,8.1122],[80.3241,8.0971],[80.3325,8.0895],[80.337,8.0888],[80.344,8.081],[80.349,8.081],[80.3583,8.069],[80.3636,8.0671],[80.37,8.0578],[80.3804,8.0565],[80.3924,8.048],[80.3962,8.0532],[80.4047,8.0549],[80.4135,8.0485],[80.4194,8.0436],[80.4181,8.0125],[80.4154,8.0072],[80.4222,7.9921],[80.426,7.9629],[80.4187,7.9533],[80.4336,7.9479],[80.4418,7.9541],[80.4475,7.9551],[80.4611,7.9453],[80.4627,7.9178],[80.4659,7.9047],[80.4686,7.8996],[80.4744,7.8958],[80.4798,7.8773],[80.4753,7.8564],[80.4691,7.85],[80.479,7.841],[80.4798,7.8312],[80.4833,7.8293],[80.4839,7.8231],[80.4998,7.8164],[80.4999,7.8261],[80.5078,7.8282],[80.5244,7.8273],[80.5652,7.8489],[80.5704,7.8624],[80.576,7.8684],[80.5902,7.8672],[80.5931,7.8581],[80.5998,7.8558],[80.6159,7.8686],[80.6228,7.8686],[80.6229,7.8826],[80.639,7.8885],[80.6379,7.8939],[80.6346,7.8946],[80.6324,7.9002],[80.6426,7.9096],[80.6541,7.9152],[80.6529,7.9466],[80.6565,7.9483],[80.6587,7.9601],[80.6685,7.9634],[80.6823,7.9567],[80.7059,7.9918],[80.713,7.9915],[80.719,7.999],[80.7439,8.006],[80.7504,8.0113],[80.7561,8.0123],[80.7556,8.0172],[80.7497,8.0221],[80.7604,8.0383],[80.7595,8.0446],[80.777,8.0659],[80.774,8.0673],[80.7622,8.0652],[80.7587,8.0686],[80.7566,8.1032],[80.7586,8.1114],[80.7583,8.137],[80.7611,8.141],[80.7594,8.1505],[80.7854,8.2041],[80.7878,8.2312],[80.7944,8.2488],[80.794,8.2538],[80.8044,8.2785],[80.8127,8.2804],[80.8991,8.2809],[80.9042,8.3076],[80.9114,8.3264],[80.9242,8.3369],[80.9292,8.358],[80.9265,8.3659],[80.9273,8.3735],[80.9332,8.3896],[80.9414,8.3978],[80.9538,8.4392],[80.9629,8.4538],[80.9726,8.4601],[80.9717,8.4686],[80.9829,8.4681],[80.989,8.471],[80.9909,8.4748],[80.9863,8.4847],[80.9633,8.4857],[80.9651,8.4925],[80.9633,8.4986],[80.9514,8.5033],[80.9472,8.5075],[80.9448,8.5243],[80.9468,8.5357],[80.944,8.5518],[80.9171,8.5848],[80.9147,8.5984],[80.9159,8.6051],[80.896,8.6181],[80.8939,8.6219],[80.8971,8.6315],[80.8917,8.6367],[80.8934,8.6461],[80.9006,8.6589],[80.9,8.6625],[80.9088,8.667],[80.9137,8.6734],[80.9134,8.681],[80.9116,8.6892],[80.8914,8.7225],[80.8933,8.7322],[80.8906,8.7434],[80.8822,8.7469],[80.8788,8.7527],[80.8796,8.7685],[80.8821,8.7739],[80.8831,8.7886],[80.8924,8.7994],[80.8929,8.8041],[80.901,8.8164],[80.9109,8.8236],[80.9126,8.8369],[80.9089,8.8365],[80.8966,8.8535],[80.8911,8.8575],[80.8873,8.8694],[80.8715,8.8821],[80.8535,8.887],[80.8407,8.8949],[80.8329,8.9031],[80.8123,8.9153],[80.783,8.9202],[80.781,8.9167],[80.753,8.9051],[80.726,8.898],[80.7119,8.8985],[80.6921,8.8893],[80.677,8.8761],[80.6675,8.8714],[80.646,8.868],[80.5954,8.8697],[80.5923,8.8479],[80.5996,8.843],[80.6271,8.8371],[80.6372,8.8154],[80.6513,8.8034],[80.6531,8.7948],[80.6514,8.7904],[80.6339,8.7799],[80.6237,8.7668],[80.6185,8.7526],[80.6012,8.7444],[80.5893,8.7221],[80.5736,8.7167],[80.5698,8.7087],[80.57,8.7004],[80.5507,8.6881],[80.5454,8.6797],[80.5302,8.6728],[80.5197,8.6588],[80.5067,8.6584],[80.4972,8.6663],[80.487,8.6699],[80.469,8.6849],[80.4513,8.6925],[80.4444,8.6891],[80.4277,8.6731],[80.4242,8.674],[80.4219,8.662],[80.4105,8.6595],[80.3994,8.6341],[80.381,8.6218],[80.3789,8.6113],[80.3827,8.6021],[80.3786,8.5976],[80.3815,8.5914],[80.38,8.5838],[80.3696,8.575],[80.3596,8.576],[80.3518,8.5728],[80.3404,8.5558],[80.3402,8.5477],[80.3376,8.546],[80.3135,8.5507],[80.2885,8.5606],[80.2855,8.5685],[80.2871,8.5717],[80.2847,8.5812],[80.2797,8.5846],[80.2818,8.5903],[80.2783,8.5903],[80.2739,8.6006],[80.2745,8.611],[80.2597,8.618],[80.2533,8.615],[80.2499,8.6162],[80.2407,8.6289],[80.2372,8.629],[80.239,8.6373],[80.2334,8.6521],[80.238,8.6634],[80.2356,8.6681],[80.2354,8.6804],[80.1138,8.6494],[80.1049,8.6506],[80.1005,8.6537],[80.0951,8.6524],[80.0866,8.6562],[80.0801,8.6536],[80.0725,8.659],[80.0636,8.6608],[80.062,8.664],[80.0444,8.6732],[80.0553,8.637],[80.0517,8.5939],[80.0504,8.5219],[80.0336,8.5244],[80.0324,8.5272]]]}},{"type":"Feature","properties":{"n":"Badulla"},"geometry":{"type":"Polygon","coordinates":[[[80.9779,7.625],[80.9793,7.6117],[80.9757,7.5978],[80.9775,7.5872],[80.9732,7.5777],[80.9717,7.5666],[80.9711,7.534],[80.9752,7.4835],[80.9727,7.4625],[80.9752,7.427],[80.9705,7.42],[80.9695,7.4133],[80.971,7.4091],[80.9786,7.4042],[80.9827,7.3937],[80.9797,7.3787],[80.9756,7.3708],[80.9763,7.3629],[80.986,7.3379],[80.9891,7.3182],[81.0002,7.2936],[81.0165,7.2334],[81.0082,7.2165],[81.0007,7.2134],[80.9833,7.2126],[80.9729,7.1963],[80.9623,7.1959],[80.955,7.1995],[80.9458,7.2004],[80.9425,7.1971],[80.9425,7.1935],[80.9487,7.1849],[80.9487,7.1784],[80.9529,7.1766],[80.9568,7.17],[80.9613,7.1571],[80.959,7.1464],[80.9607,7.1421],[80.9519,7.1451],[80.949,7.1386],[80.9499,7.1298],[80.959,7.1274],[80.9647,7.1209],[80.957,7.1147],[80.9552,7.1054],[80.9513,7.1014],[80.9548,7.0971],[80.9531,7.0902],[80.9651,7.0777],[80.9582,7.0742],[80.9556,7.0631],[80.9411,7.0543],[80.9383,7.0428],[80.9292,7.0382],[80.929,7.0201],[80.9195,6.9909],[80.8985,6.9773],[80.8917,6.9785],[80.8749,6.9737],[80.8622,6.9782],[80.8354,6.9558],[80.8321,6.9461],[80.8318,6.9341],[80.8268,6.9259],[80.8123,6.9175],[80.7818,6.9216],[80.7788,6.9204],[80.7759,6.913],[80.7779,6.9104],[80.7975,6.9068],[80.81,6.9017],[80.8084,6.8942],[80.8144,6.8915],[80.8118,6.8798],[80.8173,6.882],[80.824,6.8765],[80.8205,6.8621],[80.8234,6.8565],[80.8294,6.8555],[80.8314,6.8493],[80.8375,6.8451],[80.8316,6.8337],[80.8244,6.8302],[80.8168,6.8323],[80.8139,6.8285],[80.8175,6.8193],[80.8372,6.8119],[80.8338,6.8076],[80.8343,6.8027],[80.8252,6.7931],[80.8145,6.7957],[80.8084,6.7919],[80.8126,6.7854],[80.8087,6.7726],[80.8129,6.762],[80.8115,6.7557],[80.827,6.7617],[80.8347,6.7455],[80.8545,6.7464],[80.8579,6.7415],[80.8583,6.7364],[80.8503,6.7301],[80.8549,6.7194],[80.8425,6.7187],[80.8379,6.7143],[80.8336,6.7142],[80.8324,6.7119],[80.8118,6.7036],[80.8122,6.6978],[80.8255,6.6896],[80.8297,6.6696],[80.8363,6.6668],[80.8476,6.6666],[80.8506,6.6613],[80.8574,6.6575],[80.8636,6.6656],[80.8666,6.662],[80.8808,6.6638],[80.887,6.666],[80.8907,6.6756],[80.9079,6.6785],[80.9089,6.6835],[80.9129,6.6847],[80.9154,6.6887],[80.9134,6.6921],[80.915,6.6948],[80.928,6.6876],[80.9301,6.6913],[80.9401,6.6904],[80.9396,6.6787],[80.9519,6.6719],[80.9534,6.6552],[80.9587,6.6518],[80.9689,6.6545],[80.9702,6.6503],[80.9764,6.645],[80.9796,6.6353],[80.9767,6.6228],[80.979,6.6171],[80.9909,6.6206],[80.9993,6.615],[80.9997,6.6101],[80.9949,6.6003],[80.9989,6.5899],[80.9956,6.5751],[81.0227,6.5422],[81.0263,6.5673],[81.0251,6.5732],[81.0338,6.5835],[81.0408,6.5906],[81.0487,6.584],[81.0624,6.5785],[81.0606,6.5869],[81.0622,6.5992],[81.0764,6.6112],[81.0862,6.6096],[81.0842,6.6169],[81.0648,6.6332],[81.061,6.6515],[81.0647,6.6998],[81.078,6.7073],[81.0793,6.7188],[81.085,6.728],[81.0711,6.7375],[81.056,6.7345],[81.0515,6.739],[81.0546,6.7489],[81.0648,6.7618],[81.0611,6.7828],[81.0635,6.7883],[81.0658,6.8137],[81.08,6.8141],[81.0861,6.8071],[81.0936,6.8091],[81.0989,6.8125],[81.095,6.8174],[81.0941,6.8239],[81.0966,6.8279],[81.1055,6.8309],[81.1186,6.8293],[81.1316,6.8333],[81.1374,6.8387],[81.1329,6.8479],[81.1247,6.8535],[81.118,6.862],[81.11,6.8632],[81.1126,6.8726],[81.1202,6.8729],[81.1294,6.8799],[81.1592,6.8906],[81.1614,6.8966],[81.1659,6.8967],[81.1672,6.9002],[81.1728,6.9011],[81.1767,6.9045],[81.18,6.9252],[81.1828,6.9288],[81.187,6.9213],[81.2038,6.9214],[81.2078,6.9264],[81.2017,6.9323],[81.2067,6.9398],[81.2094,6.9423],[81.221,6.9426],[81.2264,6.9457],[81.2272,6.9489],[81.2212,6.9522],[81.2203,6.9602],[81.2226,6.9631],[81.2258,6.9621],[81.2343,6.9657],[81.2345,6.9781],[81.2318,6.9886],[81.2366,6.992],[81.2448,7.0089],[81.2462,7.0223],[81.2417,7.0532],[81.2293,7.0844],[81.2191,7.0806],[81.2128,7.0967],[81.2096,7.0935],[81.2066,7.0955],[81.1912,7.0946],[81.1889,7.0934],[81.1877,7.0859],[81.1815,7.0847],[81.1752,7.0867],[81.1687,7.0841],[81.159,7.1142],[81.148,7.1281],[81.1439,7.13],[81.1416,7.137],[81.1331,7.1385],[81.1271,7.1452],[81.1221,7.1544],[81.1239,7.1645],[81.1371,7.1775],[81.1404,7.1883],[81.1521,7.1948],[81.1644,7.1735],[81.1748,7.1693],[81.1853,7.1725],[81.1865,7.1819],[81.1906,7.1864],[81.1887,7.1911],[81.1998,7.1951],[81.2069,7.2015],[81.2247,7.2296],[81.2359,7.2395],[81.2308,7.2601],[81.2315,7.2676],[81.2446,7.2688],[81.2646,7.2787],[81.2705,7.2769],[81.2672,7.2823],[81.2716,7.2913],[81.2639,7.3077],[81.2455,7.326],[81.2461,7.3353],[81.2372,7.3418],[81.2304,7.3346],[81.2201,7.3329],[81.2146,7.3478],[81.2097,7.3493],[81.2037,7.368],[81.1937,7.3776],[81.1944,7.3853],[81.2013,7.3877],[81.201,7.3963],[81.1943,7.4124],[81.1943,7.4213],[81.192,7.4233],[81.1887,7.4383],[81.1826,7.4442],[81.1948,7.4598],[81.1925,7.4661],[81.1992,7.4715],[81.1989,7.5009],[81.2068,7.5163],[81.2072,7.5365],[81.2039,7.5514],[81.2054,7.5554],[81.1987,7.5644],[81.1879,7.5741],[81.171,7.5692],[81.1636,7.5699],[81.1316,7.5562],[81.1132,7.5449],[81.0763,7.5121],[81.0648,7.5152],[81.0631,7.5124],[81.0567,7.5104],[81.0584,7.5077],[81.0556,7.5061],[81.0418,7.5053],[81.036,7.5258],[81.0303,7.5313],[81.0295,7.5379],[81.0219,7.5419],[81.0155,7.5529],[81.0127,7.5686],[81.0147,7.5791],[81.0133,7.5959],[81.0074,7.6024],[80.9856,7.6112],[80.9847,7.6173],[80.9779,7.625]]]}},{"type":"Feature","properties":{"n":"Batticaloa"},"geometry":{"type":"Polygon","coordinates":[[[81.8144,7.4804],[81.7968,7.5691],[81.7849,7.6044],[81.7562,7.6617],[81.717,7.7222],[81.706,7.7441],[81.6879,7.763],[81.687,7.7603],[81.6691,7.7668],[81.6433,7.7874],[81.6268,7.8124],[81.6199,7.8288],[81.6128,7.823],[81.6053,7.824],[81.5934,7.8317],[81.5813,7.8451],[81.5685,7.8704],[81.5637,7.899],[81.5693,7.918],[81.5829,7.9198],[81.5754,7.9268],[81.5666,7.9253],[81.5635,7.9269],[81.5605,7.9324],[81.5617,7.9385],[81.5573,7.9432],[81.5539,7.9427],[81.5519,7.9334],[81.5415,7.9273],[81.5218,7.9266],[81.5157,7.9213],[81.5175,7.9147],[81.5128,7.9137],[81.5135,7.9218],[81.5216,7.9335],[81.5304,7.9311],[81.5369,7.9321],[81.5487,7.9408],[81.5431,7.9512],[81.5405,7.9704],[81.5418,7.9774],[81.5528,7.9851],[81.5532,7.9884],[81.5522,7.9913],[81.5468,7.994],[81.5403,7.9862],[81.5311,7.9833],[81.5189,7.9908],[81.5168,7.9964],[81.5091,7.9967],[81.4912,8.0122],[81.4729,8.0426],[81.4641,8.0666],[81.4576,8.099],[81.4605,8.1096],[81.465,8.1109],[81.4542,8.1131],[81.4468,8.1227],[81.4415,8.1354],[81.4327,8.167],[81.4336,8.1752],[81.436,8.1777],[81.4293,8.1811],[81.4258,8.1884],[81.4229,8.2068],[81.4183,8.2119],[81.4118,8.2299],[81.4078,8.2485],[81.3939,8.2488],[81.3875,8.2532],[81.3709,8.2539],[81.3643,8.258],[81.3611,8.2559],[81.3557,8.2573],[81.3561,8.2631],[81.3587,8.2649],[81.3538,8.2693],[81.3473,8.2647],[81.3303,8.2657],[81.3231,8.2616],[81.3116,8.252],[81.314,8.2292],[81.3064,8.0294],[81.3321,7.9704],[81.3401,7.957],[81.34,7.9374],[81.335,7.938],[81.3282,7.9351],[81.3165,7.9404],[81.3079,7.9374],[81.2981,7.9461],[81.2893,7.9466],[81.2747,7.9368],[81.2671,7.9371],[81.2628,7.94],[81.2531,7.9363],[81.2369,7.9198],[81.2385,7.9026],[81.2359,7.8949],[81.237,7.8887],[81.2289,7.8761],[81.2278,7.8671],[81.2315,7.8613],[81.2327,7.8435],[81.225,7.8235],[81.23,7.7951],[81.227,7.781],[81.2375,7.7605],[81.2371,7.7484],[81.2413,7.7391],[81.2514,7.736],[81.2544,7.7308],[81.2632,7.7358],[81.3261,7.7334],[81.3285,7.7299],[81.3287,7.7195],[81.3387,7.7065],[81.3457,7.7024],[81.3637,7.6767],[81.3678,7.6673],[81.3834,7.6567],[81.4456,7.642],[81.4429,7.6338],[81.4475,7.6197],[81.4408,7.6064],[81.4427,7.5988],[81.4336,7.5809],[81.4335,7.57],[81.452,7.5428],[81.4992,7.5216],[81.4943,7.5152],[81.5182,7.5087],[81.6192,7.5081],[81.6496,7.5251],[81.6459,7.5163],[81.6484,7.5105],[81.648,7.5025],[81.6545,7.4915],[81.6541,7.48],[81.6606,7.4725],[81.6573,7.4613],[81.6606,7.4473],[81.6596,7.4213],[81.6628,7.4141],[81.6611,7.4037],[81.6636,7.3987],[81.6703,7.4012],[81.6741,7.4139],[81.6905,7.4209],[81.709,7.4371],[81.725,7.4553],[81.749,7.4552],[81.7607,7.4598],[81.7764,7.4819],[81.7935,7.4705],[81.8144,7.4804]]]}},{"type":"Feature","properties":{"n":"Monaragala"},"geometry":{"type":"Polygon","coordinates":[[[81.6083,6.58],[81.6175,6.6966],[81.6191,6.7561],[81.6281,6.8707],[81.6287,6.913],[81.6372,6.96],[81.6178,6.9791],[81.6209,6.9984],[81.6139,7.0037],[81.6126,7.0164],[81.6072,7.0259],[81.6115,7.0417],[81.6192,7.0492],[81.6142,7.0685],[81.5961,7.0696],[81.5893,7.0746],[81.5797,7.0763],[81.5733,7.0813],[81.5598,7.082],[81.5394,7.0901],[81.5365,7.0948],[81.5332,7.0904],[81.5154,7.103],[81.5157,7.109],[81.5113,7.1179],[81.5131,7.1256],[81.5111,7.131],[81.5134,7.1363],[81.5003,7.1489],[81.5001,7.1548],[81.5114,7.1821],[81.5148,7.1842],[81.5224,7.1976],[81.542,7.2136],[81.5531,7.2176],[81.545,7.2305],[81.5381,7.2332],[81.534,7.24],[81.5231,7.2429],[81.5276,7.2536],[81.524,7.2628],[81.5242,7.2705],[81.5176,7.2805],[81.5207,7.2847],[81.5188,7.2903],[81.5125,7.2983],[81.4977,7.3044],[81.479,7.3247],[81.4798,7.328],[81.4908,7.3378],[81.4798,7.379],[81.4724,7.393],[81.4726,7.4054],[81.4771,7.4217],[81.465,7.4255],[81.462,7.4304],[81.4788,7.4547],[81.4564,7.4584],[81.4363,7.4436],[81.4248,7.4415],[81.4219,7.4358],[81.4075,7.4331],[81.4089,7.4224],[81.4057,7.4167],[81.4003,7.4156],[81.3888,7.4079],[81.375,7.4104],[81.3737,7.3976],[81.3803,7.3878],[81.3814,7.3775],[81.3864,7.3709],[81.3745,7.3585],[81.3651,7.3575],[81.3631,7.3523],[81.367,7.3435],[81.3545,7.3375],[81.3445,7.3356],[81.3242,7.3341],[81.3207,7.3375],[81.3213,7.3334],[81.3192,7.333],[81.3216,7.3275],[81.3181,7.3129],[81.325,7.2991],[81.319,7.2779],[81.323,7.2631],[81.3051,7.2574],[81.2855,7.2406],[81.2843,7.2435],[81.2866,7.2486],[81.2774,7.2554],[81.2792,7.2615],[81.2705,7.2769],[81.2646,7.2787],[81.2446,7.2688],[81.2315,7.2676],[81.2308,7.2601],[81.2359,7.2395],[81.2247,7.2296],[81.2069,7.2015],[81.1998,7.1951],[81.1887,7.1911],[81.1906,7.1864],[81.1865,7.1819],[81.1853,7.1725],[81.1748,7.1693],[81.1644,7.1735],[81.1521,7.1948],[81.1404,7.1883],[81.1371,7.1775],[81.1239,7.1645],[81.1221,7.1544],[81.1271,7.1452],[81.1331,7.1385],[81.1416,7.137],[81.1439,7.13],[81.148,7.1281],[81.159,7.1142],[81.1687,7.0841],[81.1752,7.0867],[81.1815,7.0847],[81.1877,7.0859],[81.1889,7.0934],[81.1912,7.0946],[81.2066,7.0955],[81.2096,7.0935],[81.2128,7.0967],[81.2191,7.0806],[81.2293,7.0844],[81.2417,7.0532],[81.2462,7.0223],[81.2448,7.0089],[81.2366,6.992],[81.2318,6.9886],[81.2345,6.9781],[81.2343,6.9657],[81.2258,6.9621],[81.2226,6.9631],[81.2203,6.9602],[81.2212,6.9522],[81.2272,6.9489],[81.2264,6.9457],[81.221,6.9426],[81.2094,6.9423],[81.2067,6.9398],[81.2017,6.9323],[81.2078,6.9264],[81.2038,6.9214],[81.187,6.9213],[81.1828,6.9288],[81.18,6.9252],[81.1767,6.9045],[81.1728,6.9011],[81.1672,6.9002],[81.1659,6.8967],[81.1614,6.8966],[81.1592,6.8906],[81.1294,6.8799],[81.1202,6.8729],[81.1126,6.8726],[81.11,6.8632],[81.118,6.862],[81.1382,6.8405],[81.1316,6.8333],[81.1186,6.8293],[81.1055,6.8309],[81.0966,6.8279],[81.0941,6.8239],[81.095,6.8174],[81.0989,6.8125],[81.0936,6.8091],[81.0861,6.8071],[81.08,6.8141],[81.0658,6.8137],[81.0635,6.7883],[81.0611,6.7828],[81.0648,6.7618],[81.0546,6.7489],[81.0515,6.739],[81.056,6.7345],[81.0711,6.7375],[81.085,6.728],[81.0793,6.7188],[81.078,6.7073],[81.0647,6.6998],[81.061,6.6515],[81.0648,6.6332],[81.0842,6.6169],[81.0862,6.6096],[81.0764,6.6112],[81.0622,6.5992],[81.0606,6.5869],[81.0624,6.5785],[81.0487,6.584],[81.0408,6.5906],[81.0338,6.5835],[81.0251,6.5732],[81.0263,6.5673],[81.0227,6.5422],[80.9956,6.5751],[80.9989,6.5899],[80.9949,6.6003],[80.9997,6.6101],[80.9993,6.615],[80.9909,6.6206],[80.979,6.6171],[80.9767,6.6228],[80.9796,6.6353],[80.9764,6.645],[80.9702,6.6503],[80.9689,6.6545],[80.9587,6.6518],[80.9534,6.6552],[80.9519,6.6719],[80.9396,6.6787],[80.9401,6.6904],[80.9301,6.6913],[80.9127,6.6718],[80.9074,6.6548],[80.9037,6.6506],[80.9054,6.6465],[80.9036,6.639],[80.8905,6.6314],[80.8852,6.6182],[80.8756,6.6106],[80.8786,6.6062],[80.8757,6.6014],[80.8766,6.5939],[80.8696,6.5928],[80.8693,6.5869],[80.8725,6.5819],[80.8661,6.5794],[80.867,6.574],[80.8608,6.5604],[80.8635,6.5563],[80.8636,6.5497],[80.8536,6.5318],[80.8394,6.5164],[80.8278,6.4901],[80.8306,6.4883],[80.8324,6.4757],[80.8387,6.4607],[80.8431,6.4561],[80.8393,6.4493],[80.8403,6.4416],[80.8362,6.4405],[80.8428,6.4339],[80.8379,6.427],[80.8444,6.407],[80.8388,6.4017],[80.846,6.3927],[80.8472,6.3862],[80.8532,6.3836],[80.8555,6.3741],[80.8625,6.3697],[80.8654,6.357],[80.897,6.3493],[80.903,6.3439],[80.9024,6.3374],[80.9093,6.3326],[80.906,6.3274],[80.9066,6.322],[80.9128,6.3146],[80.9214,6.2965],[80.9292,6.3033],[80.9561,6.3137],[80.9653,6.3197],[80.968,6.3254],[80.9825,6.3283],[81.0182,6.3447],[81.0225,6.3589],[81.015,6.3687],[81.0075,6.3692],[81.0083,6.3878],[81.0132,6.396],[81.037,6.3913],[81.0494,6.4068],[81.0487,6.4134],[81.0512,6.4174],[81.0491,6.4218],[81.0506,6.4221],[81.0545,6.4153],[81.0616,6.4113],[81.0673,6.4139],[81.0709,6.4238],[81.0891,6.4241],[81.1012,6.4183],[81.1105,6.4209],[81.1369,6.4211],[81.1378,6.4144],[81.1423,6.4095],[81.1446,6.3975],[81.1468,6.3965],[81.1506,6.3997],[81.1569,6.3926],[81.1661,6.3929],[81.1701,6.4028],[81.1843,6.4055],[81.1902,6.4017],[81.1916,6.395],[81.1975,6.3868],[81.2034,6.3833],[81.2035,6.3784],[81.211,6.3672],[81.2244,6.3578],[81.2211,6.3495],[81.2256,6.3447],[81.2353,6.3414],[81.2457,6.3434],[81.2535,6.3408],[81.2735,6.3551],[81.2755,6.3663],[81.2784,6.3691],[81.2891,6.373],[81.298,6.3735],[81.3125,6.38],[81.317,6.3753],[81.3274,6.3823],[81.3321,6.3798],[81.3406,6.3822],[81.352,6.3898],[81.3673,6.3906],[81.3733,6.3981],[81.384,6.3985],[81.3933,6.4147],[81.3988,6.4139],[81.4008,6.4064],[81.4199,6.4092],[81.4276,6.4181],[81.4364,6.4168],[81.4397,6.4199],[81.4449,6.4182],[81.4481,6.4137],[81.461,6.4133],[81.4667,6.4071],[81.4721,6.4081],[81.4798,6.4193],[81.4779,6.4288],[81.4791,6.4395],[81.4762,6.4488],[81.4842,6.4579],[81.4862,6.4643],[81.4793,6.4731],[81.4805,6.4772],[81.4784,6.4868],[81.4821,6.4958],[81.5021,6.5107],[81.524,6.5197],[81.5329,6.5359],[81.539,6.5382],[81.5469,6.5365],[81.5652,6.5545],[81.5811,6.5508],[81.5867,6.5555],[81.5887,6.5608],[81.5936,6.5626],[81.5997,6.5613],[81.6049,6.5688],[81.6083,6.58]]]}},{"type":"Feature","properties":{"n":"Polonnaruwa"},"geometry":{"type":"Polygon","coordinates":[[[81.2413,7.7391],[81.2371,7.7484],[81.2375,7.7605],[81.227,7.781],[81.23,7.7951],[81.225,7.8235],[81.2327,7.8435],[81.2315,7.8613],[81.2278,7.8671],[81.2289,7.8761],[81.237,7.8887],[81.2359,7.8949],[81.2385,7.9026],[81.2369,7.9198],[81.2531,7.9363],[81.2628,7.94],[81.2671,7.9371],[81.2747,7.9368],[81.2893,7.9466],[81.2981,7.9461],[81.3079,7.9374],[81.3165,7.9404],[81.3282,7.9351],[81.335,7.938],[81.34,7.9374],[81.3401,7.957],[81.3321,7.9704],[81.3064,8.0294],[81.314,8.2292],[81.3116,8.252],[81.2982,8.255],[81.2881,8.2611],[81.2859,8.2571],[81.2824,8.2574],[81.28,8.2498],[81.2734,8.2474],[81.2726,8.2412],[81.2658,8.241],[81.2701,8.2379],[81.269,8.2348],[81.2661,8.2353],[81.2634,8.2312],[81.2587,8.2321],[81.2564,8.2251],[81.2503,8.2261],[81.2514,8.21],[81.2431,8.1964],[81.2376,8.1943],[81.2429,8.1791],[81.2369,8.1785],[81.2345,8.1741],[81.2355,8.1686],[81.2326,8.1565],[81.2174,8.1547],[81.208,8.1488],[81.193,8.1512],[81.1921,8.1543],[81.1973,8.1601],[81.2069,8.163],[81.2134,8.1795],[81.2106,8.1833],[81.2045,8.184],[81.2041,8.1925],[81.2015,8.1971],[81.2062,8.2156],[81.2037,8.2218],[81.2044,8.2269],[81.1994,8.2314],[81.1962,8.232],[81.1869,8.2274],[81.1773,8.2306],[81.1727,8.2353],[81.1662,8.2346],[81.159,8.2395],[81.1394,8.2609],[81.1364,8.2593],[81.1241,8.263],[81.1185,8.259],[81.1108,8.2599],[81.1056,8.256],[81.0901,8.2622],[81.0776,8.2716],[81.0501,8.2722],[81.0462,8.2758],[81.0363,8.2789],[81.026,8.2769],[81.0174,8.279],[80.999,8.2727],[80.9888,8.2731],[80.9801,8.3125],[80.9674,8.3179],[80.9623,8.3237],[80.9521,8.3229],[80.9408,8.3425],[80.9308,8.3451],[80.9215,8.333],[80.9114,8.3264],[80.9042,8.3076],[80.8991,8.2809],[80.8127,8.2804],[80.8044,8.2785],[80.794,8.2538],[80.7944,8.2488],[80.7878,8.2312],[80.7854,8.2041],[80.7594,8.1505],[80.7611,8.141],[80.7583,8.137],[80.7586,8.1114],[80.7566,8.1032],[80.7587,8.0686],[80.7622,8.0652],[80.774,8.0673],[80.777,8.0659],[80.7595,8.0446],[80.7604,8.0383],[80.7497,8.0221],[80.7556,8.0172],[80.7561,8.0123],[80.7605,8.0068],[80.7711,8.0005],[80.7723,7.9956],[80.7744,7.9985],[80.7795,7.9948],[80.7784,7.9682],[80.7879,7.9625],[80.7985,7.9606],[80.7991,7.9766],[80.8148,7.9835],[80.8205,7.9809],[80.8206,7.9775],[80.8256,7.9713],[80.84,7.9722],[80.8533,7.9627],[80.834,7.9542],[80.8298,7.9399],[80.8196,7.9245],[80.8194,7.9092],[80.8099,7.8627],[80.811,7.852],[80.8078,7.8477],[80.8024,7.822],[80.7935,7.8173],[80.7956,7.8049],[80.7857,7.8001],[80.7816,7.8056],[80.7764,7.8022],[80.7688,7.8023],[80.7612,7.7922],[80.7659,7.7868],[80.7636,7.7774],[80.7638,7.734],[80.7745,7.7019],[80.773,7.694],[80.7698,7.6905],[80.7656,7.6952],[80.761,7.6956],[80.7679,7.6913],[80.7708,7.6838],[80.7738,7.684],[80.7788,7.6779],[80.8048,7.6796],[80.8093,7.6717],[80.8209,7.6799],[80.8253,7.6787],[80.8369,7.6813],[80.8419,7.6923],[80.8464,7.6932],[80.8491,7.6988],[80.8531,7.7011],[80.8549,7.6969],[80.8526,7.6946],[80.8555,7.6909],[80.8609,7.6878],[80.8703,7.6895],[80.8714,7.6849],[80.8769,7.6797],[80.8819,7.698],[80.8836,7.7151],[80.9065,7.7159],[80.922,7.7083],[80.9279,7.7083],[80.9377,7.7101],[80.9426,7.7136],[80.9488,7.7128],[80.972,7.7172],[80.9803,7.7161],[80.9891,7.7217],[81.0108,7.7183],[81.024,7.7231],[81.0493,7.7188],[81.0687,7.7308],[81.0944,7.7252],[81.1106,7.6977],[81.1176,7.6899],[81.1451,7.6763],[81.1519,7.6796],[81.1979,7.6611],[81.214,7.647],[81.2179,7.6481],[81.2208,7.6537],[81.2196,7.6598],[81.2226,7.6721],[81.2394,7.6798],[81.2365,7.6879],[81.2404,7.6951],[81.2379,7.7053],[81.2394,7.7134],[81.2347,7.7178],[81.2337,7.722],[81.2413,7.7391]]]}},{"type":"Feature","properties":{"n":"Colombo"},"geometry":{"type":"Polygon","coordinates":[[[79.8699,6.9793],[79.8681,6.9685],[79.8615,6.9633],[79.8592,6.9649],[79.8587,6.9627],[79.8579,6.9641],[79.8533,6.961],[79.8566,6.9608],[79.8532,6.9577],[79.8566,6.9584],[79.8541,6.9567],[79.8575,6.9567],[79.8562,6.9544],[79.8538,6.9545],[79.857,6.9537],[79.8537,6.9535],[79.8499,6.9425],[79.8523,6.9417],[79.8494,6.9415],[79.8506,6.9403],[79.8476,6.9377],[79.8474,6.942],[79.8453,6.9387],[79.8429,6.94],[79.8462,6.9518],[79.8398,6.9608],[79.8445,6.9552],[79.8428,6.9454],[79.8402,6.9462],[79.8406,6.9496],[79.839,6.9445],[79.8276,6.9458],[79.8257,6.9433],[79.8235,6.9454],[79.8233,6.9573],[79.8311,6.9659],[79.8228,6.9576],[79.8225,6.9453],[79.8253,6.9416],[79.8368,6.9412],[79.8404,6.9383],[79.8578,6.8716],[79.863,6.8247],[79.8799,6.7705],[79.8998,6.7207],[79.8996,6.7164],[79.902,6.7156],[79.904,6.7188],[79.9013,6.7332],[79.8927,6.7545],[79.8934,6.7639],[79.8866,6.7719],[79.8911,6.7769],[79.8978,6.7761],[79.9037,6.7693],[79.9163,6.7619],[79.9184,6.7578],[79.9178,6.7497],[79.9259,6.7479],[79.9443,6.7492],[79.9518,6.7615],[79.9618,6.7585],[79.969,6.7612],[79.9786,6.759],[79.9834,6.7623],[79.9907,6.7624],[79.9936,6.767],[80.0045,6.7726],[80.0056,6.7775],[80.0151,6.7861],[80.0137,6.7888],[80.0259,6.7929],[80.0351,6.8064],[80.042,6.8049],[80.0454,6.7987],[80.0548,6.7924],[80.0657,6.7937],[80.0692,6.8054],[80.0754,6.8153],[80.0789,6.8167],[80.0848,6.814],[80.0886,6.8149],[80.0907,6.8081],[80.0981,6.8035],[80.098,6.7914],[80.106,6.7734],[80.1114,6.7698],[80.1198,6.7704],[80.1246,6.7743],[80.1256,6.7843],[80.1207,6.7936],[80.1213,6.7966],[80.1162,6.8013],[80.1164,6.8052],[80.1337,6.8159],[80.143,6.819],[80.1493,6.8241],[80.1569,6.823],[80.1642,6.8144],[80.1713,6.8155],[80.1742,6.8199],[80.1811,6.8142],[80.1872,6.8188],[80.189,6.815],[80.1969,6.8145],[80.2021,6.8194],[80.2022,6.8317],[80.1942,6.8515],[80.175,6.8599],[80.1803,6.868],[80.1837,6.8865],[80.1901,6.8926],[80.1889,6.8995],[80.1946,6.9041],[80.1999,6.9037],[80.2037,6.9126],[80.2117,6.9179],[80.2123,6.9253],[80.2082,6.938],[80.2204,6.9367],[80.2231,6.9408],[80.2224,6.9504],[80.2175,6.9564],[80.2171,6.9753],[80.2149,6.9741],[80.2072,6.9787],[80.1992,6.9762],[80.1894,6.9784],[80.1836,6.975],[80.1693,6.9794],[80.1668,6.9708],[80.1517,6.9741],[80.1245,6.9747],[80.1217,6.9654],[80.11,6.9629],[80.1103,6.9596],[80.1063,6.954],[80.0985,6.9515],[80.0977,6.9452],[80.0936,6.9392],[80.0953,6.9345],[80.0932,6.9123],[80.0884,6.9137],[80.0857,6.9103],[80.0782,6.9112],[80.0737,6.9082],[80.0642,6.9128],[80.0606,6.9071],[80.0549,6.9075],[80.0524,6.9135],[80.0442,6.9152],[80.0305,6.9238],[80.0203,6.9247],[80.0137,6.9394],[80.0136,6.947],[80.001,6.9423],[79.9934,6.944],[79.9861,6.9354],[79.9827,6.9386],[79.9698,6.9376],[79.9548,6.9432],[79.9444,6.9383],[79.9431,6.9427],[79.9347,6.9502],[79.928,6.9491],[79.9233,6.9525],[79.9162,6.9456],[79.9127,6.9467],[79.9108,6.9504],[79.9003,6.9473],[79.8963,6.9509],[79.8999,6.9559],[79.8834,6.9543],[79.8792,6.9583],[79.8791,6.9654],[79.885,6.9738],[79.8835,6.9794],[79.8794,6.9814],[79.8699,6.9793]]]}},{"type":"Feature","properties":{"n":"Gampaha"},"geometry":{"type":"Polygon","coordinates":[[[80.1792,6.9777],[80.1812,6.9814],[80.1811,6.9961],[80.1711,7.0219],[80.1681,7.0475],[80.1629,7.0587],[80.1667,7.0624],[80.167,7.0673],[80.174,7.073],[80.177,7.0827],[80.188,7.0899],[80.1856,7.1052],[80.1962,7.1024],[80.1964,7.1116],[80.1992,7.1171],[80.2127,7.132],[80.2023,7.1376],[80.1981,7.135],[80.1944,7.1377],[80.1833,7.1383],[80.1651,7.1264],[80.1627,7.1269],[80.1599,7.1306],[80.1546,7.152],[80.1572,7.164],[80.1534,7.1832],[80.1454,7.1883],[80.1502,7.1899],[80.1519,7.1931],[80.1552,7.1859],[80.1595,7.1846],[80.1607,7.1932],[80.166,7.1929],[80.1705,7.196],[80.1815,7.1936],[80.1843,7.1963],[80.1831,7.1996],[80.1865,7.2049],[80.1846,7.2132],[80.1896,7.2264],[80.1867,7.2361],[80.2002,7.2449],[80.2003,7.2494],[80.1905,7.2638],[80.1851,7.2612],[80.1687,7.2854],[80.1631,7.2901],[80.159,7.2905],[80.1442,7.3032],[80.143,7.3061],[80.1488,7.3124],[80.1394,7.3232],[80.1242,7.3305],[80.1078,7.3211],[80.1023,7.3131],[80.0943,7.3073],[80.0873,7.3034],[80.084,7.3046],[80.0821,7.2985],[80.0592,7.2839],[80.0543,7.2844],[80.0535,7.2904],[80.0473,7.2953],[80.0467,7.2996],[80.0382,7.3035],[80.0308,7.3026],[80.0291,7.3097],[80.0249,7.3123],[80.0267,7.3179],[80.02,7.3177],[80.0148,7.3145],[80.0068,7.3212],[80.0043,7.3149],[79.9991,7.3145],[79.9958,7.3102],[79.9881,7.3066],[79.9947,7.3059],[79.9944,7.3032],[79.9821,7.3014],[79.9784,7.2931],[79.9722,7.2929],[79.9685,7.2892],[79.9572,7.2942],[79.9571,7.2904],[79.9518,7.2901],[79.9524,7.2848],[79.9561,7.283],[79.9547,7.2805],[79.9471,7.2795],[79.9459,7.2739],[79.9385,7.2807],[79.9339,7.2782],[79.924,7.2845],[79.9236,7.2813],[79.9282,7.275],[79.9273,7.2719],[79.9245,7.272],[79.9247,7.2777],[79.915,7.2769],[79.9162,7.2698],[79.9079,7.2653],[79.9053,7.2677],[79.9096,7.2753],[79.9075,7.2805],[79.9054,7.274],[79.8992,7.2814],[79.8979,7.2748],[79.8848,7.2739],[79.8805,7.2807],[79.8758,7.2827],[79.871,7.2809],[79.8663,7.2709],[79.8587,7.2703],[79.8534,7.2773],[79.8515,7.2764],[79.8522,7.2728],[79.842,7.2734],[79.839,7.2238],[79.836,7.2155],[79.8286,7.2078],[79.8295,7.2062],[79.8325,7.2089],[79.84,7.2066],[79.8369,7.2013],[79.839,7.2],[79.8359,7.2005],[79.8365,7.195],[79.8445,7.1956],[79.848,7.1991],[79.8526,7.195],[79.8584,7.1834],[79.8573,7.1815],[79.8656,7.1695],[79.8686,7.1555],[79.8682,7.1534],[79.8663,7.1566],[79.8667,7.142],[79.8709,7.1317],[79.8694,7.1236],[79.8721,7.1215],[79.87,7.1177],[79.8744,7.1139],[79.8689,7.1162],[79.8678,7.1117],[79.8653,7.1124],[79.8624,7.1177],[79.8628,7.1261],[79.8583,7.117],[79.8595,7.1123],[79.8557,7.1121],[79.8577,7.1056],[79.8534,7.1068],[79.8562,7.1012],[79.8534,7.1064],[79.8477,7.1092],[79.847,7.112],[79.8447,7.1115],[79.8472,7.1203],[79.8389,7.1317],[79.8387,7.1459],[79.8332,7.15],[79.8323,7.1593],[79.8231,7.1817],[79.8303,7.202],[79.8258,7.2082],[79.8194,7.2073],[79.8169,7.2035],[79.8285,7.1526],[79.8421,7.1124],[79.8682,7.0007],[79.8699,6.9793],[79.8794,6.9814],[79.8835,6.9794],[79.885,6.9738],[79.8791,6.9654],[79.8792,6.9583],[79.8834,6.9543],[79.8999,6.9559],[79.8963,6.9509],[79.8982,6.9479],[79.9032,6.947],[79.9108,6.9504],[79.9127,6.9467],[79.9162,6.9456],[79.9233,6.9525],[79.928,6.9491],[79.9347,6.9502],[79.9431,6.9427],[79.9444,6.9383],[79.9548,6.9432],[79.9698,6.9376],[79.9827,6.9386],[79.9861,6.9354],[79.9934,6.944],[80.001,6.9423],[80.0136,6.947],[80.0137,6.9394],[80.0203,6.9247],[80.0305,6.9238],[80.0442,6.9152],[80.0524,6.9135],[80.0549,6.9075],[80.0606,6.9071],[80.0642,6.9128],[80.0737,6.9082],[80.0782,6.9112],[80.0857,6.9103],[80.0884,6.9137],[80.0932,6.9123],[80.0953,6.9345],[80.0936,6.9392],[80.0977,6.9452],[80.0985,6.9515],[80.1063,6.954],[80.1103,6.9596],[80.11,6.9629],[80.1217,6.9654],[80.1245,6.9747],[80.1517,6.9741],[80.1668,6.9708],[80.1693,6.9794],[80.1792,6.9777]]]}},{"type":"Feature","properties":{"n":"Kalutara"},"geometry":{"type":"Polygon","coordinates":[[[80.3813,6.4256],[80.3793,6.4283],[80.3803,6.4342],[80.3381,6.4931],[80.313,6.5342],[80.3045,6.5392],[80.3046,6.5468],[80.2953,6.5641],[80.3146,6.5712],[80.3032,6.5959],[80.2979,6.599],[80.2825,6.6179],[80.2747,6.6178],[80.2608,6.6226],[80.255,6.627],[80.2495,6.637],[80.2489,6.6423],[80.2517,6.6486],[80.2494,6.6586],[80.2417,6.6703],[80.229,6.6779],[80.2207,6.6904],[80.2158,6.6919],[80.2028,6.7205],[80.204,6.7226],[80.1987,6.7273],[80.1993,6.7314],[80.2054,6.7305],[80.2041,6.7386],[80.1925,6.761],[80.1896,6.7721],[80.1921,6.7818],[80.1809,6.7967],[80.1767,6.8121],[80.1777,6.8158],[80.1742,6.8199],[80.1713,6.8155],[80.1642,6.8144],[80.1569,6.823],[80.1493,6.8241],[80.1164,6.8052],[80.1162,6.8013],[80.1213,6.7966],[80.1207,6.7936],[80.1256,6.7843],[80.1246,6.7743],[80.1198,6.7704],[80.1114,6.7698],[80.106,6.7734],[80.098,6.7914],[80.0981,6.8035],[80.0907,6.8081],[80.0886,6.8149],[80.0848,6.814],[80.0789,6.8167],[80.0754,6.8153],[80.0692,6.8054],[80.0657,6.7937],[80.0548,6.7924],[80.0454,6.7987],[80.042,6.8049],[80.0351,6.8064],[80.0259,6.7929],[80.0137,6.7888],[80.0151,6.7861],[80.0056,6.7775],[80.0045,6.7726],[79.9936,6.767],[79.9907,6.7624],[79.9834,6.7623],[79.9786,6.759],[79.969,6.7612],[79.9618,6.7585],[79.9518,6.7615],[79.9443,6.7492],[79.9259,6.7479],[79.9178,6.7497],[79.9184,6.7578],[79.9163,6.7619],[79.9037,6.7693],[79.8978,6.7761],[79.8879,6.7752],[79.8866,6.7719],[79.8934,6.7639],[79.8927,6.7545],[79.9013,6.7332],[79.904,6.7188],[79.902,6.7156],[79.8996,6.7164],[79.9353,6.6414],[79.9482,6.6071],[79.9637,6.5536],[79.9696,6.5435],[79.9815,6.5116],[79.9803,6.5072],[79.976,6.5055],[79.9826,6.4885],[79.9827,6.4775],[79.9734,6.4703],[79.9745,6.4597],[79.9801,6.448],[79.9877,6.4431],[79.9863,6.4403],[79.9886,6.4416],[79.992,6.4398],[79.999,6.427],[80.004,6.4293],[80.0078,6.437],[80.0191,6.4341],[80.0233,6.4316],[80.0302,6.4197],[80.0388,6.4198],[80.044,6.4152],[80.0614,6.4085],[80.0697,6.398],[80.0769,6.3983],[80.0822,6.4023],[80.0875,6.4018],[80.1138,6.386],[80.1222,6.3712],[80.1285,6.369],[80.1307,6.3657],[80.1323,6.3679],[80.136,6.3662],[80.1546,6.3672],[80.1693,6.3601],[80.1868,6.3581],[80.1894,6.3545],[80.2074,6.3596],[80.2067,6.372],[80.212,6.3715],[80.2175,6.3801],[80.2411,6.3766],[80.2473,6.3675],[80.2531,6.3656],[80.2693,6.3499],[80.2759,6.3491],[80.2856,6.3348],[80.2968,6.3249],[80.299,6.3258],[80.3009,6.3354],[80.2903,6.3704],[80.2902,6.3918],[80.299,6.3977],[80.3046,6.3955],[80.3133,6.3969],[80.3346,6.411],[80.3521,6.4192],[80.3567,6.4173],[80.3689,6.4268],[80.376,6.4277],[80.3813,6.4256]]]}},{"type":"Feature","properties":{"n":"Kegalle"},"geometry":{"type":"Polygon","coordinates":[[[80.2117,6.9179],[80.2192,6.9214],[80.2191,6.9261],[80.224,6.9311],[80.2265,6.9245],[80.2306,6.9242],[80.2332,6.9031],[80.2356,6.9026],[80.241,6.9075],[80.2508,6.9015],[80.2547,6.8925],[80.2607,6.8892],[80.2688,6.8743],[80.2822,6.8701],[80.2813,6.8658],[80.2849,6.8625],[80.2849,6.8555],[80.2948,6.8551],[80.2972,6.8594],[80.3017,6.8584],[80.3108,6.8623],[80.3189,6.8553],[80.3287,6.8363],[80.3375,6.8314],[80.3396,6.8326],[80.3405,6.8301],[80.3424,6.8333],[80.3487,6.8346],[80.348,6.8418],[80.3562,6.8461],[80.3574,6.8497],[80.3622,6.8484],[80.3796,6.8544],[80.3831,6.8496],[80.3889,6.85],[80.3907,6.8537],[80.4,6.8597],[80.4212,6.8454],[80.424,6.8398],[80.43,6.8421],[80.432,6.8481],[80.4409,6.8418],[80.4421,6.836],[80.4516,6.8331],[80.4583,6.8368],[80.4774,6.8309],[80.496,6.8317],[80.5038,6.8357],[80.5114,6.8475],[80.5094,6.8528],[80.5004,6.8573],[80.5002,6.8655],[80.4949,6.8717],[80.498,6.887],[80.4913,6.8932],[80.4865,6.8932],[80.48,6.8985],[80.4735,6.8981],[80.4674,6.9018],[80.4601,6.9002],[80.4548,6.9061],[80.433,6.9136],[80.4344,6.9219],[80.4375,6.9226],[80.4392,6.9447],[80.4376,6.9558],[80.4456,6.9654],[80.4441,6.9746],[80.4402,6.976],[80.4361,6.9841],[80.4324,6.9857],[80.4331,6.9926],[80.4376,6.9981],[80.4502,6.9993],[80.4605,7.0127],[80.4674,7.0171],[80.4661,7.0222],[80.4681,7.0243],[80.4643,7.0244],[80.4609,7.0313],[80.4609,7.0473],[80.4638,7.0575],[80.4711,7.0652],[80.4647,7.0654],[80.4542,7.1013],[80.4453,7.1113],[80.4558,7.1221],[80.4703,7.1223],[80.4784,7.1275],[80.4821,7.1247],[80.4922,7.1284],[80.5005,7.128],[80.5025,7.1345],[80.5063,7.1336],[80.5103,7.149],[80.5222,7.1518],[80.5258,7.1465],[80.5295,7.1516],[80.5346,7.1504],[80.5293,7.1617],[80.5334,7.166],[80.5466,7.1667],[80.5481,7.1694],[80.5451,7.1786],[80.5336,7.1863],[80.5263,7.1977],[80.5159,7.2039],[80.5133,7.2081],[80.5126,7.213],[80.5224,7.2203],[80.5225,7.2345],[80.5188,7.2409],[80.5105,7.2452],[80.5086,7.2535],[80.504,7.258],[80.4941,7.2584],[80.4891,7.2627],[80.4795,7.2636],[80.4798,7.2665],[80.476,7.2697],[80.4807,7.2726],[80.4832,7.2801],[80.4814,7.2848],[80.4576,7.3062],[80.455,7.313],[80.44,7.3189],[80.4265,7.3323],[80.4221,7.3552],[80.4144,7.3567],[80.4167,7.373],[80.4116,7.383],[80.401,7.3876],[80.3923,7.3965],[80.3569,7.3866],[80.347,7.3877],[80.3453,7.3821],[80.35,7.3776],[80.3559,7.3611],[80.3538,7.3563],[80.3486,7.3557],[80.3424,7.3511],[80.3443,7.3438],[80.35,7.3392],[80.3382,7.3212],[80.3215,7.3288],[80.3167,7.3212],[80.3118,7.3228],[80.2885,7.315],[80.2793,7.3184],[80.2548,7.3045],[80.2138,7.2747],[80.2039,7.2591],[80.1956,7.2582],[80.2003,7.2494],[80.2002,7.2449],[80.1867,7.2361],[80.1896,7.2264],[80.1846,7.2132],[80.1865,7.2049],[80.1831,7.1996],[80.1843,7.1963],[80.1815,7.1936],[80.1705,7.196],[80.166,7.1929],[80.1607,7.1932],[80.1595,7.1846],[80.1552,7.1859],[80.1519,7.1931],[80.1502,7.1899],[80.1454,7.1883],[80.1534,7.1832],[80.1572,7.164],[80.1546,7.152],[80.1599,7.1306],[80.1627,7.1269],[80.1651,7.1264],[80.1833,7.1383],[80.1944,7.1377],[80.1981,7.135],[80.2023,7.1376],[80.2127,7.132],[80.1992,7.1171],[80.1964,7.1116],[80.1962,7.1024],[80.1856,7.1052],[80.188,7.0899],[80.177,7.0827],[80.174,7.073],[80.167,7.0673],[80.1667,7.0624],[80.1629,7.0587],[80.1681,7.0475],[80.1711,7.0219],[80.1811,6.9961],[80.1812,6.9814],[80.1792,6.9777],[80.1836,6.975],[80.1894,6.9784],[80.1992,6.9762],[80.2072,6.9787],[80.2149,6.9741],[80.2171,6.9753],[80.2182,6.9726],[80.2175,6.9564],[80.2224,6.9504],[80.2231,6.9408],[80.2204,6.9367],[80.2082,6.938],[80.2123,6.9253],[80.2117,6.9179]]]}},{"type":"Feature","properties":{"n":"Kurunegala"},"geometry":{"type":"Polygon","coordinates":[[[80.1019,8.1973],[80.1058,8.1893],[80.1002,8.1671],[80.1098,8.1418],[80.1101,8.1315],[80.1144,8.1163],[80.1153,8.096],[80.1285,8.0789],[80.1435,8.0749],[80.1533,8.0662],[80.1471,8.048],[80.1458,8.0345],[80.1486,8.0183],[80.1437,8.0063],[80.1495,7.9974],[80.1362,7.9752],[80.1332,7.965],[80.134,7.9602],[80.1384,7.9579],[80.1484,7.9417],[80.1423,7.9374],[80.1372,7.938],[80.1326,7.9348],[80.1222,7.9471],[80.1109,7.9501],[80.1067,7.9407],[80.1087,7.9293],[80.1011,7.9242],[80.0989,7.9143],[80.0928,7.9158],[80.0937,7.9214],[80.0723,7.9136],[80.0742,7.8926],[80.0669,7.889],[80.0663,7.8731],[80.053,7.8733],[80.0493,7.8673],[80.0421,7.8655],[80.0382,7.8605],[80.0413,7.8582],[80.0374,7.8444],[80.0062,7.8313],[80.0053,7.8267],[80.0114,7.816],[79.999,7.8126],[79.9944,7.7929],[80.0023,7.7786],[79.9936,7.7631],[79.9934,7.7584],[80.0012,7.7491],[79.9987,7.7431],[79.9872,7.7391],[79.9776,7.732],[79.9757,7.7239],[79.9616,7.7179],[79.9553,7.72],[79.9527,7.7091],[79.954,7.702],[79.9457,7.7008],[79.9409,7.6965],[79.9429,7.6933],[79.954,7.6943],[79.9633,7.6868],[79.96,7.6835],[79.9594,7.6751],[79.9583,7.673],[79.9482,7.676],[79.9459,7.682],[79.943,7.6773],[79.9354,7.6809],[79.9287,7.6746],[79.9306,7.6655],[79.9239,7.6556],[79.9338,7.6507],[79.93,7.647],[79.9229,7.6453],[79.9214,7.6337],[79.9104,7.6262],[79.9057,7.6166],[79.909,7.5978],[79.9025,7.5809],[79.9005,7.5597],[79.9053,7.5058],[79.9375,7.3493],[79.9416,7.2765],[79.9459,7.2739],[79.9471,7.2795],[79.9547,7.2805],[79.9561,7.283],[79.9506,7.2889],[79.9571,7.2904],[79.9572,7.2942],[79.9685,7.2892],[79.9722,7.2929],[79.9784,7.2931],[79.9821,7.3014],[79.9944,7.3032],[79.9947,7.3059],[79.9881,7.3066],[79.9958,7.3102],[79.9991,7.3145],[80.0043,7.3149],[80.0068,7.3212],[80.0148,7.3145],[80.02,7.3177],[80.0267,7.3179],[80.0249,7.3123],[80.0291,7.3097],[80.0308,7.3026],[80.0382,7.3035],[80.0467,7.2996],[80.0473,7.2953],[80.0535,7.2904],[80.0543,7.2844],[80.0592,7.2839],[80.0821,7.2985],[80.084,7.3046],[80.0873,7.3034],[80.0943,7.3073],[80.1023,7.3131],[80.1078,7.3211],[80.1242,7.3305],[80.1394,7.3232],[80.1488,7.3124],[80.143,7.3061],[80.1442,7.3032],[80.159,7.2905],[80.1631,7.2901],[80.1687,7.2854],[80.1851,7.2612],[80.1905,7.2638],[80.1956,7.2582],[80.2039,7.2591],[80.2138,7.2747],[80.2548,7.3045],[80.2793,7.3184],[80.2885,7.315],[80.3118,7.3228],[80.3167,7.3212],[80.3215,7.3288],[80.3382,7.3212],[80.35,7.3392],[80.3443,7.3438],[80.3424,7.3511],[80.3486,7.3557],[80.3538,7.3563],[80.3559,7.3611],[80.35,7.3776],[80.3453,7.3821],[80.347,7.3877],[80.3569,7.3866],[80.3923,7.3965],[80.401,7.3876],[80.4116,7.383],[80.4167,7.373],[80.4144,7.3567],[80.4221,7.3552],[80.4262,7.3596],[80.4373,7.3533],[80.4452,7.3574],[80.457,7.35],[80.4598,7.3526],[80.4581,7.3566],[80.4542,7.3572],[80.4514,7.3617],[80.4579,7.3745],[80.4643,7.3766],[80.4698,7.3927],[80.4722,7.3937],[80.4697,7.4022],[80.4619,7.4053],[80.4616,7.411],[80.4703,7.4128],[80.4736,7.4065],[80.48,7.407],[80.4935,7.3946],[80.5062,7.3867],[80.5114,7.386],[80.518,7.3893],[80.515,7.3947],[80.5194,7.3993],[80.5155,7.4063],[80.5168,7.4137],[80.5293,7.4122],[80.5291,7.4183],[80.538,7.4156],[80.5385,7.4218],[80.549,7.4149],[80.5565,7.4195],[80.5538,7.4265],[80.5469,7.4343],[80.5482,7.4422],[80.5403,7.4497],[80.543,7.4523],[80.5552,7.4496],[80.5577,7.4562],[80.5663,7.4575],[80.5648,7.4694],[80.5699,7.4746],[80.57,7.4778],[80.5764,7.4787],[80.571,7.487],[80.5743,7.491],[80.5714,7.4924],[80.571,7.5011],[80.5738,7.5087],[80.569,7.5111],[80.5689,7.5167],[80.5631,7.5139],[80.5657,7.5242],[80.5571,7.5378],[80.5528,7.5386],[80.5546,7.5478],[80.5527,7.5511],[80.5567,7.5638],[80.5615,7.5683],[80.5626,7.5728],[80.5671,7.5728],[80.5713,7.5766],[80.5751,7.5749],[80.5737,7.5867],[80.569,7.594],[80.5743,7.5969],[80.5741,7.6006],[80.5779,7.605],[80.5663,7.6207],[80.5658,7.6311],[80.5544,7.6351],[80.5536,7.6388],[80.5491,7.6422],[80.5498,7.6484],[80.5486,7.6542],[80.5458,7.6549],[80.5453,7.6612],[80.5519,7.662],[80.5535,7.6737],[80.5495,7.679],[80.5503,7.6861],[80.5474,7.6978],[80.5495,7.7053],[80.5454,7.7087],[80.5366,7.7089],[80.5373,7.7389],[80.5339,7.7436],[80.5295,7.7444],[80.521,7.7608],[80.5197,7.7724],[80.5168,7.7748],[80.5036,7.7744],[80.5032,7.7797],[80.4991,7.7826],[80.4965,7.8093],[80.5002,7.8136],[80.4998,7.8164],[80.4839,7.8231],[80.4833,7.8293],[80.4798,7.8312],[80.479,7.841],[80.4691,7.85],[80.4753,7.8564],[80.4798,7.8773],[80.4744,7.8958],[80.4686,7.8996],[80.4659,7.9047],[80.4627,7.9178],[80.4611,7.9453],[80.4475,7.9551],[80.4418,7.9541],[80.4336,7.9479],[80.4187,7.9533],[80.426,7.9629],[80.4222,7.9921],[80.4154,8.0072],[80.4181,8.0125],[80.4194,8.0436],[80.4047,8.0549],[80.3962,8.0532],[80.3924,8.048],[80.3804,8.0565],[80.37,8.0578],[80.3636,8.0671],[80.3583,8.069],[80.349,8.081],[80.344,8.081],[80.337,8.0888],[80.3325,8.0895],[80.3241,8.0971],[80.3172,8.1122],[80.3081,8.1171],[80.3012,8.1155],[80.294,8.1186],[80.286,8.1188],[80.2806,8.1159],[80.2664,8.1154],[80.2512,8.1332],[80.2326,8.1401],[80.2151,8.1436],[80.2071,8.1535],[80.1882,8.1515],[80.1851,8.1541],[80.1859,8.1599],[80.1839,8.1621],[80.1655,8.1641],[80.1509,8.1756],[80.1377,8.1766],[80.1343,8.1793],[80.123,8.1813],[80.1169,8.1866],[80.1101,8.1888],[80.1077,8.1959],[80.1019,8.1973]]]}},{"type":"Feature","properties":{"n":"Puttalam"},"geometry":{"type":"MultiPolygon","coordinates":[[[[79.7799,8.2621],[79.7834,8.2629],[79.7854,8.2679],[79.7732,8.2791],[79.7746,8.2696],[79.7799,8.2621]]],[[[79.9198,8.5673],[79.9193,8.5553],[79.9158,8.5485],[79.9013,8.5458],[79.8973,8.5415],[79.8847,8.5366],[79.8775,8.5366],[79.8743,8.5402],[79.8709,8.5364],[79.8668,8.5169],[79.8651,8.4783],[79.8619,8.475],[79.8635,8.4514],[79.8584,8.4459],[79.8473,8.4407],[79.8432,8.4231],[79.8462,8.3919],[79.8449,8.3644],[79.8466,8.351],[79.8395,8.3464],[79.8371,8.3414],[79.8392,8.3342],[79.8326,8.3253],[79.8377,8.3115],[79.8316,8.3005],[79.8313,8.2921],[79.8223,8.2805],[79.8172,8.2676],[79.8104,8.2389],[79.8041,8.2357],[79.7895,8.2336],[79.791,8.231],[79.7968,8.234],[79.8035,8.2308],[79.8055,8.2283],[79.8045,8.2237],[79.7978,8.2231],[79.7938,8.2295],[79.7923,8.2282],[79.7938,8.2249],[79.8167,8.2091],[79.8222,8.1906],[79.8175,8.1741],[79.8201,8.1623],[79.825,8.1607],[79.8342,8.1517],[79.8321,8.1448],[79.8356,8.1371],[79.8292,8.1274],[79.8208,8.1228],[79.8201,8.1123],[79.8172,8.1108],[79.8153,8.1002],[79.8,8.0822],[79.7956,8.0861],[79.7916,8.0848],[79.7914,8.08],[79.7983,8.0771],[79.798,8.0722],[79.7915,8.0739],[79.7906,8.078],[79.7894,8.0756],[79.7932,8.0661],[79.7967,8.0622],[79.8021,8.062],[79.81,8.0492],[79.8255,8.0341],[79.8357,8.0142],[79.8364,8.005],[79.8336,8.001],[79.8291,7.9976],[79.8193,7.9971],[79.821,7.9838],[79.8246,7.9801],[79.8241,7.9742],[79.8265,7.9703],[79.822,7.9581],[79.8253,7.9553],[79.822,7.9499],[79.8253,7.92],[79.8204,7.9137],[79.8197,7.9154],[79.8235,7.9268],[79.8194,7.94],[79.8211,7.9611],[79.8137,7.951],[79.8091,7.9526],[79.817,7.9652],[79.8199,7.9647],[79.8218,7.9674],[79.8227,7.9796],[79.8153,7.9764],[79.7842,7.9794],[79.7572,7.9876],[79.7466,7.9939],[79.7367,8.0139],[79.7451,8.0356],[79.7418,8.0526],[79.7497,8.0612],[79.7555,8.0633],[79.7374,8.0727],[79.7382,8.0757],[79.732,8.0849],[79.7362,8.1128],[79.7271,8.1229],[79.731,8.1417],[79.7394,8.1441],[79.7407,8.1588],[79.7465,8.1667],[79.7434,8.1762],[79.7471,8.1821],[79.7493,8.1816],[79.7477,8.1887],[79.7399,8.1944],[79.7378,8.2017],[79.7433,8.2047],[79.7423,8.2084],[79.7494,8.2185],[79.757,8.2227],[79.7552,8.2225],[79.7559,8.2245],[79.7606,8.2225],[79.7638,8.2161],[79.7691,8.2172],[79.7703,8.2212],[79.7704,8.2283],[79.7658,8.2415],[79.7725,8.2493],[79.7778,8.2593],[79.7768,8.2614],[79.7673,8.2623],[79.7638,8.2594],[79.7645,8.2559],[79.7477,8.2416],[79.7401,8.2307],[79.7315,8.2282],[79.7378,8.2412],[79.7404,8.2423],[79.7393,8.2503],[79.7474,8.2515],[79.7528,8.2479],[79.7551,8.2558],[79.7579,8.2562],[79.758,8.2599],[79.7606,8.2617],[79.7601,8.2663],[79.7639,8.2681],[79.7616,8.2731],[79.7566,8.2723],[79.7589,8.268],[79.7563,8.2642],[79.751,8.2646],[79.7554,8.2721],[79.7542,8.2737],[79.7577,8.2741],[79.7587,8.2765],[79.7538,8.2815],[79.7554,8.2839],[79.7542,8.2901],[79.7626,8.2994],[79.7676,8.3014],[79.7588,8.3034],[79.7614,8.3109],[79.7663,8.3161],[79.7667,8.3246],[79.7724,8.3293],[79.7737,8.3394],[79.7788,8.3482],[79.7775,8.3506],[79.7794,8.3511],[79.7855,8.3703],[79.7794,8.3771],[79.7861,8.3841],[79.7769,8.3789],[79.7728,8.3684],[79.771,8.3429],[79.7624,8.3231],[79.7602,8.3082],[79.7434,8.2742],[79.7349,8.2355],[79.7294,8.2274],[79.7252,8.2276],[79.7157,8.2187],[79.71,8.2178],[79.7135,8.2172],[79.7054,8.215],[79.7003,8.2104],[79.6958,8.2103],[79.7093,8.2184],[79.7029,8.2192],[79.6927,8.2107],[79.6972,8.1836],[79.7034,8.1705],[79.7061,8.147],[79.7042,8.1198],[79.7017,8.1149],[79.7075,8.0944],[79.7061,8.057],[79.7451,7.9341],[79.7844,7.7752],[79.7945,7.7195],[79.7996,7.6819],[79.8007,7.64],[79.7973,7.6127],[79.7925,7.6083],[79.7861,7.6064],[79.7893,7.5389],[79.8022,7.4664],[79.8195,7.3993],[79.842,7.2734],[79.8522,7.2728],[79.8515,7.2764],[79.8534,7.2773],[79.8587,7.2703],[79.8663,7.2709],[79.871,7.2809],[79.8758,7.2827],[79.8805,7.2807],[79.8848,7.2739],[79.8979,7.2748],[79.8992,7.2814],[79.9054,7.274],[79.9075,7.2805],[79.9096,7.2753],[79.9053,7.2677],[79.9079,7.2653],[79.9162,7.2698],[79.915,7.2769],[79.9247,7.2777],[79.9245,7.272],[79.9273,7.2719],[79.9282,7.275],[79.9236,7.2813],[79.924,7.2845],[79.9339,7.2782],[79.9385,7.2807],[79.9416,7.2765],[79.9424,7.281],[79.9375,7.3493],[79.9053,7.5058],[79.9005,7.5597],[79.9025,7.5809],[79.909,7.5978],[79.9057,7.6166],[79.9104,7.6262],[79.9214,7.6337],[79.9229,7.6453],[79.93,7.647],[79.9338,7.6507],[79.9239,7.6556],[79.9306,7.6655],[79.9287,7.6746],[79.9354,7.6809],[79.943,7.6773],[79.9459,7.682],[79.9482,7.676],[79.9583,7.673],[79.9594,7.6751],[79.96,7.6835],[79.9633,7.6868],[79.954,7.6943],[79.9429,7.6933],[79.9409,7.6965],[79.9457,7.7008],[79.954,7.702],[79.9527,7.7091],[79.9553,7.72],[79.9616,7.7179],[79.9757,7.7239],[79.9776,7.732],[79.9872,7.7391],[79.9987,7.7431],[80.0012,7.7491],[79.9934,7.7584],[79.9936,7.7631],[80.0023,7.7786],[79.9944,7.7929],[79.999,7.8126],[80.0114,7.816],[80.0053,7.8267],[80.0062,7.8313],[80.0374,7.8444],[80.0413,7.8582],[80.0382,7.8605],[80.0421,7.8655],[80.0493,7.8673],[80.053,7.8733],[80.0663,7.8731],[80.0669,7.889],[80.0742,7.8926],[80.0723,7.9136],[80.0937,7.9214],[80.0928,7.9158],[80.0989,7.9143],[80.1011,7.9242],[80.1087,7.9293],[80.1067,7.9407],[80.1109,7.9501],[80.1222,7.9471],[80.1326,7.9348],[80.1372,7.938],[80.1423,7.9374],[80.1484,7.9417],[80.1384,7.9579],[80.134,7.9602],[80.1332,7.965],[80.1362,7.9752],[80.1495,7.9974],[80.1437,8.0063],[80.1486,8.0183],[80.1458,8.0345],[80.1471,8.048],[80.1533,8.0662],[80.1435,8.0749],[80.1285,8.0789],[80.1153,8.096],[80.1144,8.1163],[80.1101,8.1315],[80.1098,8.1418],[80.1002,8.1671],[80.1058,8.1893],[80.0982,8.2022],[80.0967,8.2095],[80.0865,8.2107],[80.0795,8.2236],[80.0619,8.2198],[80.0378,8.2379],[80.0276,8.227],[80.0178,8.2248],[80.0083,8.2297],[80.0001,8.2285],[79.9958,8.2542],[79.9819,8.2773],[79.9841,8.2843],[79.9804,8.3008],[79.9781,8.3029],[79.9817,8.3076],[79.9757,8.3265],[79.9748,8.3371],[79.9528,8.3694],[79.9562,8.3943],[79.9618,8.398],[79.9771,8.3975],[79.9853,8.4121],[79.9905,8.4139],[79.992,8.4175],[79.9887,8.421],[79.9901,8.4232],[79.9963,8.4266],[80.0006,8.4339],[80.006,8.4342],[80.0075,8.439],[80.0152,8.4407],[80.0197,8.445],[80.0205,8.4505],[80.0319,8.4654],[80.0428,8.4934],[80.0428,8.5],[80.0324,8.5272],[80.0228,8.5326],[80.008,8.5357],[80.0009,8.5445],[79.9903,8.5426],[79.9776,8.5529],[79.9651,8.5501],[79.9566,8.5526],[79.949,8.5593],[79.9376,8.556],[79.9275,8.5645],[79.9198,8.5673]]],[[[79.8009,8.3407],[79.8065,8.3198],[79.8113,8.3181],[79.8137,8.3212],[79.8087,8.3217],[79.8067,8.3244],[79.8129,8.3331],[79.8072,8.3334],[79.8043,8.3363],[79.8115,8.3378],[79.8033,8.338],[79.8009,8.3407]]],[[[79.7979,8.4518],[79.8066,8.4493],[79.7965,8.4536],[79.7904,8.4628],[79.7919,8.47],[79.7857,8.4723],[79.7799,8.4928],[79.7839,8.5026],[79.7838,8.5086],[79.7874,8.5101],[79.786,8.515],[79.789,8.5249],[79.7857,8.5335],[79.7865,8.52],[79.7783,8.5045],[79.7777,8.4979],[79.7876,8.4667],[79.7979,8.4518]]]]}},{"type":"Feature","properties":{"n":"Ratnapura"},"geometry":{"type":"Polygon","coordinates":[[[80.4953,6.3676],[80.5031,6.3674],[80.5088,6.3708],[80.5133,6.3697],[80.5337,6.3743],[80.5338,6.3882],[80.5447,6.3891],[80.5452,6.3946],[80.5496,6.3961],[80.5549,6.3895],[80.5653,6.3943],[80.5788,6.3906],[80.597,6.3975],[80.6143,6.395],[80.6188,6.3963],[80.6201,6.3867],[80.6156,6.3811],[80.6175,6.3711],[80.6096,6.3658],[80.6065,6.3597],[80.6112,6.3459],[80.6314,6.3515],[80.6613,6.3538],[80.6634,6.3398],[80.6572,6.3372],[80.6645,6.3273],[80.6708,6.327],[80.6752,6.3218],[80.6697,6.3187],[80.6701,6.306],[80.6953,6.3083],[80.704,6.3065],[80.7118,6.3008],[80.7324,6.2966],[80.7411,6.2896],[80.7598,6.2811],[80.771,6.2796],[80.7831,6.2748],[80.7871,6.27],[80.798,6.2671],[80.8246,6.2654],[80.8316,6.2691],[80.8579,6.272],[80.8692,6.2667],[80.8835,6.2457],[80.8926,6.2491],[80.9104,6.2381],[80.9311,6.2401],[80.9348,6.2317],[80.9397,6.2279],[80.9459,6.2362],[80.9505,6.2348],[80.9531,6.2388],[80.9477,6.2451],[80.9469,6.253],[80.9417,6.2593],[80.9413,6.2706],[80.9342,6.2729],[80.9344,6.2805],[80.9311,6.2883],[80.9214,6.2965],[80.9128,6.3146],[80.9066,6.322],[80.906,6.3274],[80.9093,6.3326],[80.9024,6.3374],[80.903,6.3439],[80.897,6.3493],[80.8654,6.357],[80.8625,6.3697],[80.8555,6.3741],[80.8532,6.3836],[80.8472,6.3862],[80.846,6.3927],[80.8388,6.4017],[80.8444,6.407],[80.8379,6.427],[80.8428,6.4339],[80.8362,6.4405],[80.8403,6.4416],[80.8393,6.4493],[80.8431,6.4561],[80.8387,6.4607],[80.8324,6.4757],[80.8306,6.4883],[80.8278,6.4901],[80.8394,6.5164],[80.8536,6.5318],[80.8636,6.5497],[80.8635,6.5563],[80.8608,6.5604],[80.867,6.574],[80.8661,6.5794],[80.8725,6.5819],[80.8693,6.5869],[80.8696,6.5928],[80.8766,6.5939],[80.8757,6.6014],[80.8786,6.6062],[80.8756,6.6106],[80.8852,6.6182],[80.8905,6.6314],[80.9036,6.639],[80.9054,6.6465],[80.9037,6.6506],[80.9074,6.6548],[80.9127,6.6718],[80.928,6.6876],[80.915,6.6948],[80.9134,6.6921],[80.9154,6.6887],[80.9129,6.6847],[80.9089,6.6835],[80.9079,6.6785],[80.8907,6.6756],[80.887,6.666],[80.8808,6.6638],[80.8666,6.662],[80.8636,6.6656],[80.8574,6.6575],[80.8506,6.6613],[80.8476,6.6666],[80.8363,6.6668],[80.8297,6.6696],[80.8255,6.6896],[80.8122,6.6978],[80.8118,6.7036],[80.8324,6.7119],[80.8336,6.7142],[80.8379,6.7143],[80.8425,6.7187],[80.8549,6.7194],[80.8503,6.7301],[80.8583,6.7364],[80.8579,6.7415],[80.8545,6.7464],[80.8347,6.7455],[80.827,6.7617],[80.8115,6.7557],[80.8129,6.762],[80.8087,6.7726],[80.8126,6.7854],[80.8084,6.7919],[80.7936,6.7806],[80.7893,6.774],[80.7745,6.7784],[80.7448,6.7583],[80.7315,6.7634],[80.7215,6.7589],[80.7127,6.7591],[80.7063,6.755],[80.6941,6.7592],[80.6649,6.7599],[80.6611,6.762],[80.6593,6.7546],[80.6538,6.7512],[80.6354,6.7534],[80.6151,6.7594],[80.5727,6.7639],[80.5599,6.7706],[80.5508,6.771],[80.5444,6.7756],[80.5274,6.768],[80.5116,6.7768],[80.501,6.7786],[80.4942,6.7849],[80.4886,6.7966],[80.49,6.7996],[80.4958,6.8003],[80.4977,6.8063],[80.5023,6.8085],[80.5007,6.8114],[80.4955,6.8106],[80.4921,6.8159],[80.496,6.8317],[80.4774,6.8309],[80.4583,6.8368],[80.4516,6.8331],[80.4421,6.836],[80.4409,6.8418],[80.432,6.8481],[80.43,6.8421],[80.424,6.8398],[80.4212,6.8454],[80.4,6.8597],[80.3907,6.8537],[80.3889,6.85],[80.3831,6.8496],[80.3796,6.8544],[80.3622,6.8484],[80.3574,6.8497],[80.3562,6.8461],[80.348,6.8418],[80.3487,6.8346],[80.3424,6.8333],[80.3405,6.8301],[80.3396,6.8326],[80.3375,6.8314],[80.3287,6.8363],[80.3189,6.8553],[80.3108,6.8623],[80.3017,6.8584],[80.2972,6.8594],[80.2948,6.8551],[80.2849,6.8555],[80.2849,6.8625],[80.2813,6.8658],[80.2822,6.8701],[80.2688,6.8743],[80.2607,6.8892],[80.2547,6.8925],[80.2508,6.9015],[80.241,6.9075],[80.2356,6.9026],[80.2332,6.9031],[80.2306,6.9242],[80.2265,6.9245],[80.224,6.9311],[80.2191,6.9261],[80.2192,6.9214],[80.2037,6.9126],[80.1999,6.9037],[80.1946,6.9041],[80.1889,6.8995],[80.1901,6.8926],[80.1837,6.8865],[80.1803,6.868],[80.175,6.8599],[80.1942,6.8515],[80.2022,6.8317],[80.2021,6.8194],[80.2001,6.8159],[80.189,6.815],[80.1872,6.8188],[80.1811,6.8142],[80.1785,6.8166],[80.1767,6.8121],[80.1809,6.7967],[80.1921,6.7818],[80.1896,6.7721],[80.1925,6.761],[80.2041,6.7386],[80.2054,6.7305],[80.1993,6.7314],[80.1987,6.7273],[80.204,6.7226],[80.2028,6.7205],[80.2158,6.6919],[80.2207,6.6904],[80.229,6.6779],[80.2417,6.6703],[80.2494,6.6586],[80.2517,6.6486],[80.2489,6.6423],[80.2495,6.637],[80.255,6.627],[80.2608,6.6226],[80.2747,6.6178],[80.2825,6.6179],[80.2979,6.599],[80.3032,6.5959],[80.3146,6.5712],[80.2953,6.5641],[80.3046,6.5468],[80.3045,6.5392],[80.313,6.5342],[80.3381,6.4931],[80.3803,6.4342],[80.3793,6.4283],[80.3813,6.4256],[80.4191,6.3924],[80.4315,6.3893],[80.4405,6.3947],[80.4513,6.3877],[80.4652,6.386],[80.4721,6.3782],[80.4813,6.381],[80.491,6.3801],[80.4939,6.3777],[80.4953,6.3676]]]}},{"type":"Feature","properties":{"n":"Kandy"},"geometry":{"type":"Polygon","coordinates":[[[80.9742,7.4884],[80.9589,7.4876],[80.9572,7.4897],[80.9456,7.4868],[80.9412,7.4897],[80.9324,7.4896],[80.9322,7.4818],[80.9283,7.4796],[80.927,7.4756],[80.923,7.4748],[80.9182,7.4614],[80.9095,7.4649],[80.9065,7.4586],[80.8991,7.4747],[80.8866,7.4732],[80.8851,7.4696],[80.8795,7.4674],[80.8793,7.464],[80.8731,7.47],[80.8627,7.4748],[80.8501,7.4725],[80.8397,7.4631],[80.8314,7.46],[80.8204,7.4599],[80.8069,7.4476],[80.8084,7.4401],[80.8018,7.4388],[80.7903,7.4278],[80.7854,7.4305],[80.7786,7.4301],[80.7739,7.4379],[80.764,7.4416],[80.7607,7.4487],[80.7533,7.4486],[80.7402,7.4634],[80.7325,7.4646],[80.733,7.4716],[80.7278,7.4746],[80.7184,7.4668],[80.7062,7.4632],[80.7012,7.4573],[80.7121,7.4261],[80.7092,7.4236],[80.7068,7.4141],[80.7082,7.4044],[80.706,7.3952],[80.7009,7.3923],[80.6984,7.387],[80.654,7.3846],[80.6411,7.3966],[80.6247,7.4019],[80.6145,7.4144],[80.5999,7.4207],[80.5934,7.4282],[80.5877,7.4283],[80.5788,7.4388],[80.5731,7.4405],[80.5719,7.4537],[80.5663,7.4575],[80.5577,7.4562],[80.5552,7.4496],[80.543,7.4523],[80.5403,7.4497],[80.5482,7.4422],[80.5469,7.4343],[80.5538,7.4265],[80.5565,7.4195],[80.549,7.4149],[80.5385,7.4218],[80.538,7.4156],[80.5291,7.4183],[80.5293,7.4122],[80.5168,7.4137],[80.5155,7.4063],[80.5194,7.3993],[80.515,7.3947],[80.518,7.3893],[80.5114,7.386],[80.5062,7.3867],[80.4935,7.3946],[80.48,7.407],[80.4736,7.4065],[80.4703,7.4128],[80.4616,7.411],[80.4619,7.4053],[80.4697,7.4022],[80.4722,7.3937],[80.4698,7.3927],[80.4643,7.3766],[80.4579,7.3745],[80.4514,7.3617],[80.4598,7.3526],[80.457,7.35],[80.453,7.3511],[80.4452,7.3574],[80.4373,7.3533],[80.4262,7.3596],[80.4221,7.3552],[80.4265,7.3323],[80.44,7.3189],[80.455,7.313],[80.4576,7.3062],[80.4814,7.2848],[80.4832,7.2801],[80.4807,7.2726],[80.476,7.2697],[80.4798,7.2665],[80.4795,7.2636],[80.4891,7.2627],[80.4941,7.2584],[80.504,7.258],[80.5086,7.2535],[80.5105,7.2452],[80.5188,7.2409],[80.5225,7.2345],[80.5224,7.2203],[80.5126,7.213],[80.5133,7.2081],[80.5159,7.2039],[80.5263,7.1977],[80.5336,7.1863],[80.5451,7.1786],[80.5481,7.1694],[80.5466,7.1667],[80.5334,7.166],[80.5293,7.1617],[80.5346,7.1504],[80.5295,7.1516],[80.5258,7.1465],[80.5222,7.1518],[80.5103,7.149],[80.5063,7.1336],[80.5025,7.1345],[80.5005,7.128],[80.4922,7.1284],[80.4821,7.1247],[80.4784,7.1275],[80.4703,7.1223],[80.4558,7.1221],[80.4453,7.1113],[80.4542,7.1013],[80.4647,7.0654],[80.4711,7.0652],[80.4638,7.0575],[80.4609,7.0473],[80.4609,7.0313],[80.4634,7.0284],[80.4734,7.0373],[80.4891,7.026],[80.4975,7.0261],[80.4989,7.0241],[80.4971,7.0198],[80.5034,7.0144],[80.5055,7.0072],[80.513,6.9967],[80.5159,6.9822],[80.5401,6.962],[80.5531,6.9405],[80.564,6.939],[80.5672,6.9453],[80.578,6.9444],[80.5777,6.9594],[80.5895,6.9649],[80.5941,6.9858],[80.6014,6.9907],[80.6028,6.9945],[80.5902,7.0081],[80.5853,7.0194],[80.575,7.0253],[80.5731,7.0303],[80.5618,7.0403],[80.562,7.0479],[80.5521,7.065],[80.5496,7.0655],[80.5455,7.062],[80.542,7.063],[80.5397,7.0589],[80.5381,7.0618],[80.5412,7.0734],[80.5526,7.0788],[80.5543,7.0816],[80.5611,7.0768],[80.5716,7.082],[80.5742,7.0763],[80.5779,7.0744],[80.5859,7.0772],[80.6137,7.0762],[80.6271,7.0793],[80.633,7.0853],[80.6378,7.0993],[80.6486,7.1029],[80.6638,7.1018],[80.6778,7.0937],[80.6889,7.0927],[80.6976,7.1129],[80.7101,7.1258],[80.7151,7.1351],[80.7211,7.1391],[80.7241,7.1506],[80.7299,7.1587],[80.7391,7.1618],[80.7439,7.1704],[80.7709,7.1983],[80.7662,7.2152],[80.7689,7.2172],[80.7694,7.2226],[80.7645,7.2268],[80.7667,7.2368],[80.7608,7.2394],[80.753,7.2512],[80.7559,7.2545],[80.7504,7.27],[80.7522,7.2736],[80.7601,7.2692],[80.778,7.249],[80.7832,7.2475],[80.789,7.2369],[80.8017,7.2264],[80.8023,7.2051],[80.8108,7.1987],[80.8231,7.1944],[80.8378,7.1944],[80.8504,7.1903],[80.8613,7.1943],[80.8675,7.192],[80.8804,7.1945],[80.882,7.1926],[80.8804,7.1856],[80.8849,7.1808],[80.8925,7.1877],[80.8985,7.1989],[80.9173,7.2024],[80.9277,7.1996],[80.9417,7.202],[80.9623,7.1959],[80.9729,7.1963],[80.9833,7.2126],[81.0007,7.2134],[81.0082,7.2165],[81.0165,7.2334],[81.0002,7.2936],[80.9891,7.3182],[80.986,7.3379],[80.9763,7.3629],[80.9756,7.3708],[80.9797,7.3787],[80.9827,7.3937],[80.9786,7.4042],[80.971,7.4091],[80.9695,7.4133],[80.9705,7.42],[80.9752,7.427],[80.9727,7.4625],[80.9742,7.4884]]]}},{"type":"Feature","properties":{"n":"Matale"},"geometry":{"type":"Polygon","coordinates":[[[80.9891,7.7217],[80.9803,7.7161],[80.972,7.7172],[80.9488,7.7128],[80.9426,7.7136],[80.9377,7.7101],[80.9279,7.7083],[80.922,7.7083],[80.9065,7.7159],[80.8836,7.7151],[80.8819,7.698],[80.8769,7.6797],[80.8714,7.6849],[80.8703,7.6895],[80.8609,7.6878],[80.8555,7.6909],[80.8526,7.6946],[80.8549,7.6969],[80.8531,7.7011],[80.8491,7.6988],[80.8464,7.6932],[80.8419,7.6923],[80.8369,7.6813],[80.8253,7.6787],[80.8209,7.6799],[80.8093,7.6717],[80.8048,7.6796],[80.7788,7.6779],[80.7738,7.684],[80.7708,7.6838],[80.7679,7.6913],[80.761,7.6956],[80.7656,7.6952],[80.7698,7.6905],[80.773,7.694],[80.7745,7.7019],[80.7638,7.734],[80.7636,7.7774],[80.7659,7.7868],[80.7612,7.7922],[80.7688,7.8023],[80.7764,7.8022],[80.7816,7.8056],[80.7857,7.8001],[80.7956,7.8049],[80.7935,7.8173],[80.8024,7.822],[80.8078,7.8477],[80.811,7.852],[80.8099,7.8627],[80.8194,7.9092],[80.8196,7.9245],[80.8298,7.9399],[80.834,7.9542],[80.8533,7.9627],[80.84,7.9722],[80.8256,7.9713],[80.8206,7.9775],[80.8205,7.9809],[80.8148,7.9835],[80.7991,7.9766],[80.7985,7.9606],[80.7879,7.9625],[80.7784,7.9682],[80.7795,7.9948],[80.7744,7.9985],[80.7723,7.9956],[80.7711,8.0005],[80.7605,8.0068],[80.7561,8.0123],[80.7504,8.0113],[80.7439,8.006],[80.719,7.999],[80.713,7.9915],[80.7059,7.9918],[80.6823,7.9567],[80.6685,7.9634],[80.6587,7.9601],[80.6565,7.9483],[80.6529,7.9466],[80.6541,7.9152],[80.6426,7.9096],[80.6324,7.9002],[80.6346,7.8946],[80.6379,7.8939],[80.639,7.8885],[80.6229,7.8826],[80.6228,7.8686],[80.6159,7.8686],[80.5998,7.8558],[80.5931,7.8581],[80.5902,7.8672],[80.576,7.8684],[80.5704,7.8624],[80.5652,7.8489],[80.5244,7.8273],[80.5078,7.8282],[80.4999,7.8261],[80.5002,7.8136],[80.4965,7.8093],[80.4991,7.7826],[80.5032,7.7797],[80.5036,7.7744],[80.5168,7.7748],[80.5197,7.7724],[80.521,7.7608],[80.5295,7.7444],[80.5339,7.7436],[80.5373,7.7389],[80.5366,7.7089],[80.5454,7.7087],[80.5495,7.7053],[80.5474,7.6978],[80.5484,7.6887],[80.5538,7.6663],[80.5519,7.662],[80.5453,7.6612],[80.5458,7.6549],[80.5486,7.6542],[80.5498,7.6484],[80.5491,7.6422],[80.5536,7.6388],[80.5544,7.6351],[80.5658,7.6311],[80.5663,7.6207],[80.5779,7.605],[80.5741,7.6006],[80.5743,7.5969],[80.569,7.594],[80.5737,7.5867],[80.5751,7.5749],[80.5713,7.5766],[80.5671,7.5728],[80.5626,7.5728],[80.5615,7.5683],[80.5567,7.5638],[80.5527,7.5511],[80.5546,7.5478],[80.5528,7.5386],[80.5571,7.5378],[80.5657,7.5242],[80.5631,7.5139],[80.5689,7.5167],[80.569,7.5111],[80.5738,7.5087],[80.571,7.5011],[80.5714,7.4924],[80.5743,7.491],[80.571,7.487],[80.5764,7.4787],[80.57,7.4778],[80.5699,7.4746],[80.5648,7.4694],[80.5663,7.4575],[80.5719,7.4537],[80.5731,7.4405],[80.5788,7.4388],[80.5877,7.4283],[80.5934,7.4282],[80.5999,7.4207],[80.6145,7.4144],[80.6247,7.4019],[80.6411,7.3966],[80.654,7.3846],[80.6984,7.387],[80.7009,7.3923],[80.706,7.3952],[80.7082,7.4044],[80.7068,7.4141],[80.7092,7.4236],[80.7121,7.4261],[80.7012,7.4573],[80.7062,7.4632],[80.7184,7.4668],[80.7278,7.4746],[80.733,7.4716],[80.7325,7.4646],[80.7402,7.4634],[80.7533,7.4486],[80.7607,7.4487],[80.764,7.4416],[80.7739,7.4379],[80.7786,7.4301],[80.7854,7.4305],[80.7903,7.4278],[80.8018,7.4388],[80.8084,7.4401],[80.8069,7.4476],[80.8204,7.4599],[80.8314,7.46],[80.8397,7.4631],[80.8501,7.4725],[80.8627,7.4748],[80.8731,7.47],[80.8793,7.464],[80.8795,7.4674],[80.8851,7.4696],[80.8866,7.4732],[80.8991,7.4747],[80.9065,7.4586],[80.9095,7.4649],[80.9182,7.4614],[80.923,7.4748],[80.927,7.4756],[80.9283,7.4796],[80.9322,7.4818],[80.9324,7.4896],[80.9412,7.4897],[80.9456,7.4868],[80.9572,7.4897],[80.9589,7.4876],[80.9742,7.4884],[80.9711,7.534],[80.9717,7.5666],[80.9732,7.5777],[80.9775,7.5872],[80.9757,7.5978],[80.9793,7.6117],[80.9779,7.625],[80.9817,7.6432],[80.9947,7.6615],[80.9928,7.6777],[80.9875,7.6888],[80.9926,7.6987],[80.9891,7.7217]]]}},{"type":"Feature","properties":{"n":"Nuwara Eliya"},"geometry":{"type":"Polygon","coordinates":[[[80.9458,7.2004],[80.9417,7.202],[80.9277,7.1996],[80.9173,7.2024],[80.8985,7.1989],[80.8925,7.1877],[80.8849,7.1808],[80.8804,7.1856],[80.882,7.1926],[80.8804,7.1945],[80.8675,7.192],[80.8613,7.1943],[80.8504,7.1903],[80.8378,7.1944],[80.8231,7.1944],[80.8108,7.1987],[80.8023,7.2051],[80.8017,7.2264],[80.789,7.2369],[80.7832,7.2475],[80.778,7.249],[80.7601,7.2692],[80.7522,7.2736],[80.7504,7.27],[80.7559,7.2545],[80.753,7.2512],[80.7608,7.2394],[80.7667,7.2368],[80.7645,7.2268],[80.7694,7.2226],[80.7689,7.2172],[80.7662,7.2152],[80.7709,7.1983],[80.7439,7.1704],[80.7391,7.1618],[80.7299,7.1587],[80.7241,7.1506],[80.7211,7.1391],[80.7151,7.1351],[80.7101,7.1258],[80.6976,7.1129],[80.6889,7.0927],[80.6778,7.0937],[80.6638,7.1018],[80.6486,7.1029],[80.6378,7.0993],[80.633,7.0853],[80.6271,7.0793],[80.6137,7.0762],[80.5859,7.0772],[80.5779,7.0744],[80.5742,7.0763],[80.5716,7.082],[80.5611,7.0768],[80.5543,7.0816],[80.5526,7.0788],[80.5412,7.0734],[80.5381,7.0618],[80.5397,7.0589],[80.542,7.063],[80.5455,7.062],[80.5496,7.0655],[80.5521,7.065],[80.562,7.0479],[80.5618,7.0403],[80.5731,7.0303],[80.575,7.0253],[80.5853,7.0194],[80.5902,7.0081],[80.6028,6.9945],[80.6014,6.9907],[80.5941,6.9858],[80.5895,6.9649],[80.5777,6.9594],[80.578,6.9444],[80.5672,6.9453],[80.564,6.939],[80.5531,6.9405],[80.5401,6.962],[80.5159,6.9822],[80.513,6.9967],[80.5055,7.0072],[80.5034,7.0144],[80.4971,7.0198],[80.4989,7.0241],[80.4975,7.0261],[80.4891,7.026],[80.4734,7.0373],[80.4634,7.0284],[80.4643,7.0244],[80.4681,7.0243],[80.4661,7.0222],[80.4674,7.0171],[80.4605,7.0127],[80.4502,6.9993],[80.4376,6.9981],[80.4331,6.9926],[80.4324,6.9857],[80.4361,6.9841],[80.4402,6.976],[80.4441,6.9746],[80.4456,6.9654],[80.4376,6.9558],[80.4392,6.9447],[80.4375,6.9226],[80.4344,6.9219],[80.433,6.9136],[80.4548,6.9061],[80.4601,6.9002],[80.4674,6.9018],[80.4735,6.8981],[80.48,6.8985],[80.4865,6.8932],[80.4913,6.8932],[80.498,6.887],[80.4949,6.8717],[80.5002,6.8655],[80.5004,6.8573],[80.5094,6.8528],[80.5114,6.8475],[80.5038,6.8357],[80.496,6.8317],[80.4917,6.8199],[80.4955,6.8106],[80.5007,6.8114],[80.5023,6.8085],[80.4977,6.8063],[80.4958,6.8003],[80.49,6.7996],[80.4886,6.7966],[80.4942,6.7849],[80.501,6.7786],[80.5116,6.7768],[80.5274,6.768],[80.5444,6.7756],[80.5508,6.771],[80.5599,6.7706],[80.5727,6.7639],[80.6151,6.7594],[80.6354,6.7534],[80.6538,6.7512],[80.6593,6.7546],[80.6611,6.762],[80.6649,6.7599],[80.6941,6.7592],[80.7063,6.755],[80.7127,6.7591],[80.7215,6.7589],[80.7315,6.7634],[80.7448,6.7583],[80.7745,6.7784],[80.7893,6.774],[80.7936,6.7806],[80.8145,6.7957],[80.8252,6.7931],[80.8343,6.8027],[80.8338,6.8076],[80.8372,6.8119],[80.8175,6.8193],[80.8139,6.8285],[80.8168,6.8323],[80.8244,6.8302],[80.8316,6.8337],[80.8375,6.8451],[80.8314,6.8493],[80.8294,6.8555],[80.8234,6.8565],[80.8205,6.8621],[80.824,6.8765],[80.8173,6.882],[80.8118,6.8798],[80.8144,6.8915],[80.8084,6.8942],[80.81,6.9017],[80.7975,6.9068],[80.7779,6.9104],[80.7767,6.9163],[80.7818,6.9216],[80.8069,6.9177],[80.8162,6.9192],[80.8304,6.9299],[80.8354,6.9558],[80.8622,6.9782],[80.8749,6.9737],[80.8917,6.9785],[80.8985,6.9773],[80.9195,6.9909],[80.929,7.0201],[80.9292,7.0382],[80.9383,7.0428],[80.9411,7.0543],[80.9556,7.0631],[80.9582,7.0742],[80.9651,7.0777],[80.9531,7.0902],[80.9548,7.0971],[80.9513,7.1014],[80.9552,7.1054],[80.957,7.1147],[80.9647,7.1209],[80.959,7.1274],[80.9499,7.1298],[80.949,7.1386],[80.9519,7.1451],[80.9607,7.1421],[80.959,7.1464],[80.9613,7.1571],[80.9568,7.17],[80.9529,7.1766],[80.9487,7.1784],[80.9487,7.1849],[80.9425,7.1935],[80.9425,7.1971],[80.9458,7.2004]]]}},{"type":"Feature","properties":{"n":"Trincomalee"},"geometry":{"type":"Polygon","coordinates":[[[80.7658,8.937],[80.7621,8.9361],[80.753,8.9051],[80.781,8.9167],[80.783,8.9202],[80.8123,8.9153],[80.8329,8.9031],[80.8407,8.8949],[80.8535,8.887],[80.8715,8.8821],[80.8873,8.8694],[80.8911,8.8575],[80.8966,8.8535],[80.9089,8.8365],[80.9126,8.8369],[80.9109,8.8236],[80.901,8.8164],[80.8929,8.8041],[80.8924,8.7994],[80.8831,8.7886],[80.8821,8.7739],[80.8796,8.7685],[80.8788,8.7527],[80.8822,8.7469],[80.8906,8.7434],[80.8933,8.7322],[80.8914,8.7225],[80.9116,8.6892],[80.9134,8.681],[80.9137,8.6734],[80.9088,8.667],[80.9,8.6625],[80.9006,8.6589],[80.8934,8.6461],[80.8917,8.6367],[80.8971,8.6315],[80.8939,8.6219],[80.896,8.6181],[80.9159,8.6051],[80.9147,8.5984],[80.9171,8.5848],[80.944,8.5518],[80.9468,8.5357],[80.9448,8.5243],[80.9472,8.5075],[80.9514,8.5033],[80.9633,8.4986],[80.9651,8.4925],[80.9633,8.4857],[80.9863,8.4847],[80.9909,8.4748],[80.989,8.471],[80.9829,8.4681],[80.9717,8.4686],[80.9726,8.4601],[80.9629,8.4538],[80.9538,8.4392],[80.9414,8.3978],[80.9332,8.3896],[80.9273,8.3735],[80.9265,8.3659],[80.9292,8.358],[80.9242,8.3369],[80.9308,8.3451],[80.9408,8.3425],[80.9521,8.3229],[80.9623,8.3237],[80.9674,8.3179],[80.9801,8.3125],[80.9888,8.2731],[80.999,8.2727],[81.0174,8.279],[81.026,8.2769],[81.0363,8.2789],[81.0462,8.2758],[81.0501,8.2722],[81.0776,8.2716],[81.0901,8.2622],[81.1056,8.256],[81.1108,8.2599],[81.1185,8.259],[81.1241,8.263],[81.1364,8.2593],[81.1394,8.2609],[81.159,8.2395],[81.1662,8.2346],[81.1727,8.2353],[81.1773,8.2306],[81.1869,8.2274],[81.1962,8.232],[81.1994,8.2314],[81.2044,8.2269],[81.2037,8.2218],[81.2062,8.2156],[81.2015,8.1971],[81.2041,8.1925],[81.2045,8.184],[81.2106,8.1833],[81.2134,8.1795],[81.2069,8.163],[81.1973,8.1601],[81.1921,8.1543],[81.193,8.1512],[81.208,8.1488],[81.2174,8.1547],[81.2326,8.1565],[81.2355,8.1686],[81.2345,8.1741],[81.2369,8.1785],[81.2429,8.1791],[81.2376,8.1943],[81.2431,8.1964],[81.2514,8.21],[81.2503,8.2261],[81.2564,8.2251],[81.2587,8.2321],[81.2634,8.2312],[81.2661,8.2353],[81.269,8.2348],[81.2701,8.2379],[81.2658,8.241],[81.2726,8.2412],[81.2734,8.2474],[81.28,8.2498],[81.2824,8.2574],[81.2859,8.2571],[81.2881,8.2611],[81.2982,8.255],[81.3116,8.252],[81.3303,8.2657],[81.3429,8.264],[81.3538,8.2693],[81.3587,8.2649],[81.3561,8.2631],[81.3557,8.2573],[81.3611,8.2559],[81.3643,8.258],[81.3709,8.2539],[81.3875,8.2532],[81.3939,8.2488],[81.4078,8.2485],[81.3956,8.3024],[81.3956,8.313],[81.394,8.3123],[81.389,8.3277],[81.3885,8.3478],[81.3933,8.3592],[81.387,8.3641],[81.3815,8.377],[81.3619,8.458],[81.353,8.4857],[81.3538,8.4947],[81.3489,8.4982],[81.3482,8.5015],[81.3398,8.5054],[81.322,8.5245],[81.3171,8.5249],[81.313,8.5152],[81.3025,8.5094],[81.2805,8.5071],[81.2838,8.4926],[81.2881,8.4866],[81.2852,8.4751],[81.2787,8.4652],[81.2599,8.4634],[81.2535,8.4603],[81.2534,8.462],[81.2441,8.4619],[81.2495,8.4596],[81.2446,8.4598],[81.2447,8.4562],[81.2422,8.4604],[81.2436,8.4563],[81.2402,8.4582],[81.2378,8.4541],[81.2374,8.4571],[81.2385,8.456],[81.2431,8.4619],[81.2331,8.4633],[81.2308,8.4597],[81.2275,8.4618],[81.2227,8.4607],[81.2036,8.4692],[81.194,8.4857],[81.1911,8.5056],[81.1809,8.5086],[81.1781,8.5119],[81.1708,8.5137],[81.153,8.506],[81.1497,8.5072],[81.1456,8.4945],[81.1389,8.4886],[81.1358,8.4882],[81.1259,8.4962],[81.1224,8.5025],[81.1214,8.5086],[81.1339,8.5118],[81.1375,8.5193],[81.1496,8.5317],[81.1478,8.5337],[81.149,8.5374],[81.1549,8.5451],[81.167,8.5389],[81.1776,8.5257],[81.1815,8.5323],[81.1798,8.5362],[81.1825,8.5375],[81.1868,8.5342],[81.1894,8.5312],[81.1857,8.5235],[81.1858,8.513],[81.1902,8.5132],[81.1924,8.5086],[81.1988,8.5059],[81.2066,8.5101],[81.2128,8.5092],[81.21,8.5138],[81.2109,8.517],[81.2074,8.5195],[81.2091,8.5249],[81.2052,8.5274],[81.2141,8.5312],[81.2012,8.5296],[81.2012,8.5349],[81.2055,8.5355],[81.2021,8.5394],[81.201,8.5369],[81.1986,8.5394],[81.2029,8.5425],[81.1987,8.5457],[81.1917,8.5443],[81.1941,8.5491],[81.2062,8.5548],[81.193,8.5537],[81.1918,8.5565],[81.194,8.5593],[81.1916,8.5628],[81.1965,8.5661],[81.1984,8.5618],[81.2003,8.5632],[81.1969,8.5661],[81.1991,8.5697],[81.1933,8.5686],[81.1923,8.5715],[81.1943,8.5741],[81.1988,8.5731],[81.1983,8.5775],[81.2003,8.5791],[81.2014,8.5753],[81.2046,8.5755],[81.2029,8.5682],[81.2199,8.5842],[81.2218,8.5816],[81.2108,8.5719],[81.2075,8.5653],[81.2244,8.5759],[81.2277,8.5735],[81.2346,8.5612],[81.2218,8.5444],[81.2223,8.5429],[81.2321,8.5476],[81.2266,8.5395],[81.2273,8.5357],[81.2322,8.5361],[81.2398,8.5434],[81.2448,8.5444],[81.2463,8.5485],[81.2443,8.5569],[81.2469,8.5599],[81.2432,8.5611],[81.2438,8.5647],[81.2401,8.5653],[81.2388,8.5712],[81.2402,8.5744],[81.245,8.5759],[81.246,8.5826],[81.2405,8.5763],[81.2328,8.5804],[81.2247,8.5938],[81.2196,8.6112],[81.2196,8.6203],[81.2269,8.6287],[81.2233,8.6386],[81.2255,8.6532],[81.2052,8.6754],[81.1887,8.7095],[81.179,8.724],[81.1761,8.7338],[81.1694,8.7365],[81.1608,8.7451],[81.1484,8.7677],[81.143,8.7674],[81.1206,8.7905],[81.102,8.8207],[81.1,8.8208],[81.0926,8.8339],[81.0886,8.8517],[81.0848,8.8548],[81.0859,8.8605],[81.0814,8.8588],[81.0782,8.8622],[81.0802,8.8678],[81.0679,8.8573],[81.0572,8.8629],[81.0476,8.8724],[81.0301,8.8921],[81.0074,8.9375],[81.0028,8.9358],[80.9966,8.9419],[80.9865,8.9587],[80.9659,8.9848],[80.9599,8.9765],[80.9592,8.9711],[80.965,8.9586],[80.965,8.9535],[80.9633,8.9496],[80.9582,8.9477],[80.9535,8.9516],[80.9401,8.9416],[80.94,8.9397],[80.9456,8.9402],[80.9472,8.938],[80.9453,8.9306],[80.941,8.9282],[80.9372,8.9289],[80.9316,8.9374],[80.9283,8.9358],[80.9274,8.9306],[80.9249,8.9287],[80.9218,8.9346],[80.9228,8.9374],[80.9156,8.9357],[80.9152,8.9389],[80.9139,8.9372],[80.9116,8.9511],[80.9053,8.948],[80.9099,8.9567],[80.9053,8.9613],[80.9061,8.9682],[80.9108,8.9706],[80.9139,8.9667],[80.9204,8.9679],[80.9264,8.964],[80.9307,8.9711],[80.9245,8.9704],[80.9163,8.9786],[80.9267,8.9886],[80.9269,8.9921],[80.9172,8.9846],[80.9075,8.9864],[80.9018,8.9849],[80.9001,8.9787],[80.8964,8.9815],[80.8896,8.9812],[80.8871,8.9729],[80.8831,8.9692],[80.8742,8.9684],[80.8739,8.9642],[80.8692,8.9623],[80.8697,8.9595],[80.8599,8.9579],[80.8496,8.9612],[80.8334,8.9605],[80.8276,8.9555],[80.7755,8.9467],[80.7658,8.937]]]}}]}';
+
+// ---- FarmerIndex.gs
+// A compact, searchable copy of the farmer data, kept next to the real tabs so the app stays fast with tens of thousands of farmers.
+//
+// The Farmers, Fields and FarmerAnswers tabs remain the real record. FarmerIndex holds, for every farmer, the few columns that
+// search, the Origin Map and the farmer finder need, plus the sheet row numbers of that farmer's own rows. With the row numbers,
+// opening or saving one farmer reads and writes only those rows instead of scanning whole tabs.
+//
+// Layout of the FarmerIndex tab: the farmers are grouped in chunks of INDEX_CHUNK by farmer number, and chunk n lives in row n + 2.
+// A chunk is stored as JSON text, cut into pieces of at most 48,000 characters (one piece per cell, a cell holds 50,000).
+// Opening one farmer reads one chunk row; search, the map and the finder read all of them.
+// The cell in column L of row 2 holds a small status note: how many rows each tab had when the index was last updated, and a
+// "dirty" flag that is on while a save is in progress. If the note does not match the real tabs, or a save was interrupted,
+// the whole index is rebuilt from the tabs automatically, so a stale index is never used.
+//
+// Entry for one farmer: { id, r: Farmers row, m: 1 for mock data, v: [the INDEX_FARMER_COLS values],
+//                         f: [[Fields row, crop, acres, season, hasGps], ...], a: [[FarmerAnswers row, question_id, option_id], ...] }
+
+const INDEX_SHEET = 'FarmerIndex';
+const INDEX_VERSION = 3;          // 3: the farm's GPS point was added to each farmer's values
+const INDEX_CHUNK = 100;          // farmers per stored chunk
+const INDEX_PIECES = 8;           // cells per chunk row
+const INDEX_PIECE_CHARS = 48000;  // characters per cell
+const INDEX_PIECE_COL = 4;        // first piece is in column D
+const INDEX_META_COL = INDEX_PIECE_COL + INDEX_PIECES;   // column L
+const INDEX_FARMER_COLS = ['farmer_id', 'full_name', 'nic', 'date_of_birth', 'gender', 'language', 'farmer_type', 'phone_primary',
+  'phone_alt', 'district', 'ds_division', 'village', 'marketing_consent', 'do_not_contact', 'status', 'created_at', 'latitude', 'longitude', 'gps_source'];
+
+var INDEX_MEMO_ = null;           // what has been loaded in this request
+// Rows appended to the farmer tabs since the save began, so the row counts in the status note can be kept without re-counting.
+var INDEX_APPENDED_ = { Farmers: 0, Fields: 0, FarmerAnswers: 0 };
+
+function farmerNumber_(id) { return parseInt(String(id).replace(/\D/g, ''), 10) || 0; }
+function chunkOfFarmer_(id) { return Math.floor((farmerNumber_(id) - 1) / INDEX_CHUNK); }
+function chunkRow_(n) { return n + 2; }
+
+// A Date is turned into the day it is in Sri Lanka (the sheet is in Asia/Colombo: a farmer registered at 1 am on the 5th is the 5th, not the 4th in UTC)
+function isoDay_(v) { return v instanceof Date ? new Date(v.getTime() + 330 * 60000).toISOString().slice(0, 10) : String(v === undefined || v === null ? '' : v).slice(0, 10); }
+function isMockNote_(notes) { return String(notes === undefined || notes === null ? '' : notes).indexOf(MOCK_NOTE) === 0; }
+
+// ---------- building entries ----------
+
+function fieldEntry_(f, row) {
+  return [row, f.crop, Number(f.acres) || 0, f.season === undefined ? '' : f.season, (f.latitude !== '' && f.latitude !== undefined && f.longitude !== '' && f.longitude !== undefined) ? 1 : 0];
+}
+
+function answerEntry_(a, row) { return [row, a.question_id, a.option_id === undefined ? '' : a.option_id]; }
+
+function makeEntry_(farmer, row, fieldEntries, answerEntries) {
+  return {
+    id: farmer.farmer_id, r: row, m: isMockNote_(farmer.notes) ? 1 : 0,
+    v: INDEX_FARMER_COLS.map(c => (c === 'created_at' ? isoDay_(farmer[c]) : (farmer[c] === undefined || farmer[c] === null ? '' : farmer[c]))),
+    f: fieldEntries, a: answerEntries
+  };
+}
+
+// ---------- chunk text ----------
+
+function toWire_(e) { return [e.id, e.r, e.m, e.v, e.f, e.a]; }
+function fromWire_(w) { return { id: w[0], r: w[1], m: w[2], v: w[3], f: w[4], a: w[5] }; }
+
+// The JSON of a chunk cut into cell-sized pieces (never between the two halves of a surrogate pair).
+function encodeChunk_(entries) {
+  const json = JSON.stringify(entries.map(toWire_));
+  const pieces = [];
+  let i = 0;
+  while (i < json.length) {
+    let end = Math.min(i + INDEX_PIECE_CHARS, json.length);
+    const last = json.charCodeAt(end - 1);
+    if (end < json.length && last >= 0xD800 && last <= 0xDBFF) end--;
+    pieces.push(json.slice(i, end));
+    i = end;
+  }
+  if (pieces.length > INDEX_PIECES) throw new Error('An index chunk is too large (' + json.length + ' characters). Lower INDEX_CHUNK.');
+  while (pieces.length < INDEX_PIECES) pieces.push('');
+  return pieces;
+}
+
+function decodeChunk_(pieces) {
+  const json = pieces.join('');
+  return json ? JSON.parse(json).map(fromWire_) : [];
+}
+
+function indexSheet_() { return sheet_(INDEX_SHEET); }
+
+function readMeta_() {
+  const sh = indexSheet_();
+  if (sh.getMaxRows() < 2 || sh.getMaxColumns() < INDEX_META_COL) return null;
+  const raw = sh.getRange(2, INDEX_META_COL).getValue();
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (e) { return null; }
+}
+
+function tabCounts_() {
+  return {
+    farmers: Math.max(sheet_('Farmers').getLastRow() - 1, 0),
+    fields: Math.max(sheet_('Fields').getLastRow() - 1, 0),
+    answers: Math.max(sheet_('FarmerAnswers').getLastRow() - 1, 0)
+  };
+}
+
+function putMeta_(meta) {
+  const sh = indexSheet_();
+  if (sh.getMaxRows() < 2) sh.insertRowsAfter(sh.getMaxRows(), 2 - sh.getMaxRows());
+  sh.getRange(2, INDEX_META_COL).setValue(JSON.stringify(meta));
+  indexState_().meta = meta;
+}
+
+// Records how many rows each tab has now. dirty = a save is in progress.
+function writeMeta_(dirty) {
+  const c = tabCounts_();
+  const meta = { v: INDEX_VERSION, farmers: c.farmers, fields: c.fields, answers: c.answers, dirty: dirty ? 1 : 0, at: new Date().toISOString() };
+  putMeta_(meta);
+  indexState_().counted = true;
+  return meta;
+}
+
+// ---------- loading ----------
+
+function indexState_() {
+  if (!INDEX_MEMO_) INDEX_MEMO_ = { chunks: {}, meta: undefined, counted: false, view: null };
+  return INDEX_MEMO_;
+}
+
+// True when the index can be used. strict also compares the row counts of the real tabs (a few extra reads).
+function indexTrusted_(strict) {
+  const st = indexState_();
+  if (st.meta === undefined) st.meta = readMeta_();
+  const m = st.meta;
+  if (!m || m.v !== INDEX_VERSION || m.dirty) return false;
+  if (strict && !st.counted) {
+    const c = tabCounts_();
+    if (m.farmers !== c.farmers || m.fields !== c.fields || m.answers !== c.answers) return false;
+    st.counted = true;
+  }
+  return true;
+}
+
+function indexEnsure_(strict) {
+  if (!indexTrusted_(strict)) indexRebuild_();
+}
+
+// One chunk's farmers, read from the index tab the first time they are needed in a request.
+function indexChunk_(n) {
+  const st = indexState_();
+  if (st.chunks[n]) return st.chunks[n];
+  const sh = indexSheet_();
+  const row = chunkRow_(n);
+  let list = [];
+  if (row <= sh.getLastRow()) {
+    const v = sh.getRange(row, 1, 1, INDEX_META_COL - 1).getValues()[0];
+    list = decodeChunk_(v.slice(INDEX_PIECE_COL - 1, INDEX_META_COL - 1).map(String));
+  }
+  st.chunks[n] = list;
+  return list;
+}
+
+// The index entry of one farmer (reads only that farmer's chunk), or null.
+function indexEntry_(farmerId) {
+  // An id without a number ('', 'nope', 'F000000') has no chunk: chunk -1 would be the header row of the index tab.
+  if (!(farmerNumber_(farmerId) >= 1)) return null;
+  indexEnsure_(false);
+  const n = chunkOfFarmer_(farmerId);
+  let e = indexChunk_(n).find(x => x.id === farmerId);
+  if (!e) {
+    // Not there: either no such farmer, or the index is behind the tabs. Compare the tabs before answering.
+    if (!indexTrusted_(true)) { indexRebuild_(); e = indexChunk_(n).find(x => x.id === farmerId); }
+  }
+  return e || null;
+}
+
+// Every farmer: { entries, byId }. Reads the whole index (about a second for 30,000 farmers).
+function indexLoad_() {
+  indexEnsure_(true);
+  const st = indexState_();
+  if (st.view) return st.view;
+  const sh = indexSheet_();
+  const last = sh.getLastRow();
+  if (last >= 2) {
+    const values = sh.getRange(2, 1, last - 1, INDEX_META_COL - 1).getValues();
+    values.forEach((row, i) => {
+      const n = i;
+      if (!st.chunks[n]) st.chunks[n] = decodeChunk_(row.slice(INDEX_PIECE_COL - 1).map(String));
+    });
+  }
+  const entries = [];
+  const byId = {};
+  Object.keys(st.chunks).map(Number).sort((a, b) => a - b).forEach(n => st.chunks[n].forEach(e => { entries.push(e); byId[e.id] = e; }));
+  st.view = { entries: entries, byId: byId };
+  return st.view;
+}
+
+// ---------- rebuilding ----------
+
+// Rebuilds the index from the real tabs: reads Farmers, Fields and FarmerAnswers once. About half a minute for 30,000 farmers.
+function indexRebuild_() {
+  return withLock_(() => {
+    const started = Date.now();
+    const farmersSheet = sheet_('Farmers');
+    const lastF = farmersSheet.getLastRow();
+    const farmers = lastF < 2 ? [] : farmersSheet.getRange(2, 1, lastF - 1, SCHEMA.Farmers.length).getValues();
+    const fCol = {}; SCHEMA.Farmers.forEach((h, i) => { fCol[h] = i; });
+    const flCol = {}; SCHEMA.Fields.forEach((h, i) => { flCol[h] = i; });
+    const aCol = {}; SCHEMA.FarmerAnswers.forEach((h, i) => { aCol[h] = i; });
+
+    const entries = [];
+    const byId = {};
+    farmers.forEach((row, i) => {
+      if (row[fCol.farmer_id] === '') return;
+      const obj = {};
+      INDEX_FARMER_COLS.forEach(c => { obj[c] = row[fCol[c]]; });
+      obj.notes = row[fCol.notes];
+      const e = makeEntry_(obj, i + 2, [], []);
+      entries.push(e);
+      byId[e.id] = e;
+    });
+
+    const fieldsSheet = sheet_('Fields');
+    const lastFl = fieldsSheet.getLastRow();
+    if (lastFl >= 2) {
+      fieldsSheet.getRange(2, 1, lastFl - 1, SCHEMA.Fields.length).getValues().forEach((row, i) => {
+        if (row[flCol.active] !== 'Yes') return;
+        const e = byId[row[flCol.farmer_id]];
+        if (e) e.f.push(fieldEntry_({ crop: row[flCol.crop], acres: row[flCol.acres], season: row[flCol.season], latitude: row[flCol.latitude], longitude: row[flCol.longitude] }, i + 2));
+      });
+    }
+    const answersSheet = sheet_('FarmerAnswers');
+    const lastA = answersSheet.getLastRow();
+    if (lastA >= 2) {
+      answersSheet.getRange(2, 1, lastA - 1, SCHEMA.FarmerAnswers.length).getValues().forEach((row, i) => {
+        if (row[aCol.active] !== 'Yes') return;
+        const e = byId[row[aCol.farmer_id]];
+        if (e) e.a.push(answerEntry_({ question_id: row[aCol.question_id], option_id: row[aCol.option_id] }, i + 2));
+      });
+    }
+
+    entries.sort((a, b) => farmerNumber_(a.id) - farmerNumber_(b.id));
+    const chunks = {};
+    entries.forEach(e => { (chunks[chunkOfFarmer_(e.id)] = chunks[chunkOfFarmer_(e.id)] || []).push(e); });
+    const top = entries.length ? Math.max.apply(null, Object.keys(chunks).map(Number)) : -1;
+
+    const sh = indexSheet_();
+    const oldLast = sh.getLastRow();
+    if (oldLast >= 2) sh.getRange(2, 1, oldLast - 1, INDEX_META_COL).clearContent();
+    const total = top + 1;
+    if (total > 0) {
+      if (sh.getMaxRows() < total + 1) sh.insertRowsAfter(sh.getMaxRows(), total + 1 - sh.getMaxRows());
+      const now = new Date().toISOString();
+      const BATCH = 20;
+      for (let from = 0; from < total; from += BATCH) {
+        const rows = [];
+        for (let n = from; n < Math.min(from + BATCH, total); n++) {
+          const list = chunks[n] || [];
+          rows.push([n, list.length, now].concat(list.length ? encodeChunk_(list) : new Array(INDEX_PIECES).fill('')));
+        }
+        sh.getRange(chunkRow_(from), 1, rows.length, INDEX_META_COL - 1).setNumberFormat('@').setValues(rows);
+      }
+    }
+    INDEX_MEMO_ = null;
+    touch_('FarmerIndex');
+    writeMeta_(false);
+    const st = indexState_();
+    Object.keys(chunks).forEach(n => { st.chunks[n] = chunks[n]; });
+    Logger.log('Index rebuilt: ' + entries.length + ' farmers, ' + Math.round((Date.now() - started) / 1000) + ' s');
+    return { farmers: entries.length, chunks: total, seconds: Math.round((Date.now() - started) / 100) / 10 };
+  });
+}
+
+// Empties the index (used when all farmer data has been removed).
+function indexClear_() {
+  const sh = indexSheet_();
+  const old = sh.getLastRow();
+  if (old >= 2) sh.getRange(2, 1, old - 1, INDEX_META_COL).clearContent();
+  INDEX_MEMO_ = null;
+  touch_('FarmerIndex');
+  writeMeta_(false);
+}
+
+// ---------- updating after a save ----------
+
+// Marks the index as "being changed". If the request dies before indexApply_() runs, the next reader rebuilds the index.
+function indexMarkDirty_() {
+  indexEnsure_(false);
+  const st = indexState_();
+  INDEX_APPENDED_ = { Farmers: 0, Fields: 0, FarmerAnswers: 0 };
+  putMeta_(Object.assign({}, st.meta, { dirty: 1 }));
+}
+
+// Puts changed or new farmers into the index and writes just the chunks they live in.
+function indexApply_(changed) {
+  const st = indexState_();
+  const touched = {};
+  changed.forEach(e => {
+    const n = chunkOfFarmer_(e.id);
+    const list = indexChunk_(n);
+    const at = list.findIndex(x => x.id === e.id);
+    if (at >= 0) list[at] = e; else list.push(e);
+    touched[n] = true;
+  });
+  st.view = null;
+  touch_('FarmerIndex');
+  const sh = indexSheet_();
+  const now = new Date().toISOString();
+  Object.keys(touched).map(Number).forEach(n => {
+    const list = st.chunks[n];
+    list.sort((a, b) => farmerNumber_(a.id) - farmerNumber_(b.id));
+    const row = chunkRow_(n);
+    if (sh.getMaxRows() < row) {
+      const before = sh.getMaxRows();
+      sh.insertRowsAfter(before, row - before + 20);
+      sh.getRange(before + 1, 1, sh.getMaxRows() - before, INDEX_META_COL).setNumberFormat('@');
+    }
+    sh.getRange(row, 1, 1, INDEX_META_COL - 1).setValues([[n, list.length, now].concat(encodeChunk_(list))]);
+  });
+  // The row counts are the ones from before the save plus what the save appended (no need to count the tabs again).
+  const m = st.meta;
+  const a = INDEX_APPENDED_;
+  INDEX_APPENDED_ = { Farmers: 0, Fields: 0, FarmerAnswers: 0 };
+  putMeta_({ v: INDEX_VERSION, farmers: m.farmers + a.Farmers, fields: m.fields + a.Fields, answers: m.answers + a.FarmerAnswers, dirty: 0, at: now });
+}
+
+// ---------- reading helpers used by the screens ----------
+
+// The farmer columns of an entry as an object, like a Farmers row.
+function entryFarmer_(e) {
+  const o = { farmer_id: e.id };
+  INDEX_FARMER_COLS.forEach((c, i) => { o[c] = e.v[i]; });
+  return o;
+}
+
+function entryAcres_(e) { return Math.round(e.f.reduce((s, x) => s + (Number(x[2]) || 0), 0) * 100) / 100; }
+
+// Fields of an entry in the shape the finder uses.
+function entryFields_(e) {
+  return e.f.map(x => ({ crop: x[1], acres: x[2], season: x[3], latitude: x[4] ? 1 : '', longitude: x[4] ? 1 : '' }));
+}
+
+// One farmer's own rows, read directly by row number. If the rows do not belong to that farmer the index was wrong:
+// it is rebuilt and the read repeated once.
+function loadFarmerRecord_(farmerId) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const e = indexEntry_(farmerId);
+    if (!e) return null;
+    const farmerRows = readRowsAt_('Farmers', [e.r]);
+    const fields = readRowsAt_('Fields', e.f.map(x => x[0]));
+    const answers = readRowsAt_('FarmerAnswers', e.a.map(x => x[0]));
+    const ok = farmerRows.length === 1 && farmerRows[0].farmer_id === farmerId &&
+      fields.every(f => f.farmer_id === farmerId && f.active === 'Yes') && answers.every(a => a.farmer_id === farmerId && a.active === 'Yes');
+    if (ok) return { entry: e, farmer: farmerRows[0], fields: fields, answers: answers };
+    indexRebuild_();
+  }
+  throw new Error('The farmer search index could not be rebuilt. Ask the developer to rebuild it.');
+}
+
+function questionHasAnswers_(questionId) {
+  return indexLoad_().entries.some(e => e.a.some(a => a[1] === questionId));
+}
+
+// ---- Farmers.gs
+// Farmer registration: validation, duplicate checks, saving, search and loading.
+// Data entry accounts can only register new farmers. Managers can look farmers up (read-only). Admins can do everything.
+
+const CONSENT_VALUES = ['Yes', 'No', 'Unknown'];
+const LIST_NAMES = ['crop', 'farmer_type', 'language', 'season', 'gender', 'district'];
+const MAX_ACRES = 100000;
+
+// Sri Lankan numbers are stored as +94 followed by nine digits.
+function normalizePhone_(raw, label) {
+  const digits = String(raw === undefined || raw === null ? '' : raw).replace(/\D/g, '');
+  if (!digits) return '';
+  let nine = '';
+  if (digits.length === 10 && digits.charAt(0) === '0') nine = digits.slice(1);
+  else if (digits.length === 11 && digits.indexOf('94') === 0) nine = digits.slice(2);
+  else if (digits.length === 9) nine = digits;
+  if (!/^[1-9]\d{8}$/.test(nine)) throw new Error((label || 'Phone number') + ' is not a valid Sri Lankan number.');
+  return '+94' + nine;
+}
+
+// Old NICs are nine digits plus V or X, new ones are twelve digits.
+function normalizeNic_(raw) {
+  const nic = String(raw === undefined || raw === null ? '' : raw).replace(/[\s-]/g, '').toUpperCase();
+  if (!nic) return '';
+  if (!/^(\d{9}[VX]|\d{12})$/.test(nic)) throw new Error('NIC number is not valid (9 digits and V or X, or 12 digits).');
+  return nic;
+}
+
+function isIsoDate_(s) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(s + 'T00:00:00Z');
+  return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+function listsMap_() {
+  const rows = readAll_('Lists').filter(l => l.active === 'Yes');
+  const map = {};
+  LIST_NAMES.forEach(n => { map[n] = rows.filter(r => r.list_name === n).map(r => String(r.value)); });
+  return map;
+}
+
+// Admins and managers can see every farmer, and so can pilots (to correct or remove a record they found). Data entry staff cannot look farmers up at all.
+function canAccessFarmer_(user, farmer) {
+  return user.role === 'Admin' || user.role === 'Manager' || user.role === 'Pilot';
+}
+
+// Dropdown lists plus the designed questions: everything the registration screen needs to start.
+function getRegistrationData() {
+  requireRole_(['Admin', 'DataEntry', 'Pilot']);
+  const def = getFormDefinition();
+  return { lists: listsMap_(), questions: def.questions, options: def.options };
+}
+
+function checkList_(value, list, label, keep) {
+  if (!value) return '';
+  if (list.indexOf(value) === -1 && value !== keep) throw new Error(label + ' "' + value + '" is not in the list.');
+  return value;
+}
+
+function cleanNumber_(raw, label, min, max) {
+  if (raw === '' || raw === null || raw === undefined) return '';
+  const n = Number(raw);
+  if (!isFinite(n)) throw new Error(label + ' must be a number.');
+  if (n < min || n > max) throw new Error(label + ' must be between ' + min + ' and ' + max + '.');
+  return n;
+}
+
+function validateCore_(input, existing, lists) {
+  const keep = existing || {};
+  const name = clean_(input.full_name);
+  if (!name) throw new Error('Full name is required.');
+  if (name.length > 120) throw new Error('Full name is too long.');
+  const phone = normalizePhone_(input.phone_primary, 'Primary phone number');
+  // New farmers need a phone number. A farmer who was loaded without one (many in the first real data) can still be edited.
+  if (!phone && !(existing && !String(existing.phone_primary || ''))) throw new Error('Primary phone number is required.');
+  const alt = normalizePhone_(input.phone_alt, 'Alternate phone number');
+  const district = checkList_(clean_(input.district), lists.district, 'District', keep.district);
+  if (!district) throw new Error('District is required.');
+  let dob = String(input.date_of_birth || '').trim();
+  if (dob) {
+    if (!isIsoDate_(dob)) throw new Error('Date of birth is not a valid date.');
+    if (dob > localToday_()) throw new Error('Date of birth cannot be in the future.');
+  }
+  const consent = input.marketing_consent || 'Unknown';
+  if (CONSENT_VALUES.indexOf(consent) === -1) throw new Error('Marketing consent must be Yes, No or Unknown.');
+  return {
+    full_name: name,
+    nic: normalizeNic_(input.nic),
+    date_of_birth: dob,
+    gender: checkList_(clean_(input.gender), lists.gender, 'Gender', keep.gender),
+    language: checkList_(clean_(input.language), lists.language, 'Language', keep.language),
+    farmer_type: checkList_(clean_(input.farmer_type), lists.farmer_type, 'Farmer type', keep.farmer_type),
+    phone_primary: phone,
+    phone_alt: alt,
+    address: clean_(input.address).slice(0, 300),
+    district: district,
+    ds_division: clean_(input.ds_division).slice(0, 80),
+    gn_division: clean_(input.gn_division).slice(0, 80),
+    village: clean_(input.village).slice(0, 80),
+    marketing_consent: consent,
+    do_not_contact: yesNo_(input.do_not_contact),
+    notes: clean_(input.notes).slice(0, 500)
+  };
+}
+
+// Other farmers that already use this NIC or phone number.
+function findDuplicates_(core, selfId, entries, user) {
+  const found = [];
+  const phones = [core.phone_primary, core.phone_alt].filter(Boolean);
+  entries.forEach(e => {
+    if (e.id === selfId) return;
+    const v = e.v;   // see INDEX_FARMER_COLS: 1 = name, 2 = nic, 7 = phone_primary, 8 = phone_alt
+    let reason = '';
+    if (core.nic && String(v[2]) === core.nic) reason = 'This NIC is already registered';
+    else if (phones.some(n => n === String(v[7]) || n === String(v[8]))) reason = 'This phone number is already registered';
+    if (reason) found.push(reason + ' (farmer ' + e.id + (user.role === 'Admin' ? ', ' + v[1] : '') + ')');
+  });
+  return found;
+}
+
+function validateFields_(input, existingFields, lists, farmerId) {
+  const mine = {};
+  existingFields.forEach(f => { mine[f.field_id] = f; });
+  return (input.fields || []).map((f, i) => {
+    const n = 'Field ' + (i + 1);
+    const old = f.field_id ? mine[f.field_id] : null;
+    if (f.field_id && !old) throw new Error(n + ' does not belong to this farmer.');
+    const crop = checkList_(clean_(f.crop), lists.crop, n + ' crop', old && old.crop);
+    if (!crop) throw new Error(n + ': crop is required.');
+    const acres = cleanNumber_(f.acres, n + ' acres', 0, MAX_ACRES);
+    if (acres === '' || acres <= 0) throw new Error(n + ': acres must be more than 0.');
+    return {
+      field_id: f.field_id || '',
+      crop: crop,
+      acres: round2_(acres),
+      season: checkList_(clean_(f.season), lists.season, n + ' season', old && old.season),
+      latitude: cleanNumber_(f.latitude, n + ' latitude', -90, 90),
+      longitude: cleanNumber_(f.longitude, n + ' longitude', -180, 180),
+      notes: clean_(f.notes).slice(0, 200)
+    };
+  });
+}
+
+// Turns the submitted answers into the exact set that should be stored, or throws.
+function validateAnswers_(input, questions, options, currentAnswers) {
+  const qById = {};
+  questions.forEach(q => { qById[q.question_id] = q; });
+  const oById = {};
+  options.forEach(o => { oById[o.option_id] = o; });
+  const keptIds = {};
+  currentAnswers.forEach(a => { if (a.option_id) keptIds[a.option_id] = true; });
+
+  const submitted = {};
+  (input.answers || []).forEach(a => { submitted[a.question_id] = a; });
+  const desired = {};
+  const active = questions.filter(q => q.active === 'Yes');
+
+  active.forEach(q => {
+    const a = submitted[q.question_id] || {};
+    if (SELECT_TYPES.indexOf(q.answer_type) !== -1) {
+      const ids = (a.option_ids || []).map(String).filter(Boolean);
+      const unique = ids.filter((id, i) => ids.indexOf(id) === i);
+      if (q.answer_type === 'single' && unique.length > 1) throw new Error('"' + q.label + '": choose only one.');
+      unique.forEach(id => {
+        const o = oById[id];
+        if (!o || o.question_id !== q.question_id) throw new Error('"' + q.label + '": unknown option.');
+        if (o.active !== 'Yes' && !keptIds[id]) throw new Error('"' + q.label + '": option "' + o.label + '" is no longer available.');
+      });
+      desired[q.question_id] = { type: 'select', ids: unique };
+    } else {
+      const raw = a.value === undefined || a.value === null ? '' : String(a.value).trim();
+      let value = raw;
+      if (raw) {
+        if (q.answer_type === 'number') {
+          if (!isFinite(Number(raw))) throw new Error('"' + q.label + '" must be a number.');
+          value = Number(raw);
+        } else if (q.answer_type === 'date') {
+          if (!isIsoDate_(raw)) throw new Error('"' + q.label + '" must be a valid date.');
+        } else if (q.answer_type === 'yesno') {
+          if (raw !== 'Yes' && raw !== 'No') throw new Error('"' + q.label + '" must be Yes or No.');
+        } else {
+          value = clean_(raw).slice(0, 200);
+        }
+      }
+      desired[q.question_id] = { type: 'value', value: value };
+    }
+  });
+
+  // Consistency: an option under a parent option is only allowed if that parent is also chosen.
+  active.forEach(q => {
+    const d = desired[q.question_id];
+    const parents = splitIds_(q.parent_question_ids);
+    if (d.type !== 'select' || !d.ids.length || !parents.length) return;
+    const parentChosen = {};
+    parents.forEach(p => { ((desired[p] && desired[p].ids) || []).forEach(id => { parentChosen[id] = true; }); });
+    d.ids.forEach(id => {
+      if (!parentChosen[oById[id].parent_option_id]) {
+        throw new Error('"' + q.label + '": "' + oById[id].label + '" does not match the parent answer.');
+      }
+    });
+  });
+
+  // Required: only when the question can actually be answered (its parent has an answer).
+  active.forEach(q => {
+    if (q.required !== 'Yes') return;
+    const d = desired[q.question_id];
+    const answered = d.type === 'select' ? d.ids.length > 0 : d.value !== '';
+    const parents = splitIds_(q.parent_question_ids);
+    const reachable = !parents.length || parents.some(p => desired[p] && desired[p].ids && desired[p].ids.length);
+    if (!answered && reachable) throw new Error('"' + q.label + '" is required.');
+  });
+  return desired;
+}
+
+function saveFarmer(input) {
+  const user = requireRole_(['Admin', 'DataEntry', 'Pilot']);
+  // The duplicate check and the write happen under one lock, so two people registering the same farmer cannot both succeed.
+  return withLock_(() => saveFarmerLocked_(user, input));
+}
+
+function saveFarmerLocked_(user, input) {
+  if (user.role === 'DataEntry' && input.farmer_id) {
+    throw new Error('Not authorised: data entry accounts can register new farmers but not change existing ones.');
+  }
+  const rec = input.farmer_id ? loadFarmerRecord_(input.farmer_id) : null;
+  if (input.farmer_id && !rec) throw new Error('Farmer ' + input.farmer_id + ' not found.');
+  const existing = rec ? rec.farmer : null;
+  if (existing && !canAccessFarmer_(user, existing)) throw new Error('Not authorised for this farmer.');
+
+  const lists = listsMap_();
+  const core = validateCore_(input, existing, lists);
+  const gps = validateGps_(input, existing);
+  const selfId = existing ? existing.farmer_id : '';
+
+  // Only values that are new or changed are checked, so a record that already has a duplicate can still be edited.
+  const toCheck = Object.assign({}, core);
+  if (existing) {
+    if (core.nic === String(existing.nic)) toCheck.nic = '';
+    if (core.phone_primary === String(existing.phone_primary)) toCheck.phone_primary = '';
+    if (core.phone_alt === String(existing.phone_alt)) toCheck.phone_alt = '';
+  }
+  // Checking against every farmer needs the whole index, so it is skipped when no NIC or phone number is new.
+  const needsCheck = !!(toCheck.nic || toCheck.phone_primary || toCheck.phone_alt);
+  const dups = needsCheck ? findDuplicates_(toCheck, selfId, indexLoad_().entries, user) : [];
+  if (dups.length) {
+    const mode = getConfig_('duplicate_check_mode') || 'block';
+    if (mode === 'block') throw new Error(dups.join('; ') + '.');
+    if (!input.confirmDuplicate) return { duplicate: dups };
+  }
+
+  const currentFields = rec ? rec.fields : [];
+  const fields = validateFields_(input, currentFields, lists, selfId);
+  const currentAnswers = rec ? rec.answers : [];
+  const def = { questions: readAll_('FormQuestions'), options: readAll_('FormOptions') };
+  const desired = validateAnswers_(input, def.questions, def.options, currentAnswers);
+
+  // Everything is valid, so the writes start here. The index is flagged first: if this request dies half way,
+  // the next reader rebuilds the index instead of trusting it.
+  indexMarkDirty_();
+  let id = selfId;
+  let farmerRow;
+  let farmerObj;
+  if (existing) {
+    farmerRow = rec.entry.r;
+    farmerObj = Object.assign({}, existing, core, gps, auditCols_(false));
+    writeRowObject_('Farmers', farmerRow, farmerObj);
+  } else {
+    id = nextId_('F', 6);
+    farmerObj = Object.assign({ farmer_id: id, status: 'Active' }, core, gps, auditCols_(true));
+    farmerRow = appendObjects_('Farmers', [farmerObj]);
+  }
+  const fieldEntries = saveFields_(id, fields, currentFields);
+  const answerEntries = saveAnswers_(id, desired, currentAnswers, def.questions);
+  audit_(existing ? 'update' : 'create', 'Farmers', id, core.full_name);
+  indexApply_([makeEntry_(farmerObj, farmerRow, fieldEntries, answerEntries)]);
+  return { farmer_id: id, created: !existing };
+}
+
+// Writes the farmer's fields. Returns the index entries of the fields that are active afterwards.
+function saveFields_(farmerId, fields, currentFields) {
+  const keepIds = {};
+  const adds = [];
+  const entries = [];
+  fields.forEach(f => {
+    if (f.field_id) {
+      keepIds[f.field_id] = true;
+      const old = currentFields.find(c => c.field_id === f.field_id);
+      const changed = String(old.crop) !== String(f.crop) || Number(old.acres) !== Number(f.acres) || String(old.season) !== String(f.season) ||
+        String(old.latitude) !== String(f.latitude) || String(old.longitude) !== String(f.longitude) || String(old.notes) !== String(f.notes);
+      const row = Object.assign({}, old, { crop: f.crop, acres: f.acres, season: f.season, latitude: f.latitude, longitude: f.longitude, notes: f.notes });
+      if (changed) writeRowObject_('Fields', old._row, Object.assign(row, auditCols_(false)));
+      entries.push(fieldEntry_(row, old._row));
+    } else {
+      adds.push(f);
+    }
+  });
+  softDeleteRows_('Fields', currentFields.filter(f => !keepIds[f.field_id]).map(f => f._row));
+  if (adds.length) {
+    const ids = nextIds_('FLD', 6, adds.length);
+    const rows = adds.map((f, i) => Object.assign({
+      field_id: ids[i], farmer_id: farmerId, crop: f.crop, acres: f.acres, season: f.season,
+      latitude: f.latitude, longitude: f.longitude, notes: f.notes, active: 'Yes'
+    }, auditCols_(true)));
+    const first = appendObjects_('Fields', rows);
+    rows.forEach((r, i) => entries.push(fieldEntry_(r, first + i)));
+  }
+  return entries;
+}
+
+// Compares what is stored with what was submitted, per active question. Answers to hidden
+// questions are never touched. Returns the index entries of the answers that are active afterwards.
+function saveAnswers_(farmerId, desired, currentAnswers, questions) {
+  const adds = [];
+  const dropRows = {};
+  const updates = [];
+  questions.filter(q => q.active === 'Yes').forEach(q => {
+    const d = desired[q.question_id];
+    const stored = currentAnswers.filter(a => a.question_id === q.question_id);
+    if (d.type === 'select') {
+      stored.forEach(a => {
+        if (d.ids.indexOf(String(a.option_id)) === -1) dropRows[a._row] = true;
+      });
+      d.ids.forEach(id => {
+        if (!stored.some(a => String(a.option_id) === id)) adds.push({ question_id: q.question_id, option_id: id, value: '' });
+      });
+    } else if (d.value === '') {
+      stored.forEach(a => { dropRows[a._row] = true; });
+    } else if (stored.length) {
+      if (String(stored[0].value) !== String(d.value)) {
+        updates.push([stored[0]._row, Object.assign({}, stored[0], { value: d.value }, auditCols_(false))]);
+      }
+    } else {
+      adds.push({ question_id: q.question_id, option_id: '', value: d.value });
+    }
+  });
+  updates.forEach(u => writeRowObject_('FarmerAnswers', u[0], u[1]));
+  softDeleteRows_('FarmerAnswers', Object.keys(dropRows).map(Number));
+  const entries = currentAnswers.filter(a => !dropRows[a._row]).map(a => answerEntry_(a, a._row));
+  if (adds.length) {
+    const ids = nextIds_('A', 6, adds.length);
+    const rows = adds.map((a, i) => Object.assign({
+      answer_id: ids[i], farmer_id: farmerId, question_id: a.question_id, option_id: a.option_id, value: a.value, active: 'Yes'
+    }, auditCols_(true)));
+    const first = appendObjects_('FarmerAnswers', rows);
+    rows.forEach((r, i) => entries.push(answerEntry_(r, first + i)));
+  }
+  return entries;
+}
+
+// A copy of a row without the helper _row key, with the developer account's email shown as "system" to other people.
+function stripRow_(o) {
+  const c = Object.assign({}, o);
+  delete c._row;
+  if (!viewerIsDeveloper_()) {
+    const dev = ownerEmail_();
+    STAFF_COLUMNS.forEach(k => { if (c[k] !== undefined && String(c[k]).toLowerCase() === dev) c[k] = 'system'; });
+  }
+  return c;
+}
+
+function getFarmer(farmerId) {
+  const user = requireRole_(['Admin', 'Manager', 'Pilot']);
+  const rec = loadFarmerRecord_(farmerId);
+  if (!rec) throw new Error('Farmer not found.');
+  if (!canAccessFarmer_(user, rec.farmer)) throw new Error('Not authorised for this farmer.');
+  return plain_({ farmer: stripRow_(rec.farmer), fields: rec.fields.map(stripRow_), answers: rec.answers.map(stripRow_) });
+}
+
+// A read-only, readable copy of one farmer for managers: the answers are already turned into text, so the
+// screen does not need the form definition (which only Admin, DataEntry and Pilot may load).
+function getFarmerView(farmerId) {
+  const user = requireRole_(['Admin', 'Manager']);
+  const rec = loadFarmerRecord_(farmerId);
+  if (!rec) throw new Error('Farmer not found.');
+  if (!canAccessFarmer_(user, rec.farmer)) throw new Error('Not authorised for this farmer.');
+  const questions = {}, options = {};
+  readAll_('FormQuestions').forEach(q => { questions[q.question_id] = q; });
+  readAll_('FormOptions').forEach(o => { options[o.option_id] = o; });
+  const answers = rec.answers.map(a => {
+    const q = questions[a.question_id] || {};
+    let text = a.value;
+    if (a.option_id) {
+      const o = options[a.option_id];
+      text = o ? String(o.path).split('>').map(id => (options[id] ? options[id].label : id)).join(' › ') : a.option_id;
+    }
+    const o = a.option_id ? options[a.option_id] : null;
+    return { section: q.section || '', question: q.label || a.question_id, order: Number(q.order) || 0, text: String(text),
+      is_origin: !!o && q.is_origin === 'Yes', option_path: o ? String(o.path) : '' };
+  });
+  // The origin routes: one per chain of choices (a tank, then its RPM, then its Govi committee), leaving out a choice that is
+  // only the first part of a longer one the farmer also made.
+  const stepsOf = path => String(path).split('>').map(oid => ({ label: options[oid] ? options[oid].label : oid, question: options[oid] && questions[options[oid].question_id] ? questions[options[oid].question_id].label : '' }));
+  const origin = answers.filter(a => a.is_origin).filter((a, i, all) => !all.some((b, j) => j !== i && b.option_path.indexOf(a.option_path + '>') === 0))
+    .sort((a, b) => a.order - b.order).map(a => ({ section: a.section, steps: stepsOf(a.option_path) }));
+  return plain_({ farmer: stripRow_(rec.farmer), fields: rec.fields.map(stripRow_), answers: answers, origin: origin });
+}
+
+// The index entries that match a search text (name, NIC, phone number, farmer ID, village, division or district), at most `limit`.
+function searchEntries_(query, limit, accept) {
+  const q = String(query || '').trim().toLowerCase();
+  if (q.length < 2) throw new Error('Type at least 2 characters.');
+  const digits = q.replace(/\D/g, '').replace(/^0/, '');
+  const out = [];
+  indexLoad_().entries.some(e => {
+    const v = e.v;   // id 0, name 1, nic 2, phone 7, alt phone 8, district 9, division 10, village 11
+    const hit = String(e.id).toLowerCase() === q || String(v[1]).toLowerCase().indexOf(q) !== -1 || String(v[2]).toLowerCase().indexOf(q) !== -1 ||
+      String(v[11]).toLowerCase().indexOf(q) !== -1 || String(v[10]).toLowerCase().indexOf(q) !== -1 || String(v[9]).toLowerCase().indexOf(q) !== -1 ||
+      (digits.length >= 4 && (String(v[7]).replace(/\D/g, '').indexOf(digits) !== -1 || String(v[8]).replace(/\D/g, '').indexOf(digits) !== -1));
+    if (hit && (!accept || accept(e))) out.push(e);
+    return out.length >= limit;
+  });
+  return out;
+}
+
+// Search by name, NIC, phone number or farmer ID. At most 50 results.
+function findFarmers(query) {
+  const user = requireRole_(['Admin', 'Manager']);
+  return plain_(searchEntries_(query, 50, e => canAccessFarmer_(user, entryFarmer_(e))).map(e => {
+    const v = e.v;
+    return { farmer_id: e.id, full_name: v[1], nic: v[2], phone_primary: v[7], district: v[9], ds_division: v[10], village: v[11], marketing_consent: v[12], do_not_contact: v[13], status: v[14], total_acres: entryAcres_(e) };
+  }));
+}
+
+function setFarmerStatus(farmerId, status) {
+  requireRole_(['Admin']);
+  if (status !== 'Active' && status !== 'Inactive') throw new Error('Status must be Active or Inactive.');
+  withLock_(() => setFarmerStatusLocked_(farmerId, status));
+  return true;
+}
+
+function setFarmerStatusLocked_(farmerId, status) {
+  const rec = loadFarmerRecord_(farmerId);
+  if (!rec) throw new Error('Record ' + farmerId + ' not found in Farmers.');
+  indexMarkDirty_();
+  const obj = Object.assign({}, rec.farmer, { status: status }, auditCols_(false));
+  writeRowObject_('Farmers', rec.entry.r, obj);
+  audit_(status === 'Inactive' ? 'remove' : 'restore', 'Farmers', farmerId, rec.farmer.full_name + ': status ' + status);
+  indexApply_([makeEntry_(obj, rec.entry.r, rec.entry.f, rec.entry.a)]);
+}
+
+// "Delete" a farmer: the record is switched to Inactive, never erased. An inactive farmer disappears from searches, the map, reports
+// and messages, and an admin can bring them back. A pilot can only remove a farmer who has no service records (so a real customer's
+// history cannot be hidden by mistake); an admin can remove anyone.
+function removeFarmer(farmerId) {
+  const user = requireRole_(['Admin', 'Pilot']);
+  const id = String(farmerId || '');
+  withLock_(() => {
+    const rec = loadFarmerRecord_(id);
+    if (!rec) throw new Error('Farmer not found.');
+    if (rec.farmer.status !== 'Active') throw new Error('This farmer has already been removed.');
+    if (user.role === 'Pilot' && farmerServiceRows_(id).some(r => r.status !== 'Cancelled')) {
+      throw new Error('This farmer has service records, so only an admin can remove them.');
+    }
+    setFarmerStatusLocked_(id, 'Inactive');
+  });
+  return { farmer_id: id, status: 'Inactive' };
+}
+
+function restoreFarmer(farmerId) {
+  requireRole_(['Admin']);
+  const id = String(farmerId || '');
+  withLock_(() => {
+    const rec = loadFarmerRecord_(id);
+    if (!rec) throw new Error('Farmer not found.');
+    if (rec.farmer.status === 'Active') throw new Error('This farmer is already active.');
+    setFarmerStatusLocked_(id, 'Active');
+  });
+  return { farmer_id: id, status: 'Active' };
+}
+
+// ---- Finder.gs
+// Farmer finder: find a group of farmers by any mix of filters. The result also carries a count for every box on the
+// Origin Map, so the group can be lit up there. Admin-only for now.
+//
+// A filter is { type, ... }. Different filters must all hold (AND). Several values inside one filter mean any of them (OR).
+//   district, division, crop, season, farmer_type, language, gender, consent : { values: [...] }
+//   village, text    : { text }                       (contains)
+//   origin           : { mode: 'under' | 'not_under' | 'ends_at', ids: [option ids] }
+//   acres, age       : { min, max }                   (acres count only the chosen crops when a crop filter is present)
+//   registered       : { from, to }                   (ISO dates)
+//   dnc              : { value: 'exclude' | 'only' }  (do-not-contact)
+//   has_nic, has_gps : { value: 'yes' | 'no' }
+//   no_origin        : {}
+//   status           : { value: 'active' | 'inactive' | 'all' }   (active farmers only when absent)
+
+const FILTER_TYPES = ['district', 'division', 'crop', 'season', 'farmer_type', 'language', 'gender', 'consent', 'village', 'text',
+  'origin', 'acres', 'age', 'registered', 'dnc', 'has_nic', 'has_gps', 'no_origin', 'status'];
+const LIST_FILTERS = ['district', 'division', 'crop', 'season', 'farmer_type', 'language', 'gender', 'consent'];
+const FINDER_ROW_LIMIT = 200;
+
+function cleanList_(v) {
+  const out = [];
+  (Array.isArray(v) ? v : []).forEach(x => {
+    const s = clean_(x).slice(0, 80);
+    if (s && out.indexOf(s) === -1) out.push(s);
+  });
+  return out.slice(0, 300);
+}
+
+function cleanBound_(v, label) {
+  if (v === '' || v === null || v === undefined) return '';
+  const n = Number(v);
+  if (!isFinite(n) || n < 0) throw new Error(label + ' must be a number, zero or more.');
+  return n;
+}
+
+function cleanDate_(v, label) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  if (!isIsoDate_(s)) throw new Error(label + ' is not a valid date.');
+  return s;
+}
+
+// Checks and tidies the filters from the browser. Filters with nothing selected are dropped.
+function cleanFilters_(input, optionById) {
+  if (!Array.isArray(input)) throw new Error('Filters must be a list.');
+  if (input.length > 40) throw new Error('Too many filters.');
+  const out = [];
+  input.forEach(f => {
+    if (!f || FILTER_TYPES.indexOf(f.type) === -1) throw new Error('Unknown filter.');
+    const t = f.type;
+    if (LIST_FILTERS.indexOf(t) !== -1) {
+      const values = cleanList_(f.values);
+      if (values.length) out.push({ type: t, values: values });
+    } else if (t === 'village' || t === 'text') {
+      const text = clean_(f.text).toLowerCase().slice(0, 60);
+      if (text) out.push({ type: t, text: text });
+    } else if (t === 'origin') {
+      if (['under', 'not_under', 'ends_at'].indexOf(f.mode) === -1) throw new Error('Origin filter needs a mode.');
+      const ids = cleanList_(f.ids).filter(id => optionById[id]);
+      if (ids.length) out.push({ type: t, mode: f.mode, ids: ids });
+    } else if (t === 'acres' || t === 'age') {
+      const min = cleanBound_(f.min, t === 'acres' ? 'Acres' : 'Age');
+      const max = cleanBound_(f.max, t === 'acres' ? 'Acres' : 'Age');
+      if (min !== '' && max !== '' && min > max) throw new Error('The minimum cannot be above the maximum.');
+      if (min !== '' || max !== '') out.push({ type: t, min: min, max: max });
+    } else if (t === 'registered') {
+      const from = cleanDate_(f.from, 'Registered from');
+      const to = cleanDate_(f.to, 'Registered to');
+      if (from && to && from > to) throw new Error('"Registered from" is after "to".');
+      if (from || to) out.push({ type: t, from: from, to: to });
+    } else if (t === 'dnc') {
+      if (['exclude', 'only'].indexOf(f.value) === -1) throw new Error('Do-not-contact filter must be exclude or only.');
+      out.push({ type: t, value: f.value });
+    } else if (t === 'has_nic' || t === 'has_gps') {
+      if (['yes', 'no'].indexOf(f.value) === -1) throw new Error('That filter must be yes or no.');
+      out.push({ type: t, value: f.value });
+    } else if (t === 'status') {
+      if (['active', 'inactive', 'all'].indexOf(f.value) === -1) throw new Error('Status must be active, inactive or all.');
+      out.push({ type: t, value: f.value });
+    } else if (t === 'no_origin') {
+      out.push({ type: t });
+    }
+  });
+  return out;
+}
+
+function finderContext_() {
+  const S = originStructure_();
+  const fieldsBy = {};
+  const chosenBy = {};
+  const farmers = indexLoad_().entries.map(e => {
+    const f = entryFarmer_(e);
+    fieldsBy[e.id] = entryFields_(e);
+    const chosen = [];
+    e.a.forEach(x => { const o = x[2] ? S.optionById[x[2]] : null; if (o) chosen.push(o); });
+    if (chosen.length) chosenBy[e.id] = chosen;
+    return f;
+  });
+  return { S: S, farmers: farmers, fieldsBy: fieldsBy, chosenBy: chosenBy };
+}
+
+// Origin options where a farmer's chain ends: picked, with nothing picked deeper under them.
+function chainEnds_(chosen) {
+  const hasBelow = {};
+  chosen.forEach(o => {
+    const ids = String(o.path).split('>');
+    for (let i = 0; i < ids.length - 1; i++) hasBelow[ids[i]] = true;
+  });
+  return chosen.filter(o => !hasBelow[o.option_id]);
+}
+
+function ageOf_(dob) {
+  if (!dob) return null;
+  const born = new Date(dob + 'T00:00:00Z');
+  if (isNaN(born.getTime())) return null;
+  // whole years by the calendar (the birthday counts on the day), not by dividing days
+  const t = localToday_();
+  let age = Number(t.slice(0, 4)) - born.getUTCFullYear();
+  if (t.slice(5) < String(dob).slice(5, 10)) age--;
+  return age;
+}
+
+function matchFarmer_(f, filters, ctx) {
+  const fields = ctx.fieldsBy[f.farmer_id] || [];
+  const chosen = ctx.chosenBy[f.farmer_id] || [];
+  const status = (filters.find(x => x.type === 'status') || { value: 'active' }).value;
+  if (status === 'active' && f.status !== 'Active') return false;
+  if (status === 'inactive' && f.status === 'Active') return false;
+
+  // acres are counted on the chosen crops only when a crop filter is present
+  const cropFilter = filters.find(x => x.type === 'crop');
+  const relevant = cropFilter ? fields.filter(fl => cropFilter.values.indexOf(fl.crop) !== -1) : fields;
+  const relevantAcres = relevant.reduce((s, fl) => s + (Number(fl.acres) || 0), 0);
+
+  for (let i = 0; i < filters.length; i++) {
+    const x = filters[i];
+    switch (x.type) {
+      case 'district': if (x.values.indexOf(String(f.district)) === -1) return false; break;
+      case 'division': if (x.values.indexOf(String(f.ds_division)) === -1) return false; break;
+      case 'farmer_type': if (x.values.indexOf(String(f.farmer_type)) === -1) return false; break;
+      case 'language': if (x.values.indexOf(String(f.language)) === -1) return false; break;
+      case 'gender': if (x.values.indexOf(String(f.gender)) === -1) return false; break;
+      case 'consent': if (x.values.indexOf(String(f.marketing_consent)) === -1) return false; break;
+      case 'crop': if (!relevant.length) return false; break;
+      case 'season': {
+        const wantsSeasonal = x.values.indexOf('Maha') !== -1 || x.values.indexOf('Yala') !== -1;
+        if (!fields.some(fl => x.values.indexOf(String(fl.season)) !== -1 || (String(fl.season) === 'Both' && wantsSeasonal))) return false;
+        break;
+      }
+      case 'village': if (String(f.village).toLowerCase().indexOf(x.text) === -1) return false; break;
+      case 'text': {
+        const hay = [f.full_name, f.nic, f.phone_primary, f.phone_alt, f.farmer_id, f.village, f.ds_division, f.district].join(' ').toLowerCase();
+        const digits = x.text.replace(/\D/g, '').replace(/^0/, '');
+        if (hay.indexOf(x.text) === -1 && !(digits.length >= 4 && hay.replace(/\D/g, '').indexOf(digits) !== -1)) return false;
+        break;
+      }
+      case 'origin': {
+        const want = {};
+        x.ids.forEach(id => { want[id] = true; });
+        let hit;
+        if (x.mode === 'ends_at') hit = chainEnds_(chosen).some(o => want[o.option_id]);
+        else hit = chosen.some(o => String(o.path).split('>').some(id => want[id]));
+        if (x.mode === 'not_under' ? hit : !hit) return false;
+        break;
+      }
+      case 'acres':
+        if (x.min !== '' && relevantAcres < x.min) return false;
+        if (x.max !== '' && relevantAcres > x.max) return false;
+        if (x.min !== '' && x.min > 0 && !relevant.length) return false;
+        break;
+      case 'age': {
+        const age = ageOf_(f.date_of_birth);
+        if (age === null) return false;
+        if (x.min !== '' && age < x.min) return false;
+        if (x.max !== '' && age > x.max) return false;
+        break;
+      }
+      case 'registered': {
+        const day = isoDay_(f.created_at);
+        if (x.from && day < x.from) return false;
+        if (x.to && day > x.to) return false;
+        break;
+      }
+      case 'dnc': if ((f.do_not_contact === 'Yes') !== (x.value === 'only')) return false; break;
+      case 'has_nic': if (!!String(f.nic) !== (x.value === 'yes')) return false; break;
+      case 'has_gps': {
+        // a made-up (estimated) farm point is not a location: only a point taken by a phone or typed in by a person counts
+        const farmPoint = f.latitude !== '' && f.longitude !== '' && f.latitude !== undefined && f.longitude !== undefined && f.gps_source !== 'estimated';
+        if ((farmPoint || fields.some(fl => fl.latitude !== '' && fl.longitude !== '')) !== (x.value === 'yes')) return false;
+        break;
+      }
+      case 'no_origin': if (chosen.length) return false; break;
+      default: break;
+    }
+  }
+  return true;
+}
+
+// two decimals; the tiny EPSILON makes 1.255 round to 1.26 (plain Math.round gives 1.25 because 1.255 is stored as 1.25499...)
+function round2_(n) { return Math.round((Number(n) + (n < 0 ? -Number.EPSILON : Number.EPSILON)) * 100) / 100; }
+function totalAcres_(fields) { return round2_((fields || []).reduce((s, fl) => s + (Number(fl.acres) || 0), 0)); }
+
+// Runs the filters. Returns the group's size, a count for every Origin Map box, breakdowns and the first rows.
+function runFinder(filtersInput) {
+  requireRole_(['Admin', 'Manager']);
+  const ctx = finderContext_();
+  const filters = cleanFilters_(filtersInput, ctx.S.optionById);
+  const matched = ctx.farmers.filter(f => matchFarmer_(f, filters, ctx));
+
+  const nodes = {};
+  const lanes = ctx.S.lanes.map(() => 0);
+  const byDistrict = {};
+  const byCrop = {};
+  let acres = 0;
+  matched.forEach(f => {
+    const seen = {};
+    const laneSeen = {};
+    (ctx.chosenBy[f.farmer_id] || []).forEach(o => {
+      String(o.path).split('>').forEach(id => { if (!seen[id]) { seen[id] = true; nodes[id] = (nodes[id] || 0) + 1; } });
+      const lane = laneOf_(ctx.S, o);
+      if (lane >= 0 && !laneSeen[lane]) { laneSeen[lane] = true; lanes[lane]++; }
+    });
+    byDistrict[f.district] = (byDistrict[f.district] || 0) + 1;
+    const crops = {};
+    (ctx.fieldsBy[f.farmer_id] || []).forEach(fl => { crops[fl.crop] = true; });
+    Object.keys(crops).forEach(c => { byCrop[c] = (byCrop[c] || 0) + 1; });
+    acres += totalAcres_(ctx.fieldsBy[f.farmer_id]);
+  });
+
+  const toList = obj => Object.keys(obj).map(k => ({ name: k, farmers: obj[k] })).sort((a, b) => b.farmers - a.farmers || a.name.localeCompare(b.name));
+  const rows = matched.slice().sort((a, b) => String(a.full_name).localeCompare(String(b.full_name))).slice(0, FINDER_ROW_LIMIT).map(f => {
+    const fields = ctx.fieldsBy[f.farmer_id] || [];
+    const crops = [];
+    fields.forEach(fl => { if (crops.indexOf(fl.crop) === -1) crops.push(fl.crop); });
+    return { farmer_id: f.farmer_id, full_name: f.full_name, phone_primary: f.phone_primary, ds_division: f.ds_division, district: f.district,
+      village: f.village, acres: totalAcres_(fields), crops: crops.join(', '), consent: f.marketing_consent, do_not_contact: f.do_not_contact,
+      status: f.status };
+  });
+
+  return plain_({
+    count: matched.length, acres: round2_(acres), nodes: nodes, lanes: lanes, byDistrict: toList(byDistrict), byCrop: toList(byCrop),
+    rows: rows, truncated: matched.length > FINDER_ROW_LIMIT, filters: filters
+  });
+}
+
+function phoneForCsv_(p) {
+  const s = String(p || '');
+  const m = s.match(/^\+94(\d{2})(\d{3})(\d{4})$/);
+  return m ? '+94 ' + m[1] + ' ' + m[2] + ' ' + m[3] : s;
+}
+
+function csvCell_(v) {
+  let s = String(v === undefined || v === null ? '' : v);
+  if (/^[=+\-@]/.test(s)) s = '\t' + s;   // stops spreadsheets from reading the cell as a formula
+  return '"' + s.replace(/"/g, '""') + '"';
+}
+
+// The group as a CSV for marketing. Do-not-contact farmers and those who said No to marketing are left out and counted.
+function exportFinder(filtersInput) {
+  requireRole_(['Admin', 'Manager']);
+  const ctx = finderContext_();
+  const filters = cleanFilters_(filtersInput, ctx.S.optionById);
+  const matched = ctx.farmers.filter(f => matchFarmer_(f, filters, ctx));
+  let doNotContact = 0;
+  let noConsent = 0;
+  const kept = [];
+  matched.forEach(f => {
+    if (f.do_not_contact === 'Yes') doNotContact++;
+    else if (f.marketing_consent === 'No') noConsent++;
+    else kept.push(f);
+  });
+  kept.sort((a, b) => String(a.full_name).localeCompare(String(b.full_name)));
+  const header = ['Farmer ID', 'Name', 'Phone', 'Alternate phone', 'Language', 'District', 'Division', 'Village', 'Crops', 'Total acres', 'Marketing consent'];
+  const lines = [header.map(csvCell_).join(',')];
+  kept.forEach(f => {
+    const fields = ctx.fieldsBy[f.farmer_id] || [];
+    const crops = [];
+    fields.forEach(fl => { if (crops.indexOf(fl.crop) === -1) crops.push(fl.crop); });
+    lines.push([f.farmer_id, f.full_name, phoneForCsv_(f.phone_primary), phoneForCsv_(f.phone_alt), f.language, f.district, f.ds_division, f.village,
+      crops.join(', '), totalAcres_(fields), f.marketing_consent].map(csvCell_).join(','));
+  });
+  audit_('export', 'Finder', '', kept.length + ' farmers exported (' + doNotContact + ' do-not-contact and ' + noConsent + ' no-consent left out); filters: ' + JSON.stringify(filters).slice(0, 400));
+  return { csv: lines.join('\r\n'), count: kept.length, skipped: { doNotContact: doNotContact, noConsent: noConsent } };
+}
+
+// ---------- screen data and saved groups ----------
+
+function listSegments() {
+  requireRole_(['Admin', 'Manager']);
+  return plain_(readAll_('Segments').filter(s => s.active === 'Yes').map(s => {
+    let filters = [];
+    try { filters = JSON.parse(s.filters_json); } catch (e) { filters = []; }
+    return { segment_id: s.segment_id, name: s.name, filters: filters };
+  }));
+}
+
+function getFinderOptions() {
+  requireRole_(['Admin', 'Manager']);
+  const divisions = [];
+  const seen = {};
+  indexLoad_().entries.forEach(e => { const d = e.v[10]; if (d && !seen[d]) { seen[d] = true; divisions.push(d); } });
+  divisions.sort();
+  return { lists: listsMap_(), divisions: divisions, segments: listSegments() };
+}
+
+function saveSegment(name, filtersInput) {
+  requireRole_(['Admin', 'Manager']);
+  const label = clean_(name).slice(0, 60);
+  if (!label) throw new Error('Give the group a name.');
+  const S = originStructure_();
+  const filters = cleanFilters_(filtersInput, S.optionById);
+  if (!filters.length) throw new Error('Add at least one filter before saving.');
+  if (readAll_('Segments').some(s => s.active === 'Yes' && String(s.name).toLowerCase() === label.toLowerCase())) {
+    throw new Error('A saved group called "' + label + '" already exists.');
+  }
+  const id = nextId_('SG', 3);
+  appendObjects_('Segments', [Object.assign({ segment_id: id, name: label, filters_json: JSON.stringify(filters), active: 'Yes' }, auditCols_(true))]);
+  audit_('create', 'Segments', id, label);
+  return { segment_id: id };
+}
+
+function deleteSegment(segmentId) {
+  requireRole_(['Admin', 'Manager']);
+  updateById_('Segments', segmentId, Object.assign({ active: 'No' }, auditCols_(false)));
+  audit_('update', 'Segments', segmentId, 'removed');
+  return true;
+}
+
+// ---- FormDesigner.gs
+// Form Designer: the admin builds the registration questions ("gates") and their options.
+// Every function here is callable from the browser, so each one checks the role first.
+
+const ANSWER_TYPES = ['single', 'multi', 'text', 'number', 'yesno', 'date'];
+const SELECT_TYPES = ['single', 'multi'];
+const MAX_OPTIONS_PER_PASTE = 2000;
+const MAX_LABEL_LENGTH = 120;
+
+function splitIds_(s) {
+  return String(s || '').split(',').map(x => x.trim()).filter(Boolean);
+}
+
+function yesNo_(v) {
+  return (v === true || v === 'Yes') ? 'Yes' : 'No';
+}
+
+// Everything the designer screen needs, including hidden items.
+function getDesignerData() {
+  requireRole_(['Admin']);
+  return plain_({ questions: readAll_('FormQuestions'), options: readAll_('FormOptions') });
+}
+
+// What the registration form needs: active questions and options only.
+function getFormDefinition() {
+  requireRole_(['Admin', 'DataEntry', 'Pilot']);
+  return plain_({
+    questions: readAll_('FormQuestions').filter(q => q.active === 'Yes').map(stripRow_),       // (the developer's address is shown as "system" here too)
+    options: readAll_('FormOptions').filter(o => o.active === 'Yes').map(stripRow_)
+  });
+}
+
+// Every question this one depends on, directly or further up.
+function ancestorQuestions_(qid, byId, seen) {
+  seen = seen || {};
+  const q = byId[qid];
+  if (!q) return seen;
+  splitIds_(q.parent_question_ids).forEach(p => {
+    if (!seen[p]) {
+      seen[p] = true;
+      ancestorQuestions_(p, byId, seen);
+    }
+  });
+  return seen;
+}
+
+function saveQuestion(input) {
+  requireRole_(['Admin']);
+  const label = clean_(input.label);
+  if (!label) throw new Error('Question text is required.');
+  if (label.length > MAX_LABEL_LENGTH) throw new Error('Question text is too long.');
+  const type = input.answer_type;
+  if (ANSWER_TYPES.indexOf(type) === -1) throw new Error('Pick an answer type.');
+
+  const questions = readAll_('FormQuestions');
+  const byId = {};
+  questions.forEach(q => { byId[q.question_id] = q; });
+  const existing = input.question_id ? byId[input.question_id] : null;
+  if (input.question_id && !existing) throw new Error('Question ' + input.question_id + ' not found.');
+
+  const parents = (input.parent_question_ids || []).map(String).filter(Boolean);
+  if (parents.length && SELECT_TYPES.indexOf(type) === -1) {
+    throw new Error('Only choice questions can depend on another question.');
+  }
+  parents.forEach(p => {
+    if (!byId[p]) throw new Error('Parent question ' + p + ' not found.');
+    if (SELECT_TYPES.indexOf(byId[p].answer_type) === -1) throw new Error('A parent must be a choice question.');
+    if (existing && p === existing.question_id) throw new Error('A question cannot depend on itself.');
+    if (existing && ancestorQuestions_(p, byId)[existing.question_id]) {
+      throw new Error('That would make the questions depend on each other in a loop.');
+    }
+  });
+
+  const section = clean_(input.section) || 'Other';
+  const fields = {
+    section: section,
+    label: label,
+    help_text: clean_(input.help_text),
+    answer_type: type,
+    parent_question_ids: parents.join(','),
+    is_origin: yesNo_(input.is_origin),
+    required: yesNo_(input.required),
+    usable_in_products: yesNo_(input.usable_in_products)
+  };
+
+  let id;
+  if (existing) {
+    id = existing.question_id;
+    const optionCount = readAll_('FormOptions').filter(o => o.question_id === id).length;
+    const answerCount = questionHasAnswers_(id) ? 1 : 0;
+    if (type !== existing.answer_type && (optionCount || answerCount)) {
+      throw new Error('The answer type cannot change once options or farmer answers exist. Hide this question and add a new one.');
+    }
+    if (parents.join(',') !== String(existing.parent_question_ids) && optionCount) {
+      throw new Error('The "depends on" setting cannot change once options exist, because each option sits under a parent option.');
+    }
+    if (section !== existing.section) {
+      const peers = questions.filter(q => q.section === section).map(q => Number(q.order) || 0);
+      fields.order = (peers.length ? Math.max.apply(null, peers) : 0) + 1;
+    }
+    updateById_('FormQuestions', id, Object.assign(fields, auditCols_(false)));
+  } else {
+    id = nextId_('Q', 3);
+    const peers = questions.filter(q => q.section === section).map(q => Number(q.order) || 0);
+    fields.order = (peers.length ? Math.max.apply(null, peers) : 0) + 1;
+    fields.question_id = id;
+    fields.active = 'Yes';
+    appendObjects_('FormQuestions', [Object.assign(fields, auditCols_(true))]);
+  }
+  audit_('form_change', 'FormQuestions', id, (existing ? 'updated: ' : 'created: ') + label);
+  return { question_id: id };
+}
+
+function setQuestionActive(questionId, active) {
+  requireRole_(['Admin']);
+  updateById_('FormQuestions', questionId, Object.assign({ active: yesNo_(active) }, auditCols_(false)));
+  audit_('form_change', 'FormQuestions', questionId, active ? 'shown' : 'hidden');
+  return true;
+}
+
+// Moves a question one place up (-1) or down (+1) within its section.
+function moveQuestion(questionId, direction) {
+  requireRole_(['Admin']);
+  const all = readAll_('FormQuestions');
+  const q = all.find(x => x.question_id === questionId);
+  if (!q) throw new Error('Question not found.');
+  const peers = all.filter(x => x.section === q.section)
+    .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+  const from = peers.findIndex(x => x.question_id === questionId);
+  const to = from + (direction < 0 ? -1 : 1);
+  if (to < 0 || to >= peers.length) return false;
+  const moved = peers.splice(from, 1)[0];
+  peers.splice(to, 0, moved);
+  peers.forEach((p, i) => {
+    if (Number(p.order) !== i + 1) updateById_('FormQuestions', p.question_id, { order: i + 1 });
+  });
+  return true;
+}
+
+// Adds many options at once. labels is an array of strings, parentOptionId is needed only when
+// the question depends on other questions.
+function saveOptions(questionId, labels, parentOptionId) {
+  requireRole_(['Admin']);
+  const question = readAll_('FormQuestions').find(q => q.question_id === questionId);
+  if (!question) throw new Error('Question not found.');
+  if (SELECT_TYPES.indexOf(question.answer_type) === -1) throw new Error('This question has no options.');
+
+  const options = readAll_('FormOptions');
+  const parentQuestionIds = splitIds_(question.parent_question_ids);
+  let parent = null;
+  if (parentQuestionIds.length) {
+    if (!parentOptionId) throw new Error('Choose which option these sit under.');
+    parent = options.find(o => o.option_id === parentOptionId);
+    if (!parent || parentQuestionIds.indexOf(parent.question_id) === -1) {
+      throw new Error('That parent option does not belong to this question\'s parent.');
+    }
+  } else if (parentOptionId) {
+    throw new Error('This question does not depend on another, so options have no parent.');
+  }
+
+  const seen = {};
+  const cleaned = [];
+  let submitted = 0;
+  (labels || []).forEach(raw => {
+    const label = clean_(raw).slice(0, MAX_LABEL_LENGTH);
+    if (!label) return;
+    submitted++;
+    const key = label.toLowerCase();
+    if (!seen[key]) {
+      seen[key] = true;
+      cleaned.push(label);
+    }
+  });
+  if (submitted > MAX_OPTIONS_PER_PASTE) throw new Error('Too many options at once (max ' + MAX_OPTIONS_PER_PASTE + ').');
+
+  const siblings = options.filter(o => o.question_id === questionId && String(o.parent_option_id) === String(parentOptionId || ''));
+  const taken = {};
+  siblings.forEach(o => { taken[String(o.label).toLowerCase()] = true; });
+  const toAdd = cleaned.filter(l => !taken[l.toLowerCase()]);
+  if (!toAdd.length) return { added: 0, skipped: submitted };
+
+  const ids = nextIds_('O', 4, toAdd.length);
+  const maxOrder = siblings.reduce((m, o) => Math.max(m, Number(o.order) || 0), 0);
+  const rows = toAdd.map((label, i) => Object.assign({
+    option_id: ids[i],
+    question_id: questionId,
+    label: label,
+    parent_option_id: parentOptionId || '',
+    path: (parent ? parent.path + '>' : '') + ids[i],
+    order: maxOrder + i + 1,
+    active: 'Yes'
+  }, auditCols_(true)));
+  appendObjects_('FormOptions', rows);
+  audit_('form_change', 'FormOptions', questionId, 'added ' + rows.length + ' options');
+  return { added: rows.length, skipped: submitted - rows.length };
+}
+
+function updateOption(optionId, label) {
+  requireRole_(['Admin']);
+  const options = readAll_('FormOptions');
+  const opt = options.find(o => o.option_id === optionId);
+  if (!opt) throw new Error('Option not found.');
+  const clean = clean_(label).slice(0, MAX_LABEL_LENGTH);
+  if (!clean) throw new Error('Option text cannot be empty.');
+  const clash = options.some(o => o.option_id !== optionId && o.question_id === opt.question_id &&
+    String(o.parent_option_id) === String(opt.parent_option_id) && String(o.label).toLowerCase() === clean.toLowerCase());
+  if (clash) throw new Error('Another option here already uses that name.');
+  updateById_('FormOptions', optionId, Object.assign({ label: clean }, auditCols_(false)));
+  audit_('form_change', 'FormOptions', optionId, 'renamed to ' + clean);
+  return true;
+}
+
+function setOptionActive(optionId, active) {
+  requireRole_(['Admin']);
+  updateById_('FormOptions', optionId, Object.assign({ active: yesNo_(active) }, auditCols_(false)));
+  audit_('form_change', 'FormOptions', optionId, active ? 'shown' : 'hidden');
+  return true;
+}
+
+// ---- GpsData.gs
+// Where a farmer is: one GPS point per farmer (the place a team drives to), kept in the Farmers tab:
+//   latitude, longitude   decimal degrees (blank when unknown)
+//   gps_source            'device'    taken from the phone's GPS when someone pressed "Update GPS location"
+//                         'manual'    typed or pasted by a person (for example copied from Google Maps)
+//                         'estimated' a made-up placeholder (see estimateFarmerGps_): near the farmer's tank or division, NOT the real place
+//   gps_accuracy          metres, when the phone said how exact the reading was
+//   gps_updated_at        when it was last changed
+// Real points always replace estimated ones; an estimated point is never written over a real one. Only the developer can create estimated
+// points (and remove them all again); nobody else can mark a point 'estimated'.
+
+const GPS_SOURCES = ['device', 'manual', 'estimated'];
+const GPS_COLUMNS = ['latitude', 'longitude', 'gps_source', 'gps_accuracy', 'gps_updated_at'];
+
+function gpsNumber_(raw, label) {
+  if (raw === '' || raw === null || raw === undefined) return '';
+  const n = Number(String(raw).trim());
+  if (!isFinite(n)) throw new Error(label + ' must be a number.');
+  return Math.round(n * 1e6) / 1e6;
+}
+
+// The farmer's GPS columns as they are now.
+function keepGps_(old) {
+  const o = {};
+  GPS_COLUMNS.forEach(c => { o[c] = old[c] === undefined ? '' : old[c]; });
+  return o;
+}
+
+// Checks the location sent with a save and returns the GPS columns to store.
+//   - no latitude / longitude sent: the stored location stays as it is (older screens, quick edits)
+//   - both empty: the location is removed
+//   - the same numbers as stored: nothing changes (the source and the time stay)
+//   - new numbers: must be inside Sri Lanka and come from the phone ('device') or a person ('manual')
+function validateGps_(input, existing) {
+  const old = existing || {};
+  if (input.latitude === undefined && input.longitude === undefined) return keepGps_(old);
+  const la = gpsNumber_(input.latitude, 'Latitude'), lo = gpsNumber_(input.longitude, 'Longitude');
+  if (la === '' && lo === '') return { latitude: '', longitude: '', gps_source: '', gps_accuracy: '', gps_updated_at: old.latitude === '' || old.latitude === undefined ? '' : new Date() };
+  if (la === '' || lo === '') throw new Error('Enter both the latitude and the longitude, or neither.');
+  if (la < EARTH_BOUNDS.south || la > EARTH_BOUNDS.north || lo < EARTH_BOUNDS.west || lo > EARTH_BOUNDS.east) {
+    throw new Error('That place is outside Sri Lanka. Check the numbers: latitude first (about 6 to 10), then longitude (about 79 to 82).');
+  }
+  if (old.latitude !== undefined && old.latitude !== '' && Math.round(Number(old.latitude) * 1e6) / 1e6 === la && Math.round(Number(old.longitude) * 1e6) / 1e6 === lo) return keepGps_(old);
+  const source = String(input.gps_source || 'manual');
+  if (source === 'estimated') throw new Error('An estimated location can only be made by the developer.');
+  if (GPS_SOURCES.indexOf(source) === -1) throw new Error('Say how the location was found (phone GPS or typed in).');
+  const acc = source === 'device' ? gpsNumber_(input.gps_accuracy, 'Accuracy') : '';
+  if (acc !== '' && (acc < 0 || acc > 100000)) throw new Error('Accuracy is not a sensible number of metres.');
+  return { latitude: la, longitude: lo, gps_source: source, gps_accuracy: acc === '' ? '' : Math.round(acc), gps_updated_at: new Date() };
+}
+
+function gpsOut_(g) {
+  return { latitude: g.latitude, longitude: g.longitude, gps_source: g.gps_source, gps_accuracy: g.gps_accuracy, gps_updated_at: g.gps_updated_at instanceof Date ? g.gps_updated_at.toISOString() : String(g.gps_updated_at || '') };
+}
+
+// "Update GPS location" on its own (from the Record service screen or a profile): changes only the location of one farmer.
+function saveFarmerGps(farmerId, latitude, longitude, source, accuracy) {
+  requireRole_(['Admin', 'Pilot']);
+  const id = String(farmerId || '');
+  return withLock_(() => {
+    const rec = loadFarmerRecord_(id);
+    if (!rec) throw new Error('Farmer not found.');
+    const g = validateGps_({ latitude: latitude, longitude: longitude, gps_source: source, gps_accuracy: accuracy }, rec.farmer);
+    indexMarkDirty_();
+    const obj = Object.assign({}, rec.farmer, g, auditCols_(false));
+    writeRowObject_('Farmers', rec.entry.r, obj);
+    audit_('update', 'Farmers', id, rec.farmer.full_name + ': GPS ' + (g.latitude === '' ? 'removed' : g.gps_source));
+    indexApply_([makeEntry_(obj, rec.entry.r, rec.entry.f, rec.entry.a)]);
+    return plain_(gpsOut_(g));
+  });
+}
+
+// ---------- estimated points (placeholders until the team visits and presses "Update GPS location") ----------
+
+// A small repeatable random number generator: the same farmer always gets the same estimated point.
+function gpsRandom_(seedText) {
+  let h = 1779033703 ^ String(seedText).length;
+  for (let i = 0; i < String(seedText).length; i++) { h = Math.imul(h ^ String(seedText).charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); }
+  let a = h >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function gpsRingHas_(ring, x, y) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+// is the point inside a GeoJSON Polygon / MultiPolygon (holes respected)?
+function gpsInside_(geometry, x, y) {
+  const polys = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+  return polys.some(p => gpsRingHas_(p[0], x, y) && !p.slice(1).some(hole => gpsRingHas_(hole, x, y)));
+}
+function gpsBox_(geometry) {
+  const polys = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+  const b = [180, 90, -180, -90];
+  polys.forEach(p => p[0].forEach(c => { b[0] = Math.min(b[0], c[0]); b[1] = Math.min(b[1], c[1]); b[2] = Math.max(b[2], c[0]); b[3] = Math.max(b[3], c[1]); }));
+  return b;
+}
+
+// Estimated points for every farmer that has no location. Near the tank when the farmer has one with a known place (within about
+// 5 km), else somewhere inside the farmer's own DS division, else near the middle of the district. Points are always on land
+// (inside some division boundary). Returns counts; writes the five GPS columns of the Farmers tab in one go.
+function estimateFarmerGps_() {
+  return withLock_(() => {
+    const entries = indexLoad_().entries;
+    const S = originStructure_();
+    const route = originRouter_(S);
+    let places = readPlaces_();
+    if (seedPlaces_(S, places)) places = readPlaces_();
+    const pin = {};
+    places.forEach(p => { if (p.kind === 'origin' && p.lat !== '' && p.lng !== '') pin[p.ref] = [Number(p.lng), Number(p.lat)]; });
+    const geo = earthGeo_();
+    const feats = geo.ds.features.map(f => ({ p: f.properties, g: f.geometry, box: gpsBox_(f.geometry) }));
+    const featOf = new Map();
+    feats.forEach(f => featOf.set(f.p, f));
+    const districtMid = {};
+    feats.forEach(f => { const k = placeKey_(f.p.d); const a = districtMid[k] = districtMid[k] || { x: 0, y: 0, n: 0 }; a.x += f.p.c[0]; a.y += f.p.c[1]; a.n++; });
+    function onLand(x, y) {
+      for (let i = 0; i < feats.length; i++) { const b = feats[i].box; if (x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3] && gpsInside_(feats[i].g, x, y)) return true; }
+      return false;
+    }
+    function aroundPoint(rnd, c, km, needLand) {
+      for (let k = 0; k < 40; k++) {
+        const r = km * Math.sqrt(rnd()), a = rnd() * 2 * Math.PI;
+        const x = c[0] + r * Math.cos(a) / (111.32 * Math.cos(c[1] * Math.PI / 180)), y = c[1] + r * Math.sin(a) / 111.32;
+        if (!needLand || onLand(x, y)) return [x, y];
+      }
+      return null;
+    }
+    function insideFeature(rnd, f) {
+      for (let k = 0; k < 60; k++) {
+        const x = f.box[0] + rnd() * (f.box[2] - f.box[0]), y = f.box[1] + rnd() * (f.box[3] - f.box[1]);
+        if (gpsInside_(f.g, x, y)) return [x, y];
+      }
+      return null;
+    }
+
+    const sh = sheet_('Farmers');
+    const last = sh.getLastRow();
+    if (last < 2) return { given: 0, had: 0, nowhere: 0, total: 0 };
+    const first = SCHEMA.Farmers.indexOf('latitude') + 1;
+    const block = sh.getRange(2, first, last - 1, GPS_COLUMNS.length).getValues();
+    let given = 0, had = 0, nowhere = 0;
+    const now = new Date();
+    entries.forEach(e => {
+      const at = e.r - 2;
+      if (!block[at]) return;
+      if (block[at][0] !== '' && block[at][1] !== '') { had++; return; }
+      const rnd = gpsRandom_('gps|' + e.id);
+      const r = route(e);
+      const tankPin = r.root ? pin[r.root.option_id] : null;
+      const poly = String(e.v[10] || '').trim() ? matchDivision_(e.v[10], e.v[9], geo) : null;
+      const feat = poly ? featOf.get(poly) : null;
+      let pt = null;
+      if (tankPin) pt = aroundPoint(rnd, tankPin, 5, true);
+      if (!pt && feat) pt = insideFeature(rnd, feat);
+      if (!pt) { const d = districtMid[placeKey_(e.v[9])]; if (d) pt = aroundPoint(rnd, [d.x / d.n, d.y / d.n], 6, true); }
+      if (!pt) { nowhere++; return; }
+      block[at] = [Math.round(pt[1] * 1e6) / 1e6, Math.round(pt[0] * 1e6) / 1e6, 'estimated', '', now];
+      given++;
+    });
+    if (given) {
+      sh.getRange(2, first, block.length, GPS_COLUMNS.length).setValues(block);
+      touch_('Farmers');
+      indexRebuild_();
+      audit_('update', 'Farmers', '', 'Estimated (made-up) GPS locations given to ' + given + ' farmers without one');
+    }
+    return { given: given, had: had, nowhere: nowhere, total: entries.length };
+  });
+}
+
+// Takes every estimated location away again (real ones stay).
+function clearEstimatedFarmerGps_() {
+  return withLock_(() => {
+    const sh = sheet_('Farmers');
+    const last = sh.getLastRow();
+    if (last < 2) return { cleared: 0 };
+    const first = SCHEMA.Farmers.indexOf('latitude') + 1;
+    const block = sh.getRange(2, first, last - 1, GPS_COLUMNS.length).getValues();
+    let cleared = 0;
+    block.forEach(r => { if (r[2] === 'estimated') { r[0] = ''; r[1] = ''; r[2] = ''; r[3] = ''; r[4] = ''; cleared++; } });
+    if (cleared) {
+      sh.getRange(2, first, block.length, GPS_COLUMNS.length).setValues(block);
+      touch_('Farmers');
+      indexRebuild_();
+      audit_('update', 'Farmers', '', 'Estimated GPS locations removed from ' + cleared + ' farmers');
+    }
+    return { cleared: cleared };
+  });
+}
+
+function gpsCounts_() {
+  const out = { device: 0, manual: 0, estimated: 0, none: 0, total: 0 };
+  indexLoad_().entries.forEach(e => {
+    out.total++;
+    const src = e.v[18];
+    if (e.v[16] === '' || e.v[17] === '') out.none++; else out[src === 'device' || src === 'manual' || src === 'estimated' ? src : 'manual']++;
+  });
+  return out;
+}
+
+function devGpsStatus() {
+  requireDeveloper_();
+  return plain_(gpsCounts_());
+}
+function devEstimateGps() {
+  requireDeveloper_();
+  const r = estimateFarmerGps_();
+  return plain_(Object.assign(r, { counts: gpsCounts_() }));
+}
+function devClearEstimatedGps() {
+  requireDeveloper_();
+  const r = clearEstimatedFarmerGps_();
+  return plain_(Object.assign(r, { counts: gpsCounts_() }));
+}
+
+// Run from the Apps Script editor (the owner): the same as the Developer tab buttons, with the answer written to the execution log.
+function gpsStatusFromEditor() { const r = devGpsStatus(); Logger.log('GPS status: ' + JSON.stringify(r)); return r; }
+function estimateGpsFromEditor() { const r = devEstimateGps(); Logger.log('Estimated GPS given: ' + JSON.stringify(r)); return r; }
+
+// ---- HomeData.gs
+// Numbers for the Home screen. A pilot sees their own day; managers and admins also see the farmer and service totals.
+// Reads only the few Services columns it needs, one column at a time, so it stays quick with many records.
+
+function shiftDay_(iso, days) {
+  return new Date(Date.parse(iso + 'T00:00:00Z') + days * 86400000).toISOString().slice(0, 10);
+}
+
+// Some columns of the Services tab as row objects (only the named columns are filled).
+function readServiceColumns_(names) {
+  const sh = sheet_('Services');
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  const cols = names.map(n => sh.getRange(2, serviceCol_(n), last - 1, 1).getValues());
+  const out = [];
+  for (let i = 0; i < last - 1; i++) {
+    const o = {};
+    names.forEach((n, c) => { o[n] = cols[c][i][0]; });
+    if (o[names[0]] !== '') out.push(o);
+  }
+  return out;
+}
+
+function getHome() {
+  const user = requireRole_(ROLES);
+  const today = localToday_();
+  const out = { name: user.name, role: user.role, today: today };
+  if (SERVICE_ROLES.indexOf(user.role) === -1) return plain_(out);
+
+  const weekFrom = shiftDay_(today, -6), monthFrom = shiftDay_(today, -29), fortnightFrom = shiftDay_(today, -13);
+  const isLead = user.role === 'Admin' || user.role === 'Manager';
+  const rows = readServiceColumns_(isLead ? ['status', 'service_date', 'pilot_email', 'acres_covered', 'farmer_id', 'satisfaction', 'service_type'] : ['status', 'service_date', 'pilot_email', 'acres_covered'])
+    .filter(r => r.status === 'Completed');
+  const me = String(user.email).toLowerCase();
+  const mine = { services_today: 0, acres_today: 0, services_week: 0, acres_week: 0 };
+  const own = {};   // the person's own last 14 days, for the small chart
+  for (let i = 0; i < 14; i++) own[shiftDay_(fortnightFrom, i)] = { acres: 0, services: 0 };
+  rows.forEach(r => {
+    if (String(r.pilot_email).toLowerCase() !== me) return;
+    const day = isoDay_(r.service_date), a = Number(r.acres_covered) || 0;
+    if (day === today) { mine.services_today++; mine.acres_today += a; }
+    if (day >= weekFrom && day <= today) { mine.services_week++; mine.acres_week += a; }
+    if (own[day]) { own[day].acres += a; own[day].services++; }
+  });
+  mine.acres_today = round2_(mine.acres_today); mine.acres_week = round2_(mine.acres_week);
+  mine.per_day = Object.keys(own).map(d => ({ day: d, acres: round2_(own[d].acres), services: own[d].services }));
+  out.mine = mine;
+  if (!isLead) return plain_(out);
+
+  const entries = indexLoad_().entries;
+  let active = 0, newWeek = 0;
+  entries.forEach(e => { if (e.v[14] === 'Active') active++; if (e.v[15] >= weekFrom) newWeek++; });
+  out.farmers = { total: entries.length, active: active, new_week: newWeek };
+
+  const days = {};
+  for (let i = 0; i < 14; i++) days[shiftDay_(fortnightFrom, i)] = 0;
+  // longer series for the charts: the last 30 days, the last 12 weeks, and the kinds of service of the last 30 days
+  const days30 = {};
+  for (let i = 0; i < 30; i++) days30[shiftDay_(monthFrom, i)] = { acres: 0, services: 0 };
+  const weeksFrom = shiftDay_(today, -83);
+  const weeks = [];
+  for (let w = 0; w < 12; w++) weeks.push({ from: shiftDay_(weeksFrom, w * 7), acres: 0, services: 0 });
+  const weekStart = Date.parse(weeksFrom + 'T00:00:00Z');
+  const kinds = {};
+  const served = {};
+  let count = 0, acres = 0, rated = 0, ratingSum = 0;
+  rows.forEach(r => {
+    const day = isoDay_(r.service_date);
+    const a = Number(r.acres_covered) || 0;
+    if (day >= weeksFrom && day <= today) {
+      const w = Math.min(11, Math.floor((Date.parse(day + 'T00:00:00Z') - weekStart) / 86400000 / 7));
+      weeks[w].acres += a; weeks[w].services++;
+    }
+    if (day < monthFrom || day > today) return;
+    count++; acres += a; served[r.farmer_id] = true;
+    if (Number(r.satisfaction)) { rated++; ratingSum += Number(r.satisfaction); }
+    if (days[day] !== undefined) days[day] += a;
+    days30[day].acres += a; days30[day].services++;
+    const kind = String(r.service_type || '') || 'Not recorded';
+    const k = kinds[kind] = kinds[kind] || { name: kind, services: 0, acres: 0 };
+    k.services++; k.acres += a;
+  });
+  out.services = { count: count, acres: round2_(acres), farmers: Object.keys(served).length, avg_satisfaction: rated ? round2_(ratingSum / rated) : null,
+    per_day: Object.keys(days).map(d => ({ day: d, acres: round2_(days[d]) })),
+    days: Object.keys(days30).map(d => ({ day: d, acres: round2_(days30[d].acres), services: days30[d].services })),
+    weeks: weeks.map(w => ({ from: w.from, acres: round2_(w.acres), services: w.services })),
+    by_type: Object.keys(kinds).map(k => ({ name: k, services: kinds[k].services, acres: round2_(kinds[k].acres) })).sort((a, b) => b.services - a.services || a.name.localeCompare(b.name)) };
+  const msgs = readAll_('Messages').filter(m => isoDay_(m.created_at) >= monthFrom);
+  out.messages = { count: msgs.length, farmers: msgs.reduce((s, m) => s + (Number(m.recipients) || 0), 0) };
+  return plain_(out);
+}
+
+// ---- Logbook.gs
+// The farmer's log book: everything CAFT has done with or for one farmer, newest first, in one list.
+// It joins three sources: the service log (Services), the messages and calls (Outreach: bulk messages written by Messages.gs and
+// the entries staff add by hand here), and the day the farmer was registered. Admins and managers read it and add entries.
+
+const INTERACTION_TYPES = ['Phone call', 'Visit', 'Complaint', 'Feedback', 'Note'];
+const LOGBOOK_LIMIT = 300;
+const LOGBOOK_ROLES = ['Admin', 'Manager'];
+
+function requireLogbookUser_() { return requireRole_(LOGBOOK_ROLES); }
+
+// Sheet rows of one farmer in the Outreach tab (reads only the farmer column).
+function outreachRowNumbersForFarmer_(farmerId) {
+  const sh = sheet_('Outreach');
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  const rows = [];
+  sh.getRange(2, SCHEMA.Outreach.indexOf('farmer_id') + 1, last - 1, 1).getValues().forEach((r, i) => { if (String(r[0]) === farmerId) rows.push(i + 2); });
+  return rows;
+}
+
+function getFarmerLogbook(farmerId) {
+  const user = requireLogbookUser_();
+  const id = String(farmerId || '');
+  const entry = indexEntry_(id);
+  if (!entry) throw new Error('Farmer not found.');
+  const farmerRow = readRowsAt_('Farmers', [entry.r])[0];
+  const entries = [];
+
+  farmerServiceRows_(id).map(r => serviceOut_(r, user)).forEach(s => {
+    entries.push({ kind: 'service', id: s.service_id, date: s.service_date || s.requested_date, status: s.status, service_type: s.service_type, crop: s.crop,
+      acres_covered: s.acres_covered, pilot_name: s.pilot_name, satisfaction: s.satisfaction, start_time: s.start_time, end_time: s.end_time, duration_min: s.duration_min,
+      requested_date: s.requested_date, by: s.pilot_name });
+  });
+  readRowsAt_('Outreach', outreachRowNumbersForFarmer_(id)).map(stripRow_).forEach(c => {
+    const bulk = /^MS\d+:/.test(String(c.notes));
+    entries.push({ kind: bulk ? 'message' : 'interaction', id: c.outreach_id, date: isoDay_(c.date), type: c.channel, outcome: c.outcome, notes: c.notes, by: c.by });
+  });
+  const reg = stripRow_({ created_by: farmerRow.created_by });
+  entries.push({ kind: 'registered', id: id, date: isoDay_(farmerRow.created_at), by: reg.created_by });
+
+  const order = { service: 0, message: 1, interaction: 2, registered: 3 };
+  entries.sort((a, b) => String(b.date).localeCompare(String(a.date)) || order[a.kind] - order[b.kind] || String(b.id).localeCompare(String(a.id)));
+
+  const done = entries.filter(e => e.kind === 'service' && e.status === 'Completed');
+  const contactDays = entries.filter(e => e.kind === 'message' || e.kind === 'interaction').map(e => e.date).filter(Boolean).sort();
+  const serviceDays = done.map(e => e.date).filter(Boolean).sort();
+  return plain_({
+    farmer: farmerCard_(id),
+    summary: {
+      services: done.length, acres: round2_(done.reduce((s, e) => s + (Number(e.acres_covered) || 0), 0)), last_service: serviceDays[serviceDays.length - 1] || '',
+      messages: entries.filter(e => e.kind === 'message').length, interactions: entries.filter(e => e.kind === 'interaction').length,
+      last_contact: contactDays[contactDays.length - 1] || '', registered: isoDay_(farmerRow.created_at)
+    },
+    entries: entries.slice(0, LOGBOOK_LIMIT), total: entries.length, types: INTERACTION_TYPES
+  });
+}
+
+// Adds a call, visit, complaint, feedback or note to a farmer's log book.
+function addInteraction(input) {
+  requireLogbookUser_();
+  const f = input || {};
+  const id = String(f.farmer_id || '').trim();
+  if (!id || !indexEntry_(id)) throw new Error('Farmer not found.');
+  const type = clean_(f.type);
+  if (INTERACTION_TYPES.indexOf(type) === -1) throw new Error('Choose what kind of entry it is.');
+  const today = localToday_();
+  const date = cleanDate_(f.date, 'Date') || today;
+  if (date > today) throw new Error('The date cannot be in the future.');
+  const outcome = clean_(f.outcome).slice(0, 100);
+  const notes = clean_(f.notes).slice(0, 500);
+  if (!outcome && !notes) throw new Error('Write what happened.');
+  return withLock_(() => {
+    const oid = nextId_('OR', 6);
+    appendObjects_('Outreach', [Object.assign({ outreach_id: oid, product_id: '', farmer_id: id, channel: type, date: date, outcome: outcome, notes: notes, by: currentEmail_() }, auditCols_(true))]);
+    audit_('create', 'Outreach', oid, id + ' ' + type);
+    return { outreach_id: oid };
+  });
+}
+
+// ---- Messages.gs
+// Bulk messages: choose a group of farmers (an area, a Govi committee, a saved group, with a rule about when they were last served),
+// write the message, and get the list to send it with. The app does not send SMS itself (that needs a paid SMS provider): it prepares
+// the phone list / personalised file / WhatsApp links, and when the message has gone out it records who was contacted.
+//
+// Who is left out, always: farmers marked do-not-contact, farmers who said No to marketing, farmers with no phone number.
+// "Only farmers who agreed" also leaves out those who were never asked.
+
+const MESSAGE_ROLES = ['Admin', 'Manager'];
+const MESSAGE_RECIPIENT_LIMIT = 5000;
+const MESSAGE_LEFT_LIST_LIMIT = 300;
+const MESSAGE_MAX_CHARS = 1000;
+const MESSAGE_CHANNELS = ['SMS', 'WhatsApp', 'Phone call'];
+const SERVICE_RULES = ['any', 'ever', 'never', 'within', 'not_within'];
+
+function requireMessageUser_() { return requireRole_(MESSAGE_ROLES); }
+
+function cleanAudience_(input, S) {
+  const a = input || {};
+  const rule = String(a.rule || 'any');
+  if (SERVICE_RULES.indexOf(rule) === -1) throw new Error('Choose who to include by service history.');
+  let days = 0;
+  if (rule === 'within' || rule === 'not_within') {
+    days = Math.floor(Number(a.days));
+    if (!isFinite(days) || days < 1 || days > 3650) throw new Error('Enter the number of days (1 to 3650).');
+  }
+  return { area: cleanFilters_(a.area || [], S.optionById), rule: rule, days: days, consent_only: !!a.consent_only };
+}
+
+// The day of each farmer's latest completed service (one narrow read of the Services tab).
+function lastServiceDays_() {
+  const sh = sheet_('Services');
+  const last = sh.getLastRow();
+  const out = {};
+  archivedCompact_().forEach(c => { if (c[CP_STATUS] === 'Completed' && c[CP_DAY] && (!out[c[CP_FARMER]] || c[CP_DAY] > out[c[CP_FARMER]])) out[c[CP_FARMER]] = c[CP_DAY]; });
+  if (last < 2) return out;
+  const c0 = serviceCol_('farmer_id'), c1 = serviceCol_('service_date');
+  const width = c1 - c0 + 1;
+  const sCol = serviceCol_('status') - c0, dCol = c1 - c0;
+  sh.getRange(2, c0, last - 1, width).getValues().forEach(r => {
+    if (r[sCol] !== 'Completed') return;
+    const day = isoDay_(r[dCol]);
+    const id = String(r[0]);
+    if (day && (!out[id] || day > out[id])) out[id] = day;
+  });
+  return out;
+}
+
+function daysBetween_(fromIso, toIso) {
+  return Math.round((new Date(toIso + 'T00:00:00Z').getTime() - new Date(fromIso + 'T00:00:00Z').getTime()) / 86400000);
+}
+
+// Works out who the audience is: { matched, recipients, left_out }. withLeft: also { left_list } (who was left out and why, for the list pop-up).
+function audienceFarmers_(aud, S, withLeft) {
+  const ctx = finderContext_();
+  const lastDay = aud.rule === 'any' ? {} : lastServiceDays_();
+  const today = localToday_();
+  const recipients = [];
+  const leftOut = { no_phone: 0, do_not_contact: 0, no_consent: 0 };
+  const leftList = [];
+  const leave = (f, reason) => { if (withLeft) leftList.push({ farmer_id: f.farmer_id, name: f.full_name, village: f.village || '', division: f.ds_division || '', reason: reason }); };
+  let matched = 0;
+  ctx.farmers.forEach(f => {
+    if (!matchFarmer_(f, aud.area, ctx)) return;
+    const last = lastDay[f.farmer_id] || '';
+    if (aud.rule === 'ever' && !last) return;
+    if (aud.rule === 'never' && last) return;
+    if (aud.rule === 'within' && !(last && daysBetween_(last, today) <= aud.days)) return;
+    if (aud.rule === 'not_within' && last && daysBetween_(last, today) <= aud.days) return;
+    matched++;
+    if (f.do_not_contact === 'Yes') { leftOut.do_not_contact++; leave(f, 'do_not_contact'); return; }
+    if (f.marketing_consent === 'No' || (aud.consent_only && f.marketing_consent !== 'Yes')) { leftOut.no_consent++; leave(f, f.marketing_consent === 'No' ? 'said_no' : 'not_agreed'); return; }
+    const phone = String(f.phone_primary || f.phone_alt || '');
+    if (!phone) { leftOut.no_phone++; leave(f, 'no_phone'); return; }
+    recipients.push({ farmer_id: f.farmer_id, name: f.full_name, phone: phone, village: f.village || '', division: f.ds_division || '', last_service: last });
+  });
+  recipients.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const out = { matched: matched, recipients: recipients, left_out: leftOut };
+  if (withLeft) {
+    leftList.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    out.left_list = leftList;
+  }
+  return out;
+}
+
+// How many farmers a choice reaches, before writing anything.
+function previewAudience(input) {
+  requireMessageUser_();
+  const aud = cleanAudience_(input, originStructure_());
+  const r = audienceFarmers_(aud, originStructure_());
+  return plain_({ matched: r.matched, will_receive: r.recipients.length, left_out: r.left_out,
+    sample: r.recipients.slice(0, 8).map(x => ({ farmer_id: x.farmer_id, name: x.name, phone: x.phone, village: x.village, division: x.division })),
+    too_many: r.recipients.length > MESSAGE_RECIPIENT_LIMIT, limit: MESSAGE_RECIPIENT_LIMIT });
+}
+
+// The people behind the numbers of previewAudience, for the "View list" pop-up: who will get the message (name, phone, place) and who is
+// left out and why. Looking is not sending, so nothing is written to the audit log. A group above the send limit returns no names (the
+// message could not be sent to it anyway); only the counts, so the screen can say "narrow the group". Left-out names: the first
+// MESSAGE_LEFT_LIST_LIMIT, with the full count in left_out.
+function listAudience(input) {
+  requireMessageUser_();
+  const S = originStructure_();
+  const aud = cleanAudience_(input, S);
+  const r = audienceFarmers_(aud, S, true);
+  const tooMany = r.recipients.length > MESSAGE_RECIPIENT_LIMIT;
+  const leftTotal = r.left_out.no_phone + r.left_out.do_not_contact + r.left_out.no_consent;
+  return plain_({ matched: r.matched, will_receive: r.recipients.length, left_out: r.left_out, left_total: leftTotal,
+    recipients: tooMany ? [] : r.recipients.map(x => ({ farmer_id: x.farmer_id, name: x.name, phone: x.phone, village: x.village, division: x.division, last_service: x.last_service })),
+    left_list: r.left_list.slice(0, MESSAGE_LEFT_LIST_LIMIT), left_truncated: r.left_list.length > MESSAGE_LEFT_LIST_LIMIT,
+    too_many: tooMany, limit: MESSAGE_RECIPIENT_LIMIT });
+}
+
+// The people to message, with their phone numbers, for building the send list in the browser.
+function prepareMessage(input) {
+  requireMessageUser_();
+  const S = originStructure_();
+  const aud = cleanAudience_(input, S);
+  const r = audienceFarmers_(aud, S);
+  if (r.recipients.length > MESSAGE_RECIPIENT_LIMIT) throw new Error(r.recipients.length + ' farmers match. Narrow the group to ' + MESSAGE_RECIPIENT_LIMIT + ' or fewer (add an area or a rule).');
+  audit_('export', 'Messages', '', r.recipients.length + ' phone numbers prepared; audience: ' + JSON.stringify(aud).slice(0, 300));
+  return plain_({ recipients: r.recipients, matched: r.matched, left_out: r.left_out });
+}
+
+// Records that a message went out: one row for the message, one Outreach row for every farmer it reached.
+function logMessage(input) {
+  const user = requireMessageUser_();
+  const S = originStructure_();
+  const aud = cleanAudience_(input && input.audience, S);
+  const title = clean_(input && input.title).slice(0, 80);
+  const body = String((input && input.body) || '').replace(/\r/g, '').trim().slice(0, MESSAGE_MAX_CHARS + 1);
+  const channel = clean_(input && input.channel);
+  if (!title) throw new Error('Give the message a short title so you can find it later.');
+  if (!body) throw new Error('Write the message first.');
+  if (body.length > MESSAGE_MAX_CHARS) throw new Error('The message is longer than ' + MESSAGE_MAX_CHARS + ' characters.');
+  if (MESSAGE_CHANNELS.indexOf(channel) === -1) throw new Error('Choose how it was sent.');
+  return withLock_(() => {
+    const r = audienceFarmers_(aud, S);
+    if (!r.recipients.length) throw new Error('No farmers would receive this message.');
+    if (r.recipients.length > MESSAGE_RECIPIENT_LIMIT) throw new Error('Too many farmers (' + r.recipients.length + '). Narrow the group to ' + MESSAGE_RECIPIENT_LIMIT + ' or fewer.');
+    const id = nextId_('MS', 5);
+    const text = clean_(input.audience_text).slice(0, 200) || 'All farmers';
+    const left = r.left_out.no_phone + r.left_out.do_not_contact + r.left_out.no_consent;
+    appendObjects_('Messages', [Object.assign({ message_id: id, title: title, body: body, channel: channel, audience_text: text, audience_json: JSON.stringify(aud).slice(0, 5000),
+      recipients: r.recipients.length, left_out: left }, auditCols_(true))]);
+    const ids = nextIds_('OR', 6, r.recipients.length);
+    const today = localToday_();
+    const who = currentEmail_();
+    appendObjects_('Outreach', r.recipients.map((x, i) => Object.assign({ outreach_id: ids[i], product_id: '', farmer_id: x.farmer_id, channel: channel, date: today,
+      outcome: 'Sent', notes: id + ': ' + title, by: who }, auditCols_(true))));
+    audit_('create', 'Messages', id, title + ' to ' + r.recipients.length + ' farmers by ' + channel);
+    return { message_id: id, recipients: r.recipients.length };
+  });
+}
+
+function listMessages() {
+  requireMessageUser_();
+  const rows = readAll_('Messages');
+  return plain_(rows.slice(-50).reverse().map(r => ({ message_id: r.message_id, title: r.title, body: r.body, channel: r.channel, audience_text: r.audience_text,
+    recipients: r.recipients, left_out: r.left_out, created_at: r.created_at, created_by: String(r.created_by).toLowerCase() === ownerEmail_() && !viewerIsDeveloper_() ? 'system' : r.created_by })));
+}
+
+// The messages and calls recorded for one farmer, newest first.
+function getFarmerContacts(farmerId) {
+  requireMessageUser_();
+  const id = String(farmerId || '');
+  const sh = sheet_('Outreach');
+  const last = sh.getLastRow();
+  if (last < 2) return plain_({ rows: [], total: 0 });
+  const col = SCHEMA.Outreach.indexOf('farmer_id') + 1;
+  const rows = [];
+  sh.getRange(2, col, last - 1, 1).getValues().forEach((r, i) => { if (String(r[0]) === id) rows.push(i + 2); });
+  const out = readRowsAt_('Outreach', rows.slice(-30)).map(stripRow_).map(r => ({ date: isoDay_(r.date), channel: r.channel, outcome: r.outcome, notes: r.notes, by: r.by }));
+  out.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  return plain_({ rows: out, total: rows.length });
+}
+
+// ---- MockServices.gs
+// A made-up service history (about two years) for the farmers, to see how the app looks and behaves after long use. An on / off switch in the
+// Developer tab: ON writes the records, OFF removes exactly those records again. Everything it writes is marked:
+//   notes = 'MOCK DATA: made-up service', created_by / updated_by = MOCK_SERVICE_EMAIL, pilots 'Mock Pilot A..D' (they are not accounts).
+// Config key 'mock_services' = 'on' while the records exist; every screen then shows a small "Demo data" chip, so nobody takes them for real.
+//
+// What the history looks like (so reports, the map, Home and the farmer profiles have something realistic to show):
+//   - about half of the farmers are customers, bigger farms more often; customers come back in most seasons (more and more over the two years)
+//   - two paddy seasons a year (Maha from 15 October, Yala from 15 April), each customer asks for 2 to 4 sprayings (fertilizer, weedicide, pesticide, fertilizer)
+//   - the team goes to one place (a tank) on one day and serves its farmers one after another, four teams (pilot + drone) at most a day,
+//     no Sundays, nobody works more than about 10 hours; the day's flying time follows from the acres
+//   - most jobs are Completed (with scores and payments), a few Cancelled (rain); some are Scheduled for the next three weeks and some are
+//     still only Requested (the farmer asked in the last two weeks), which is what a planner would start from
+// The same farmers always get the same history (a seeded random generator).
+
+const MOCK_SERVICE_NOTE = 'MOCK DATA: made-up service';
+const MOCK_SERVICE_EMAIL = 'mock@govilink.invalid';
+const MOCK_SERVICE_PILOTS = [['Mock Pilot A', 'mock.pilot.a@mock.invalid'], ['Mock Pilot B', 'mock.pilot.b@mock.invalid'], ['Mock Pilot C', 'mock.pilot.c@mock.invalid'], ['Mock Pilot D', 'mock.pilot.d@mock.invalid']];
+const MOCK_SERVICE_DRONES = ['Mock drone 1', 'Mock drone 2', 'Mock drone 3', 'Mock drone 4'];
+const MOCK_SERVICE_DAYS = 760;            // how far back the history starts (a little over two years)
+const MOCK_SERVICE_KINDS = [['Fertilizer spraying', 'Liquid urea', 3600], ['Weedicide spraying', 'Weedicide', 3000], ['Pesticide spraying', 'Insecticide', 4000], ['Fertilizer spraying', 'Liquid urea', 3600]];   // the order of a season; kind, product, Rs per acre
+
+function mockMinutesText_(m) { return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); }
+function mockMonday_(iso) { const d = new Date(iso + 'T00:00:00Z').getUTCDay(); return shiftDay_(iso, -((d + 6) % 7)); }
+function mockWeighted_(rnd, list) { let t = 0; list.forEach(x => { t += x[1]; }); let r = rnd() * t; for (let i = 0; i < list.length; i++) { r -= list[i][1]; if (r < 0) return list[i][0]; } return list[list.length - 1][0]; }
+
+// The records for every active farmer. today = 'YYYY-MM-DD'. Returns plain row objects without ids (ids are given when they are written).
+function generateMockServices_(today) {
+  const entries = indexLoad_().entries.filter(e => e.v[14] === 'Active');
+  const S = originStructure_();
+  const route = originRouter_(S);
+  const listed = serviceListValues_('service_type');
+  const kindOk = k => listed.indexOf(k) !== -1;
+  const startDay = shiftDay_(today, -MOCK_SERVICE_DAYS);
+  const horizon = shiftDay_(today, 21);          // later than this is only a request
+  const farFuture = shiftDay_(today, 75);
+
+  // the seasons that touch the period
+  const seasons = [];
+  const y0 = Number(startDay.slice(0, 4)) - 1, y1 = Number(today.slice(0, 4));
+  for (let y = y0; y <= y1; y++) { seasons.push(y + '-04-15'); seasons.push(y + '-10-15'); }
+  const live = seasons.filter(s => shiftDay_(s, 100) >= startDay && s <= today).sort();
+  const firstS = live.length ? Date.parse(live[0] + 'T00:00:00Z') : 0, lastS = live.length ? Date.parse(live[live.length - 1] + 'T00:00:00Z') : 1;
+
+  // 1. what each customer asks for
+  const items = [];
+  entries.forEach(e => {
+    const rnd = gpsRandom_('svc|' + e.id);
+    const acres = entryAcres_(e) || (1 + Math.floor(rnd() * 5));
+    if (rnd() > Math.min(0.85, 0.30 + 0.07 * acres)) return;                              // not a customer
+    const r = route(e);
+    const place = r.root ? r.root.option_id : (String(e.v[10] || e.v[9] || 'none'));
+    const crop = e.f.length && e.f[0][1] ? e.f[0][1] : 'Paddy';
+    // outside the two seasons there are still a few jobs (vegetables, other crops, a late request): about one customer in ten, twice a year
+    for (let h = 0; h < Math.ceil(MOCK_SERVICE_DAYS / 182); h++) {
+      if (rnd() < 0.10) {
+        const k = Math.floor(rnd() * 3);
+        items.push({ e: e, id: e.id, place: place, crop: crop, kind: MOCK_SERVICE_KINDS[k], acres: Math.max(0.25, Math.round(Math.min(acres, 14) * 4) / 4), base: shiftDay_(startDay, h * 182 + Math.floor(rnd() * 182)), rnd: rnd });
+      }
+    }
+    live.forEach(s => {
+      const w = 0.4 + 0.6 * (lastS > firstS ? (Date.parse(s + 'T00:00:00Z') - firstS) / (lastS - firstS) : 1);   // more and more customers as the service grows
+      if (rnd() > 0.65 * w + 0.05) return;                                              // not this season
+      const times = mockWeighted_(rnd, [[2, 30], [3, 40], [4, 30]]);
+      for (let k = 0; k < times; k++) {
+        const base = shiftDay_(s, [14, 35, 55, 75][k] + Math.floor(rnd() * 14) - 3);
+        items.push({ e: e, id: e.id, place: place, crop: crop, kind: MOCK_SERVICE_KINDS[k], acres: Math.max(0.25, Math.round(Math.min(acres, 14) * (rnd() < 0.8 ? 1 : 0.5) * 4) / 4), base: base, rnd: rnd });
+      }
+    });
+  });
+
+  // 2. the team goes to a place on one day of that week: farmers of a tank in the same week are served together
+  const visitDay = (place, base) => { const wk = mockMonday_(base); return shiftDay_(wk, Math.floor(gpsRandom_('d|' + place + '|' + wk)() * 6)); };   // Monday to Saturday
+  const byDay = {};
+  const requests = [];
+  items.forEach(it => {
+    if (it.base < startDay) return;
+    const d = visitDay(it.place, it.base);
+    if (d < startDay) return;
+    if (d > farFuture) return;
+    if (d > horizon) { requests.push(it); return; }
+    it.cancel = d <= today && it.rnd() < 0.04;
+    (byDay[d] = byDay[d] || {});
+    (byDay[d][it.place] = byDay[d][it.place] || []).push(it);
+  });
+
+  // 3. day by day: at most four places a day (one team each), nobody works past about 17:30; what does not fit moves to the next working day
+  const rows = [];
+  const pilotsN = MOCK_SERVICE_PILOTS.length;
+  const lastDay = horizon;
+  const done = [];
+  let carry = {};
+  for (let day = startDay; day <= lastDay; day = shiftDay_(day, 1)) {
+    const dow = new Date(day + 'T00:00:00Z').getUTCDay();
+    const today_ = {};
+    Object.keys(byDay[day] || {}).forEach(p => { today_[p] = (byDay[day][p] || []).slice(); });
+    Object.keys(carry).forEach(p => { today_[p] = (today_[p] || []).concat(carry[p]); });
+    carry = {};
+    const places = Object.keys(today_);
+    if (!places.length) continue;
+    if (dow === 0) { places.forEach(p => { carry[p] = today_[p]; }); continue; }                                      // no Sundays
+    places.sort((a, b) => today_[b].reduce((s, x) => s + x.acres, 0) - today_[a].reduce((s, x) => s + x.acres, 0) || (a < b ? -1 : 1));
+    places.forEach((p, ix) => {
+      if (ix >= pilotsN) { carry[p] = today_[p]; return; }                                                            // all teams are busy: tomorrow
+      const team = ix, rnd = gpsRandom_('v|' + p + '|' + day);
+      const perHour = 10 + Math.floor(rnd() * 5);                                                                   // acres per flying hour
+      let cursor = 7 * 60 + Math.floor(rnd() * 60);
+      const list = today_[p];
+      for (let i = 0; i < list.length; i++) {
+        const it = list[i];
+        if (it.cancel) { done.push({ it: it, day: day, team: team, start: '', end: '', mins: '' }); continue; }
+        const mins = Math.round(it.acres / perHour * 60) + (i === 0 ? 40 : 12);
+        if (cursor + mins > 17 * 60 + 30 && i > 0) { carry[p] = (carry[p] || []).concat(list.slice(i)); break; }    // the rest tomorrow
+        const startM = cursor + (i === 0 ? 25 : 8);                                                                  // travel and set-up before flying
+        const endM = startM + Math.round(it.acres / perHour * 60);
+        done.push({ it: it, day: day, team: team, start: mockMinutesText_(startM), end: mockMinutesText_(endM), mins: endM - startM });
+        cursor = endM + 6;
+      }
+    });
+  }
+  // what is still waiting after the last day goes to the requests
+  Object.keys(carry).forEach(p => carry[p].forEach(it => requests.push(it)));
+
+  // 4. the records
+  const now = new Date();
+  const rate = {}; MOCK_SERVICE_KINDS.forEach(k => { rate[k[0]] = k[2]; });
+  function base(it) {
+    const kind = kindOk(it.kind[0]) ? it.kind[0] : (listed[0] || it.kind[0]);
+    return { farmer_id: it.id, service_type: kind, crop: it.crop, product_used: '', quantity_l: '', amount_charged: '', payment_status: '', satisfaction: '', feedback: '', notes: MOCK_SERVICE_NOTE, created_by: MOCK_SERVICE_EMAIL, updated_by: MOCK_SERVICE_EMAIL, updated_at: now };
+  }
+  done.forEach(x => {
+    const it = x.it, r = base(it), rnd = gpsRandom_('r|' + it.id + '|' + x.day + '|' + it.kind[0]);
+    const future = x.day > today;
+    r.requested_date = shiftDay_(x.day, -(2 + Math.floor(rnd() * 12)));
+    if (r.requested_date > today) r.requested_date = today;
+    r.service_date = x.day;
+    r.pilot_name = MOCK_SERVICE_PILOTS[x.team][0]; r.pilot_email = MOCK_SERVICE_PILOTS[x.team][1]; r.drone = MOCK_SERVICE_DRONES[x.team];
+    r.created_at = new Date(Date.parse(r.requested_date + 'T09:00:00Z'));
+    if (future) { r.status = 'Scheduled'; r.acres_covered = it.acres; rows.push(r); return; }
+    if (it.cancel) { r.status = 'Cancelled'; r.notes = MOCK_SERVICE_NOTE + ' (cancelled because of rain)'; r.start_time = ''; r.end_time = ''; r.duration_min = ''; r.acres_covered = ''; rows.push(r); return; }
+    r.status = 'Completed'; r.start_time = x.start; r.end_time = x.end; r.duration_min = x.mins; r.acres_covered = it.acres;
+    r.product_used = it.kind[1]; r.quantity_l = Math.round(it.acres * (1.5 + rnd()) * 10) / 10;
+    r.payment_status = mockWeighted_(rnd, [['Paid', 78], ['Partly paid', 9], ['Unpaid', 10], ['Free', 3]]);
+    r.amount_charged = r.payment_status === 'Free' ? 0 : Math.round(it.acres * (rate[it.kind[0]] || 3500) * (0.92 + rnd() * 0.16) / 50) * 50;
+    if (rnd() < 0.85) r.satisfaction = Number(mockWeighted_(rnd, [[5, 40], [4, 35], [3, 15], [2, 6], [1, 4]]));
+    if (rnd() < 0.06) r.feedback = ['Very happy with the work', 'Came on time', 'Asked for more fertilizer next time', 'Wind made it difficult', 'Neighbours want the service too'][Math.floor(rnd() * 5)];
+    r.created_at = new Date(Date.parse(x.day + 'T' + (x.end || '17:00') + ':00Z'));
+    rows.push(r);
+  });
+  requests.forEach(it => {
+    const r = base(it), rnd = gpsRandom_('q|' + it.id + '|' + it.base + '|' + it.kind[0]);
+    r.status = 'Requested'; r.requested_date = shiftDay_(today, -(1 + Math.floor(rnd() * 14))); r.service_date = ''; r.start_time = ''; r.end_time = ''; r.duration_min = '';
+    r.pilot_name = ''; r.pilot_email = ''; r.drone = ''; r.acres_covered = it.acres;
+    r.created_at = new Date(Date.parse(r.requested_date + 'T09:00:00Z'));
+    rows.push(r);
+  });
+  rows.sort((a, b) => String(a.service_date || a.requested_date).localeCompare(String(b.service_date || b.requested_date)) || (a.farmer_id < b.farmer_id ? -1 : 1));
+  return rows;
+}
+
+function mockServiceCounts_() {
+  const sh = sheet_('Services');
+  const last = sh.getLastRow();
+  if (last < 2) return { mock: 0, real: 0, from: '', to: '' };
+  const notes = sh.getRange(2, serviceCol_('notes'), last - 1, 1).getValues();
+  let mock = 0, real = 0;
+  notes.forEach(r => { if (String(r[0]).indexOf(MOCK_SERVICE_NOTE) === 0) mock++; else real++; });
+  const days = mock ? sh.getRange(2, serviceCol_('service_date'), last - 1, 1).getValues().filter((r, i) => String(notes[i][0]).indexOf(MOCK_SERVICE_NOTE) === 0 && r[0] !== '').map(r => String(r[0])).sort() : [];
+  return { mock: mock, real: real, from: days[0] || '', to: days[days.length - 1] || '' };
+}
+
+function mockServicesOn_() { return String(getConfig_('mock_services') || '') === 'on'; }
+
+// Writes the history. Refuses when it already exists. Writes in slices (one write per slice) and marks the switch ON first, so a stopped run
+// can be switched off cleanly (everything it wrote is marked).
+function enableMockServices_() {
+  return withLock_(() => {
+    const before = mockServiceCounts_();
+    if (before.mock) throw new Error('The made-up service history is already on (' + before.mock + ' records). Turn it off first to make it again.');
+    const today = localToday_();
+    const rows = generateMockServices_(today);
+    if (!rows.length) throw new Error('There are no farmers to make a history for.');
+    setConfig_('mock_services', 'on', 'The made-up service history is on (Developer tab)');
+    const SLICE = 4000;
+    for (let from = 0; from < rows.length; from += SLICE) {
+      const part = rows.slice(from, from + SLICE);
+      const ids = nextIds_('SV', 6, part.length);
+      appendObjects_('Services', part.map((r, i) => Object.assign({ service_id: ids[i] }, r)));
+    }
+    audit_('create', 'Services', '', 'developer turned the made-up service history on: ' + rows.length + ' records');
+    const by = {}; rows.forEach(r => { by[r.status] = (by[r.status] || 0) + 1; });
+    return { total: rows.length, by: by };
+  });
+}
+
+// Removes exactly the marked records and nothing else.
+function disableMockServices_() {
+  return withLock_(() => {
+    const sh = sheet_('Services');
+    const last = sh.getLastRow();
+    const drop = {};
+    if (last >= 2) {
+      const ids = sh.getRange(2, 1, last - 1, 1).getValues();
+      const notes = sh.getRange(2, serviceCol_('notes'), last - 1, 1).getValues();
+      ids.forEach((r, i) => { if (String(notes[i][0]).indexOf(MOCK_SERVICE_NOTE) === 0) drop[String(r[0])] = true; });
+    }
+    const removed = removeRowsByKey_('Services', 1, drop);
+    setConfig_('mock_services', 'off', 'The made-up service history is off');
+    if (removed) audit_('delete', 'Services', '', 'developer turned the made-up service history off: ' + removed + ' records removed');
+    return { removed: removed };
+  });
+}
+
+function devMockServicesStatus() {
+  requireDeveloper_();
+  return plain_(Object.assign(mockServiceCounts_(), { on: mockServicesOn_() }));
+}
+function devEnableMockServices() {
+  requireDeveloper_();
+  const t0 = Date.now();
+  const r = enableMockServices_();
+  return plain_(Object.assign(r, { seconds: Math.round((Date.now() - t0) / 100) / 10, status: Object.assign(mockServiceCounts_(), { on: mockServicesOn_() }) }));
+}
+function devDisableMockServices() {
+  requireDeveloper_();
+  const r = disableMockServices_();
+  return plain_(Object.assign(r, { status: Object.assign(mockServiceCounts_(), { on: mockServicesOn_() }) }));
+}
+
+// Run from the Apps Script editor (the owner): the same as the Developer tab buttons, with the answer in the execution log.
+function enableMockServicesFromEditor() { const r = devEnableMockServices(); Logger.log('Mock services on: ' + JSON.stringify(r)); return r; }
+function disableMockServicesFromEditor() { const r = devDisableMockServices(); Logger.log('Mock services off: ' + JSON.stringify(r)); return r; }
+function mockServicesStatusFromEditor() { const r = devMockServicesStatus(); Logger.log('Mock services: ' + JSON.stringify(r)); return r; }
+
+// ---- OfflineData.gs
+// The full records on each device, and saving without a connection.
+//
+// SyncData.gs sends short rows (enough to search and to draw lists). This file sends the COMPLETE records, so that a farmer's profile, the
+// farmer's job history and a job can be opened (and the edit forms filled) without asking the server, even with no connection:
+//   getFarmerPack   the complete farmer records (farmer row, fields, answers), one index chunk of 100 farmers at a time, only the chunks that changed
+//   getServicePack  the complete job rows the person may see, only the rows that changed since the last time
+//   getFormPack     the labels of the form's questions and choices (so a manager's read-only profile can be written on the device)
+// Everything here is read-only and has the same permission as the screen function it replaces (getFarmer, getService ...).
+//
+// submitOp is the one door for saves that may be made without a connection (see the queue in Sync.html): the device gives every save its own
+// operation id, and a save that arrives twice (the answer got lost, the device sent it again) is done only once and answered with the first result.
+
+const PACK_CHUNKS_PER_CALL = 10;     // farmer chunks (100 farmers each) in one answer
+const PACK_SERVICE_PAGE = 2500;      // job rows in one answer
+const OPLOG_KEEP_ROWS_ = 4000;       // the log of finished operations is cut back to this many rows
+const QUEUEABLE_FUNCTIONS_ = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps'];
+
+// ---------- the complete farmer records ----------
+
+function getFarmerPack(known, limit) {
+  const user = requireRole_(['Admin', 'Manager', 'Pilot']);
+  indexEnsure_(true);
+  const sh = indexSheet_();
+  const last = sh.getLastRow();
+  let total = last >= 2 ? last - 1 : 0;
+  const stamps = total ? sh.getRange(2, 3, total, 1).getValues().map(r => stampText_(r[0])) : [];
+  while (total > 0 && stamps[total - 1] === '') total--;
+  const have = known && typeof known === 'object' ? known : {};
+  const todo = [];
+  for (let n = 0; n < total; n++) if (String(have[n] === undefined ? '' : have[n]) !== stamps[n]) todo.push(n);
+  const take = todo.slice(0, Math.max(1, Math.min(Number(limit) || PACK_CHUNKS_PER_CALL, 30)));
+  const lists = indexChunksBulk_(take);
+  const frows = [], flds = [], ans = [];
+  lists.forEach(entries => entries.forEach(e => { frows.push(e.r); e.f.forEach(x => flds.push(x[0])); e.a.forEach(x => ans.push(x[0])); }));
+  const farmerBy = {}, fieldsBy = {}, answersBy = {};
+  readRowsSpan_('Farmers', frows).forEach(r => { farmerBy[r.farmer_id] = r; });
+  readRowsSpan_('Fields', flds).forEach(r => { if (r.active === 'Yes') (fieldsBy[r.farmer_id] = fieldsBy[r.farmer_id] || []).push(r); });
+  readRowsSpan_('FarmerAnswers', ans).forEach(r => { if (r.active === 'Yes') (answersBy[r.farmer_id] = answersBy[r.farmer_id] || []).push(r); });
+  const chunks = take.map((n, i) => ({ n: n, stamp: stamps[n], recs: lists[i].filter(e => farmerBy[e.id]).map(e => ({
+    farmer: stripRow_(farmerBy[e.id]), fields: (fieldsBy[e.id] || []).map(stripRow_), answers: (answersBy[e.id] || []).map(stripRow_) })) }));
+  return plain_({ total: total, chunks: chunks, more: todo.length > take.length, revs: currentRevs_(), role: user.role });
+}
+
+// ---------- the complete job rows ----------
+
+// since = the stamp of the last answer ('' for everything), from = how many of the matching rows were already sent in earlier pages of this download.
+// Every role receives every job (a pilot sees all of a farmer's jobs on the farmer's history screen, with the money of other pilots' jobs hidden by serviceOut_;
+// the single-job screen of a pilot is limited to their own jobs by the device, as getService does). `archived` says that older jobs live in the Drive archive (the device then asks the server for farmer histories).
+function getServicePack(since, from) {
+  const user = requireServiceUser_();
+  const sh = sheet_('Services');
+  const last = sh.getLastRow();
+  const out = { rows: [], more: false, next: 0, stamp: '', count: 0, archived: false, edit_days: PILOT_EDIT_DAYS, recent_read: RECENT_SERVICE_READ, revs: null };
+  let top = '';
+  if (last >= 2) {
+    const n = last - 1;
+    const ids = sh.getRange(2, 1, n, 1).getValues();
+    const stamps = sh.getRange(2, serviceCol_('updated_at'), n, 1).getValues();
+    const cut = since ? new Date(Date.parse(String(since)) - SERVICE_SYNC_OVERLAP_MS).toISOString() : '';
+    const pick = [];
+    for (let i = 0; i < n; i++) {
+      if (ids[i][0] === '') continue;
+      out.count++;
+      const st = stampText_(stamps[i][0]);
+      if (st > top) top = st;
+      if (!since || st >= cut) pick.push(i + 2);
+    }
+    const start = Math.max(0, Number(from) || 0);
+    const page = pick.slice(start, start + PACK_SERVICE_PAGE);
+    out.more = start + page.length < pick.length;
+    out.next = start + page.length;
+    out.rows = readRowsSpan_('Services', page).map(r => serviceOut_(r, user));
+  }
+  if (archiveOn_()) { out.archived = archivedServiceCount_({ role: 'Admin' }) > 0; const aTop = archivedServiceStamp_(); if (aTop > top) top = aTop; }
+  out.stamp = top;
+  out.revs = currentRevs_();
+  return plain_(out);
+}
+
+// ---------- the labels of the form ----------
+
+function getFormPack() {
+  requireRole_(['Admin', 'Manager', 'Pilot']);
+  const questions = readAll_('FormQuestions').map(q => ({ question_id: q.question_id, label: q.label, section: q.section, order: q.order, is_origin: q.is_origin }));
+  const options = readAll_('FormOptions').map(o => ({ option_id: o.option_id, question_id: o.question_id, label: o.label, path: o.path }));
+  return plain_({ questions: questions, options: options, revs: currentRevs_() });
+}
+
+// ---------- a save that is done once, however often it arrives ----------
+
+function submitOp(opId, fn, args) {
+  requireRole_(ROLES);
+  const id = String(opId || '');
+  const name = String(fn || '');
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) throw new Error('Unknown action.');
+  if (QUEUEABLE_FUNCTIONS_.indexOf(name) === -1 || API_NAMES_.indexOf(name) === -1 || typeof globalThis[name] !== 'function') throw new Error('Unknown action.');
+  return withLock_(() => {
+    const sh = sheet_('OpLog');
+    const last = sh.getLastRow();
+    if (last >= 2) {
+      const ids = sh.getRange(2, 1, last - 1, 1).getValues();
+      for (let i = 0; i < ids.length; i++) {
+        if (String(ids[i][0]) !== id) continue;
+        const row = sh.getRange(i + 2, 1, 1, SCHEMA.OpLog.length).getValues()[0];
+        if (String(row[2]).toLowerCase() === currentEmail_()) return JSON.parse(String(row[3]));      // an id that somebody else used is not an answer for this person
+      }
+    }
+    const result = plain_(globalThis[name].apply(null, Array.isArray(args) ? args : []));
+    if (result && result.duplicate) return result;      // nothing was saved yet (the person is asked to confirm first): the same save may come again
+    appendObjects_('OpLog', [{ op_id: id, fn: name, user: currentEmail_(), result: JSON.stringify(result === undefined ? null : result), at: new Date().toISOString() }]);
+    const after = sheet_('OpLog').getLastRow();
+    if (after > OPLOG_KEEP_ROWS_ + 1000) sheet_('OpLog').deleteRows(2, after - OPLOG_KEEP_ROWS_ - 1);
+    return result;
+  });
+}
+
+// ---------- the local database: the tables each device keeps ----------
+// The device runs the same server code on its own copy of the tables (see engine/), so every screen reads from the phone and every save is made
+// on the phone first. These two functions are how the copy is made and kept up to date; each person receives only the tables (and columns) that
+// their role may see, and the developer's address is shown as "system" exactly as everywhere else.
+//   table: [stamp kind it belongs to (see REV_TABS_), whether it can be sent as "rows changed since" (it has updated_at)]
+const LOCAL_TABLE_KINDS_ = {
+  Config: ['lists', false], Lists: ['lists', false], FormQuestions: ['form', true], FormOptions: ['form', true],
+  Farmers: ['farmers', true], Fields: ['farmers', true], FarmerAnswers: ['farmers', true], Services: ['services', true],
+  Users: ['users', true], Places: ['places', true], Segments: ['segments', true], Messages: ['messages', true], Outreach: ['outreach', true]
+};
+const LOCAL_PLAN_ = {
+  Admin: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'FarmerAnswers', 'Services', 'Users', 'Places', 'Segments', 'Messages', 'Outreach'],
+  Manager: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'FarmerAnswers', 'Services', 'Users', 'Places', 'Segments', 'Messages', 'Outreach'],
+  Pilot: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'FarmerAnswers', 'Services', 'Users'],
+  DataEntry: ['Config', 'Lists', 'FormQuestions', 'FormOptions']
+};
+const LOCAL_CONFIG_KEYS_ = ['duplicate_check_mode', 'mock_services_on'];       // the only settings a device receives
+const LOCAL_PAGE_ROWS_ = 3000;
+const LOCAL_DATE_MARK_ = '~D:';             // in front of a date sent to the device; the device turns it back into a date
+
+function getLocalPlan() {
+  const user = requireRole_(ROLES);
+  const names = LOCAL_PLAN_[user.role] || [];
+  return plain_({ role: user.role, tables: names.map(n => ({ name: n, kind: LOCAL_TABLE_KINDS_[n][0], delta: LOCAL_TABLE_KINDS_[n][1], columns: SCHEMA[n].length })), revs: currentRevs_() });
+}
+
+// since = the stamp of the last answer for this table ('' for everything); from = how many matching rows earlier pages of this download already sent.
+// Rows come as arrays in the order of SCHEMA[table]. `count` = rows that exist, so the device can tell when rows were removed behind its back.
+function getTableDelta(table, since, from) {
+  const user = requireRole_(ROLES);
+  const name = String(table || '');
+  if ((LOCAL_PLAN_[user.role] || []).indexOf(name) === -1) throw new Error('Not authorised for this table.');
+  const headers = SCHEMA[name];
+  const kind = LOCAL_TABLE_KINDS_[name];
+  const out = { table: name, rows: [], more: false, next: 0, stamp: '', count: 0, snapshot: !kind[1], archived: false, revs: null };
+  const sh = sheet_(name);
+  const last = sh.getLastRow();
+  const dev = viewerIsDeveloper_() ? '' : String(ownerEmail_() || '').toLowerCase();
+  const staff = STAFF_COLUMNS.map(c => headers.indexOf(c)).filter(i => i !== -1);
+  const upd = headers.indexOf('updated_at');
+  const mask = {};
+  if (name === 'Users') ['password_hash', 'password_salt', 'failed_attempts', 'locked_until', 'last_login', 'must_change_password'].forEach(c => { mask[headers.indexOf(c)] = true; });
+  if (name === 'Services' && user.role === 'Pilot') { mask[headers.indexOf('amount_charged')] = 'money'; mask[headers.indexOf('payment_status')] = 'money'; }
+  const pilotAt = headers.indexOf('pilot_email');
+  const cut = since && upd !== -1 ? new Date(Date.parse(String(since)) - SERVICE_SYNC_OVERLAP_MS).toISOString() : '';
+  const pick = [];
+  let top = '';
+  if (last >= 2) {
+    const values = sh.getRange(2, 1, last - 1, headers.length).getValues();
+    values.forEach(row => {
+      if (!row.some(c => c !== '')) return;
+      if (name === 'Users' && hiddenRow_(objectOfRow_(headers, row))) return;
+      if (name === 'Config' && LOCAL_CONFIG_KEYS_.indexOf(String(row[0])) === -1) return;
+      out.count++;
+      const st = upd !== -1 ? stampText_(row[upd]) : '';
+      if (st > top) top = st;
+      if (!cut || st >= cut) pick.push(row);
+    });
+  }
+  const start = Math.max(0, Number(from) || 0);
+  const page = pick.slice(start, start + LOCAL_PAGE_ROWS_);
+  out.more = start + page.length < pick.length;
+  out.next = start + page.length;
+  out.rows = page.map(row => row.map((v, i) => {
+    if (mask[i] === true) return '';
+    if (mask[i] === 'money' && String(row[pilotAt]).toLowerCase() !== String(user.email).toLowerCase()) return '';
+    if (dev && staff.indexOf(i) !== -1 && String(v).toLowerCase() === dev) return 'system';
+    return v instanceof Date ? LOCAL_DATE_MARK_ + v.toISOString() : v;       // a date stays a date on the device (the server code treats dates and text differently)
+  }));
+  out.stamp = top;
+  if (name === 'Services' && archiveOn_()) out.archived = archivedServiceCount_({ role: 'Admin' }) > 0;
+  out.revs = currentRevs_();
+  return plain_(out);
+}
+
+function objectOfRow_(headers, row) { const o = {}; headers.forEach((h, i) => { o[h] = row[i]; }); return o; }
+
+// ---- OriginMapData.gs
+// Data for the Origin Map screen. Counting happens here so the browser only receives one small
+// summary (a node list with farmer and acre counts), however many farmers there are.
+
+// The origin questions, their options, and the lanes (a lane is the section of a top-level question,
+// for example "Irrigation & Mahaweli route"). Shared by the map and the farmer finder.
+function originStructure_() {
+  const origin = readAll_('FormQuestions').filter(q => q.is_origin === 'Yes' && q.active === 'Yes' && SELECT_TYPES.indexOf(q.answer_type) !== -1);
+  const questionById = {};
+  origin.forEach(q => { questionById[q.question_id] = q; });
+  const options = readAll_('FormOptions').filter(o => questionById[o.question_id]);
+  const optionById = {};
+  options.forEach(o => { optionById[o.option_id] = o; });
+
+  const ordered = origin.slice().sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+  const sections = [];
+  origin.forEach(q => { if (sections.indexOf(q.section) === -1) sections.push(q.section); });
+  const lanes = [];
+  const laneOfQuestion = {};
+  sections.forEach(section => {
+    const tops = ordered.filter(q => q.section === section && !splitIds_(q.parent_question_ids).length);
+    if (!tops.length) return;
+    lanes.push({ section: section, question_ids: tops.map(q => q.question_id) });
+    tops.forEach(q => { laneOfQuestion[q.question_id] = lanes.length - 1; });
+  });
+  return { origin: origin, questionById: questionById, options: options, optionById: optionById, lanes: lanes, laneOfQuestion: laneOfQuestion };
+}
+
+// The lane number an option sits in, or -1.
+function laneOf_(structure, option) {
+  const root = structure.optionById[String(option.path).split('>')[0]];
+  return root && structure.laneOfQuestion[root.question_id] !== undefined ? structure.laneOfQuestion[root.question_id] : -1;
+}
+
+// Every origin option with how many active farmers sit under it (the option itself or anything below it).
+function getOriginMap() {
+  requireRole_(['Admin', 'Manager']);
+  const S = originStructure_();
+  const farmers = indexLoad_().entries.filter(e => e.v[14] === 'Active');   // 14 = status
+  const acresOf = {};
+  let totalAcres = 0;
+  farmers.forEach(e => {
+    const a = e.f.reduce((sum, x) => sum + (Number(x[2]) || 0), 0);
+    acresOf[e.id] = a;
+    totalAcres += a;
+  });
+
+  const at = {};
+  const withOrigin = {};
+  const chosenBy = {};   // farmer -> the origin options they picked
+  const laneFarmers = S.lanes.map(() => ({}));
+  farmers.forEach(e => {
+    e.a.forEach(x => {
+      const o = x[2] ? S.optionById[x[2]] : null;
+      if (!o) return;
+      withOrigin[e.id] = true;
+      (chosenBy[e.id] = chosenBy[e.id] || []).push(o);
+      String(o.path).split('>').forEach(id => { (at[id] = at[id] || {})[e.id] = true; });
+      const lane = laneOf_(S, o);
+      if (lane >= 0) laneFarmers[lane][e.id] = true;
+    });
+  });
+
+  // Farmers who stop at an option: they picked it and nothing further below it. Everyone else counted at an
+  // option continued into one of the options under it.
+  const stopsAt = {};
+  Object.keys(chosenBy).forEach(fid => {
+    const mine = chosenBy[fid];
+    const hasBelow = {};
+    mine.forEach(o => {
+      const ids = String(o.path).split('>');
+      for (let i = 0; i < ids.length - 1; i++) hasBelow[ids[i]] = true;
+    });
+    mine.forEach(o => { if (!hasBelow[o.option_id]) stopsAt[o.option_id] = (stopsAt[o.option_id] || 0) + 1; });
+  });
+
+  const tally = set => {
+    const ids = Object.keys(set || {});
+    let acres = 0;
+    ids.forEach(id => { acres += acresOf[id] || 0; });
+    return { farmers: ids.length, acres: round2_(acres) };
+  };
+  const nodes = [];
+  S.options.forEach(o => {
+    const t = tally(at[o.option_id]);
+    if (o.active !== 'Yes' && !t.farmers) return;
+    nodes.push({ id: o.option_id, q: o.question_id, label: o.label, parent: o.parent_option_id, order: Number(o.order) || 0,
+      active: o.active === 'Yes', farmers: t.farmers, acres: t.acres, stops: stopsAt[o.option_id] || 0 });
+  });
+
+  return plain_({
+    questions: S.origin.map(q => ({ question_id: q.question_id, label: q.label, section: q.section, parent_question_ids: q.parent_question_ids })),
+    lanes: S.lanes.map((l, i) => Object.assign({ section: l.section, question_ids: l.question_ids }, tally(laneFarmers[i]))),
+    nodes: nodes,
+    totals: { farmers: farmers.length, withOrigin: Object.keys(withOrigin).length, acres: round2_(totalAcres) }
+  });
+}
+
+// One farmer's origin: the options they chose, so the map can light up the path to each.
+function getFarmerOrigin(farmerId) {
+  const user = requireRole_(['Admin', 'Manager']);
+  const e = indexLoad_().byId[farmerId];
+  if (!e) throw new Error('Farmer not found.');
+  const farmer = entryFarmer_(e);
+  if (!canAccessFarmer_(user, farmer)) throw new Error('Not authorised for this farmer.');
+  const isOrigin = {};
+  readAll_('FormQuestions').forEach(q => { if (q.is_origin === 'Yes') isOrigin[q.question_id] = true; });
+  const optionIds = e.a.filter(x => x[2] && isOrigin[x[1]]).map(x => x[2]);
+  return plain_({
+    farmer: { farmer_id: farmer.farmer_id, full_name: farmer.full_name, district: farmer.district, ds_division: farmer.ds_division,
+      village: farmer.village, status: farmer.status },
+    option_ids: optionIds,
+    total_acres: entryAcres_(e)
+  });
+}
+
+// ---- Schema.gs
+// Tab definitions. Mirrors DATA_MODEL.md section by section.
+// Changing a header here does not alter an existing sheet; see setupDatabase().
+
+const AUDIT_COLS = ['created_at', 'created_by', 'updated_at', 'updated_by'];
+
+const SCHEMA = {
+  Config: ['key', 'value', 'notes'],
+  // The sign-in columns come last so an existing Users tab can be extended without moving anything.
+  // password_hash / password_salt: salted, stretched hash (the password itself is never stored).
+  // locked_until: milliseconds since 1970 while locked after too many wrong passwords.
+  Users: ['user_id', 'email', 'name', 'role', 'label', 'active'].concat(AUDIT_COLS).concat([
+    'password_hash', 'password_salt', 'failed_attempts', 'locked_until', 'last_login', 'must_change_password'
+  ]),
+  Lists: ['list_name', 'value', 'active'],
+
+  FormQuestions: [
+    'question_id', 'section', 'label', 'help_text', 'answer_type', 'parent_question_ids',
+    'is_origin', 'required', 'usable_in_products', 'order', 'active'
+  ].concat(AUDIT_COLS),
+  FormOptions: [
+    'option_id', 'question_id', 'label', 'parent_option_id', 'path', 'order', 'active', 'source'
+  ].concat(AUDIT_COLS),
+  FarmerAnswers: ['answer_id', 'farmer_id', 'question_id', 'option_id', 'value', 'active'].concat(AUDIT_COLS),
+
+  Farmers: [
+    'farmer_id', 'full_name', 'nic', 'date_of_birth', 'gender', 'language', 'farmer_type',
+    'phone_primary', 'phone_alt', 'address', 'district', 'ds_division', 'gn_division', 'village',
+    'marketing_consent', 'do_not_contact', 'status', 'notes'
+  ].concat(AUDIT_COLS).concat([
+    // The farm's GPS point (see GpsData.gs). Last, so an existing Farmers tab is extended without moving anything.
+    'latitude', 'longitude', 'gps_source', 'gps_accuracy', 'gps_updated_at'
+  ]),
+  Fields: [
+    'field_id', 'farmer_id', 'crop', 'acres', 'season', 'latitude', 'longitude', 'notes', 'active'
+  ].concat(AUDIT_COLS),
+
+  // Derived copy of the farmer data that keeps search, the map and the finder fast (see FarmerIndex.gs). Rebuilt automatically.
+  FarmerIndex: ['chunk', 'count', 'built_at', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'meta'],
+
+  Products: ['product_id', 'name', 'description', 'category', 'status'].concat(AUDIT_COLS),
+  ProductCriteria: ['criteria_id', 'product_id', 'type', 'question_id', 'value'].concat(AUDIT_COLS),
+
+  // Saved farmer groups: the filter rules, not the farmers, so a group stays up to date as farmers are added.
+  Segments: ['segment_id', 'name', 'filters_json', 'active'].concat(AUDIT_COLS),
+
+  Outreach: [
+    'outreach_id', 'product_id', 'farmer_id', 'channel', 'date', 'outcome', 'notes', 'by'
+  ].concat(AUDIT_COLS),
+
+  // One row per spraying job (or booking) for a farmer: what CAFT did, when, who flew it and how the farmer felt about it.
+  // status: Requested (farmer asked) / Scheduled (booked for a day) / Completed (done) / Cancelled.
+  // Dates are ISO text (yyyy-mm-dd), times are 24-hour text (HH:MM). duration_min is worked out from the two times.
+  Services: [
+    'service_id', 'farmer_id', 'status', 'requested_date', 'service_date', 'start_time', 'end_time', 'duration_min',
+    'pilot_name', 'pilot_email', 'drone', 'service_type', 'crop', 'acres_covered', 'product_used', 'quantity_l',
+    'amount_charged', 'payment_status', 'satisfaction', 'feedback', 'notes'
+  ].concat(AUDIT_COLS),
+
+  // One row per bulk message prepared and sent to a group of farmers (the text, who it went to, how). Each farmer reached also gets an
+  // Outreach row, so a farmer's profile can show which messages they were sent.
+  Messages: ['message_id', 'title', 'body', 'channel', 'audience_text', 'audience_json', 'recipients', 'left_out'].concat(AUDIT_COLS),
+
+  // Pins of the Earth map. kind origin: ref = the origin option id (a tank or scheme); kind division: ref = the division key. lat / lng in degrees.
+  Places: ['place_id', 'kind', 'ref', 'name', 'lat', 'lng', 'source', 'notes'].concat(AUDIT_COLS),
+
+  AuditLog: ['timestamp', 'user', 'action', 'entity', 'entity_id', 'details'],
+
+  // The files of the archive (see Archive.gs): one line per table and month. rows / sum_a / sum_b are what the file must hold (for checking); extra is JSON.
+  ArchiveIndex: ['table', 'period', 'file_id', 'rows', 'sum_a', 'sum_b', 'extra', 'archived_at'],
+
+  // Saves that arrived from a device (see submitOp in OfflineData.gs): one line per finished save, so a save sent twice is done once. Cut back by itself.
+  OpLog: ['op_id', 'fn', 'user', 'result', 'at']
+};
+
+// Columns that must stay text so Sheets never strips leading zeros or turns IDs into numbers.
+const TEXT_COLUMNS = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'meta', 'nic', 'phone_primary', 'phone_alt', 'path', 'parent_question_ids', 'date_of_birth', 'date', 'password_hash', 'password_salt',
+  'requested_date', 'service_date', 'start_time', 'end_time', 'ref', 'period'];
+
+// DataEntry: register farmers only. Manager: find farmers, Origin Map, export, service reports, record services. Admin: everything, plus accounts.
+// Pilot: drone pilot in the field, two jobs: register new farmers (like DataEntry) and record the services they did (and see their own records).
+const ROLES = ['DataEntry', 'Manager', 'Admin', 'Pilot'];
+
+function isTextColumn_(name) {
+  return /_ids?$/.test(name) || TEXT_COLUMNS.indexOf(name) !== -1;
+}
+
+// ---- SeedData.gs
+// Seed data for trying the app: realistic origin options (tanks, Mahaweli systems, RPM offices,
+// districts' divisions, AI ranges, Yaya programmes, Kanna meetings) and mock farmers.
+//
+// Real: Mahaweli RPM office names, district division names, and the major tank names.
+// Plausible only: which division each tank/RPM serves, Govi Committee names, AI ranges, Yaya villages
+// and Kanna meetings. They are not official lists. Replace them with real lists when available.
+//
+// Everything is Admin-only because any function here can be called from the browser. Seeded options carry
+// source = 'seed' and mock farmers carry the note 'MOCK DATA', so both can be removed again.
+
+const SEED_SOURCE = 'seed';
+const MOCK_NOTE = 'MOCK DATA';
+const MOCK_TAG = ' (mock)';
+const KANNA_SEASONS = ['Maha 2026/27', 'Yala 2026'];
+
+// district > scheme (tank or Mahaweli system) > RPM office > divisions it serves
+const ORIGIN_SEED = [
+  {
+    district: 'Anuradhapura', province: 'North Central Province', schemes: [
+      { name: 'Nachchaduwa Wewa', rpms: [
+        { name: 'RPM – Nachchaduwa Wewa Left Bank', ds: ['Nachchadoowa', 'Nuwaragam Palatha Central'] },
+        { name: 'RPM – Nachchaduwa Wewa Right Bank', ds: ['Mihinthale'] }] },
+      { name: 'Nuwara Wewa', rpms: [{ name: 'RPM – Nuwara Wewa', ds: ['Anuradhapura'] }] },
+      { name: 'Tissa Wewa (Anuradhapura)', rpms: [{ name: 'RPM – Tissa Wewa (Anuradhapura)', ds: ['Nuwaragam Palatha East'] }] },
+      { name: 'Mahakanadarawa Wewa', rpms: [{ name: 'RPM – Mahakanadarawa Wewa', ds: ['Medawachchiya', 'Kahatagasdigiliya'] }] },
+      { name: 'Huruluwewa', rpms: [{ name: 'RPM – Huruluwewa', ds: ['Horowpothana', 'Kebithigollewa'] }] },
+      { name: 'Mahawilachchiya Wewa', rpms: [{ name: 'RPM – Mahawilachchiya Wewa', ds: ['Mahavilachchiya', 'Nochchiyagama'] }] },
+      { name: 'Kala Wewa', rpms: [{ name: 'RPM – Kala Wewa', ds: ['Kekirawa', 'Palugaswewa'] }] },
+      { name: 'Rajanganaya Wewa', rpms: [
+        { name: 'RPM – Rajanganaya Wewa Left Bank', ds: ['Rajanganaya'] },
+        { name: 'RPM – Rajanganaya Wewa Right Bank', ds: ['Thalawa'] }] },
+      { name: 'Padaviya Wewa', rpms: [{ name: 'RPM – Padaviya Wewa', ds: ['Padaviya', 'Rambewa'] }] },
+      { name: 'Thirappane Wewa', rpms: [{ name: 'RPM – Thirappane Wewa', ds: ['Thirappane', 'Galenbindunuwewa', 'Ipalogama'] }] },
+      { name: 'Mahaweli System H', rpms: [{ name: 'RPM H – Thabuthegama', ds: ['Thambuttegama', 'Galnewa', 'Palagala'] }] }
+    ]
+  },
+  {
+    district: 'Polonnaruwa', province: 'North Central Province', schemes: [
+      { name: 'Parakrama Samudra', rpms: [{ name: 'RPM – Parakrama Samudra', ds: ['Thamankaduwa'] }] },
+      { name: 'Minneriya Wewa', rpms: [
+        { name: 'RPM – Minneriya Wewa Left Bank', ds: ['Hingurakgoda'] },
+        { name: 'RPM – Minneriya Wewa Right Bank', ds: ['Elahera'] }] },
+      { name: 'Giritale Wewa', rpms: [{ name: 'RPM – Giritale Wewa', ds: ['Medirigiriya'] }] },
+      { name: 'Mahaweli System G', rpms: [{ name: 'RPM G – Bakamuna', ds: ['Dimbulagala'] }] },
+      { name: 'Mahaweli System B', rpms: [{ name: 'RPM B – Welikanda', ds: ['Welikanda', 'Lankapura'] }] }
+    ]
+  },
+  {
+    district: 'Ampara', province: 'Eastern Province', schemes: [
+      { name: 'Senanayake Samudra', rpms: [
+        { name: 'RPM – Senanayake Samudra Left Bank', ds: ['Akkaraipattu', 'Addalaichchenai', 'Alayadivembu', 'Nintavur', 'Sainthamarathu',
+          'Samanthurai', 'Irakkamam', 'Navithanveli', 'Kalmunai (Muslim)', 'Kalmunai (Tamil)', 'Karaitivu', 'Thirukkovil'] },
+        { name: 'RPM – Senanayake Samudra Right Bank', ds: ['Ampara', 'Uhana', 'Damana', 'Padiyathalawa'] }] },
+      { name: 'Mahaweli System C', rpms: [{ name: 'RPM C – Dehiaththakandiya', ds: ['Dehiattakandiya'] }] },
+      { name: 'Mahaweli Rambakenoya Zone', rpms: [{ name: 'RPM Rambakenoya – Mahaoya', ds: ['Maha Oya'] }] },
+      { name: 'Pannalgama Tank', rpms: [{ name: 'RPM – Pannalgama Tank', ds: ['Lahugala'] }] },
+      { name: 'Ekgaloya Tank', rpms: [{ name: 'RPM – Ekgaloya Tank', ds: ['Pottuvil'] }] }
+    ]
+  },
+  {
+    district: 'Hambantota', province: 'Southern Province', schemes: [
+      { name: 'Tissa Wewa (Tissamaharama)', rpms: [{ name: 'RPM – Tissa Wewa (Tissamaharama)', ds: ['Tissamaharama'] }] },
+      { name: 'Weerawila Wewa', rpms: [{ name: 'RPM – Weerawila Wewa', ds: ['Hambantota'] }] },
+      { name: 'Debara Wewa', rpms: [{ name: 'RPM – Debara Wewa', ds: ['Weeraketiya'] }] },
+      { name: 'Ridiyagama Tank', rpms: [{ name: 'RPM – Ridiyagama Tank', ds: ['Ambalantota'] }] },
+      { name: 'Lunugamvehera Reservoir', rpms: [{ name: 'RPM – Lunugamvehera Reservoir', ds: ['Lunugamvehera'] }] },
+      { name: 'Weheragala Reservoir', rpms: [{ name: 'RPM – Weheragala Reservoir', ds: ['Sooriyawewa'] }] },
+      { name: 'Bandagiriya Wewa', rpms: [{ name: 'RPM – Bandagiriya Wewa', ds: ['Angunakolapelessa'] }] },
+      { name: 'Yoda Wewa', rpms: [{ name: 'RPM – Yoda Wewa', ds: ['Okewela'] }] },
+      { name: 'Muruthawela Reservoir', rpms: [{ name: 'RPM – Muruthawela Reservoir', ds: ['Katuwana', 'Walasmulla', 'Beliatta', 'Tangalle'] }] }
+    ]
+  }
+];
+
+// Yaya programme tracts as [village, division]. 50 in total, as on the slide.
+const YAYA_SEED = {
+  Anuradhapura: [['Eppawala', 'Nachchadoowa'], ['Maradankadawala', 'Thirappane'], ['Mihintale', 'Mihinthale'], ['Rambewa', 'Rambewa'],
+    ['Kahatagasdigiliya', 'Kahatagasdigiliya'], ['Nochchiyagama', 'Nochchiyagama'], ['Thalawa', 'Thalawa'], ['Padavi Sripura', 'Padaviya'],
+    ['Medawachchiya', 'Medawachchiya'], ['Horowpothana', 'Horowpothana'], ['Kebithigollewa', 'Kebithigollewa'], ['Galnewa', 'Galnewa'],
+    ['Thambuttegama', 'Thambuttegama'], ['Mahailuppallama', 'Nuwaragam Palatha Central'], ['Galenbindunuwewa', 'Galenbindunuwewa']],
+  Polonnaruwa: [['Hingurakgoda', 'Hingurakgoda'], ['Giritale', 'Thamankaduwa'], ['Medirigiriya', 'Medirigiriya'], ['Aralaganwila', 'Dimbulagala'],
+    ['Welikanda', 'Welikanda'], ['Minneriya', 'Hingurakgoda'], ['Jayanthipura', 'Thamankaduwa'], ['Sevanapitiya', 'Lankapura'],
+    ['Elahera', 'Elahera'], ['Lankapura', 'Lankapura']],
+  Ampara: [['Uhana', 'Uhana'], ['Padiyathalawa', 'Padiyathalawa'], ['Damana', 'Damana'], ['Dehiattakandiya', 'Dehiattakandiya'],
+    ['Maha Oya', 'Maha Oya'], ['Lahugala', 'Lahugala'], ['Pottuvil', 'Pottuvil'], ['Sammanthurai', 'Samanthurai'],
+    ['Akkaraipattu', 'Akkaraipattu'], ['Nintavur', 'Nintavur'], ['Irakkamam', 'Irakkamam'], ['Thirukkovil', 'Thirukkovil']],
+  Hambantota: [['Weerawila', 'Tissamaharama'], ['Sooriyawewa', 'Sooriyawewa'], ['Ambalantota', 'Ambalantota'], ['Weeraketiya', 'Weeraketiya'],
+    ['Beliatta', 'Beliatta'], ['Angunakolapelessa', 'Angunakolapelessa'], ['Katuwana', 'Katuwana'], ['Okewela', 'Okewela'],
+    ['Lunugamvehera', 'Lunugamvehera'], ['Walasmulla', 'Walasmulla'], ['Tissamaharama', 'Tissamaharama'], ['Debarawewa', 'Weeraketiya'],
+    ['Ranna', 'Ambalantota']]
+};
+
+// Divisions whose population is mostly Muslim (M) and/or Tamil (T); the rest are mostly Sinhala.
+const EAST_ETHNICITY = {
+  'Akkaraipattu': 'MT', 'Addalaichchenai': 'M', 'Alayadivembu': 'T', 'Nintavur': 'M', 'Sainthamarathu': 'M', 'Samanthurai': 'M',
+  'Irakkamam': 'T', 'Navithanveli': 'T', 'Kalmunai (Muslim)': 'M', 'Kalmunai (Tamil)': 'T', 'Karaitivu': 'MT', 'Thirukkovil': 'T', 'Pottuvil': 'MT'
+};
+const DISTRICT_CENTRE = { Anuradhapura: [8.31, 80.41], Polonnaruwa: [7.94, 81.0], Ampara: [7.3, 81.6], Hambantota: [6.22, 81.15] };
+
+// ---------- origin options ----------
+
+// Builds every option as { key, q, label, parentKey, order } in parent-before-child order,
+// plus an index of what each division has, used when generating farmers.
+function buildOriginItems_() {
+  const items = [];
+  const seen = {};
+  const counts = {};
+  function add(q, label, parentKey) {
+    const key = q + '|' + label;
+    if (seen[key]) return key;
+    seen[key] = true;
+    const group = q + '|' + (parentKey || '');
+    counts[group] = (counts[group] || 0) + 1;
+    items.push({ key: key, q: q, label: label, parentKey: parentKey || '', order: counts[group] });
+    return key;
+  }
+  const index = { ds: {} };
+  const doaProv = add('Q004', 'Provincial Department of Agriculture');
+  const doaInter = add('Q004', 'Inter-Provincial Department of Agriculture');
+
+  ORIGIN_SEED.forEach(d => {
+    const provDir = add('Q005', 'Provincial Director of Agriculture – ' + d.province, doaProv);
+    const interDir = add('Q005', 'Inter-Provincial Director of Agriculture – ' + d.district, doaInter);
+    let n = 0;
+    d.schemes.forEach(s => {
+      const schemeKey = add('Q001', s.name);
+      s.rpms.forEach(r => {
+        const rpmKey = add('Q002', r.name, schemeKey);
+        r.ds.forEach(ds => {
+          const committee = add('Q003', ds + ' Govi Committee', rpmKey);
+          const kanna = KANNA_SEASONS.map(se => add('Q008', se + ' Kanna Meeting – ' + ds, committee));
+          const ai = add('Q006', 'AI Officer – ' + ds + ' Range', provDir);
+          const aiInter = n % 3 === 0 ? add('Q006', 'AI Officer – ' + ds + ' Range (Inter-Provincial)', interDir) : '';
+          const aiKanna = add('Q008', 'Yala 2026 Kanna Meeting – ' + ds + ' AI Range', ai);
+          const yayas = (YAYA_SEED[d.district] || []).filter(y => y[1] === ds).map(y => add('Q007', y[0] + ' Yaya', ai));
+          index.ds[ds] = {
+            district: d.district, province: d.province, scheme: schemeKey, rpm: rpmKey, committee: committee, kanna: kanna,
+            doaProv: doaProv, doaInter: doaInter, provDir: provDir, interDir: interDir, ai: ai, aiInter: aiInter, aiKanna: aiKanna, yayas: yayas
+          };
+          n++;
+        });
+      });
+    });
+  });
+  return { items: items, index: index };
+}
+
+// Loads about 450 realistic options in one go. Refuses if options already exist.
+function seedOriginOptions() {
+  requireRole_(['Admin']);
+  if (readAll_('FormOptions').length) throw new Error('Options already exist. Run removeSeedOptions() first, or hide them in the Form Designer.');
+  const questions = {};
+  readAll_('FormQuestions').forEach(q => { questions[q.question_id] = q; });
+  ['Q001', 'Q002', 'Q003', 'Q004', 'Q005', 'Q006', 'Q007', 'Q008'].forEach(id => {
+    if (!questions[id] || SELECT_TYPES.indexOf(questions[id].answer_type) === -1) throw new Error('Starter question ' + id + ' is missing or not a choice question.');
+  });
+  const built = buildOriginItems_();
+  const ids = nextIds_('O', 4, built.items.length);
+  const idByKey = {};
+  const pathById = {};
+  const rows = built.items.map((it, i) => {
+    const id = ids[i];
+    const parent = it.parentKey ? idByKey[it.parentKey] : '';
+    idByKey[it.key] = id;
+    pathById[id] = parent ? pathById[parent] + '>' + id : id;
+    return Object.assign({
+      option_id: id, question_id: it.q, label: it.label, parent_option_id: parent, path: pathById[id],
+      order: it.order, active: 'Yes', source: SEED_SOURCE
+    }, auditCols_(true));
+  });
+  appendObjects_('FormOptions', rows);
+  audit_('form_change', 'FormOptions', '', 'seeded ' + rows.length + ' origin options');
+  Logger.log('Origin options added: ' + rows.length);
+  return rows.length;
+}
+
+// Rewrites a tab without the rows that shouldDrop() picks. Returns how many were dropped.
+function dropRows_(name, shouldDrop) {
+  const sh = sheet_(name);
+  const headers = SCHEMA[name];
+  const last = sh.getLastRow();
+  if (last < 2) return 0;
+  const range = sh.getRange(2, 1, last - 1, headers.length);
+  const keep = [];
+  let dropped = 0;
+  range.getValues().forEach(row => {
+    if (row.every(c => c === '')) return;
+    const o = {};
+    headers.forEach((h, i) => { o[h] = row[i]; });
+    if (shouldDrop(o)) dropped++; else keep.push(row);
+  });
+  if (!dropped) return 0;
+  touch_(name);
+  range.clearContent();
+  if (keep.length) sh.getRange(2, 1, keep.length, headers.length).setValues(keep);
+  return dropped;
+}
+
+// Removes seeded options (and the older "(mock)" ones). Options a farmer has ever chosen are hidden instead.
+function removeSeedOptions() {
+  requireRole_(['Admin']);
+  const used = {};
+  readAll_('FarmerAnswers').forEach(a => { if (a.option_id) used[a.option_id] = true; });
+  const isSeed = o => o.source === SEED_SOURCE || String(o.label).slice(-MOCK_TAG.length) === MOCK_TAG;
+  const toHide = readAll_('FormOptions').filter(o => isSeed(o) && used[o.option_id] && o.active === 'Yes');
+  toHide.forEach(o => updateById_('FormOptions', o.option_id, Object.assign({ active: 'No' }, auditCols_(false))));
+  const deleted = dropRows_('FormOptions', o => isSeed(o) && !used[o.option_id]);
+  if (!readAll_('FormOptions').length) setConfig_('counter_O', 0, 'Reset after seeded options were removed');
+  audit_('form_change', 'FormOptions', '', 'removed seeded options: ' + deleted + ' deleted, ' + toHide.length + ' hidden');
+  Logger.log('Seeded options deleted: ' + deleted + ', hidden because in use: ' + toHide.length);
+  return { deleted: deleted, hidden: toHide.length };
+}
+
+// ---------- mock farmers ----------
+
+function rng_(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const NAMES = {
+  S: {
+    male: ['Nimal', 'Sunil', 'Kamal', 'Ranjith', 'Chaminda', 'Priyantha', 'Lalith', 'Sarath', 'Upali', 'Gamini', 'Piyadasa', 'Jayantha', 'Wasantha', 'Sampath',
+      'Nuwan', 'Saman', 'Anura', 'Ajith', 'Dinesh', 'Prasanna', 'Roshan', 'Ruwan', 'Thilak', 'Mahinda', 'Ananda', 'Karunadasa', 'Siripala', 'Wijepala',
+      'Dharmasiri', 'Somapala', 'Premadasa', 'Gunapala', 'Buddhika', 'Chathura', 'Lasantha', 'Madushanka', 'Isuru', 'Tharindu', 'Pradeep', 'Janaka', 'Udaya', 'Asoka'],
+    female: ['Kamala', 'Sumana', 'Nilanthi', 'Chandrika', 'Anula', 'Mallika', 'Sriyani', 'Indrani', 'Kumari', 'Malani', 'Lakmali', 'Sandya', 'Nirmala', 'Rohini',
+      'Swarna', 'Seetha', 'Dhammika', 'Renuka', 'Manel', 'Sujatha', 'Wimala', 'Chamila'],
+    middle: ['Bandara', 'Kumara', 'Priyantha', 'Chandana', 'Jayantha', 'Sampath', 'Prasad', 'Nishantha', 'Ranjan', 'Thushara'],
+    surname: ['Bandara', 'Dissanayake', 'Herath', 'Jayasinghe', 'Rathnayake', 'Wijesinghe', 'Gunawardena', 'Ekanayake', 'Karunaratne', 'Weerasinghe',
+      'Samarasinghe', 'Senanayake', 'Jayawardena', 'Abeysekara', 'Amarasinghe', 'Basnayake', 'Gamage', 'Hettiarachchi', 'Kodithuwakku', 'Liyanage',
+      'Madugalle', 'Pathirana', 'Ranasinghe', 'Seneviratne', 'Tennakoon', 'Wickramasinghe', 'Welikala', 'Yapa', 'Perera', 'Silva', 'Fernando', 'Peiris']
+  },
+  T: {
+    male: ['Selvarajah', 'Kumar', 'Rajan', 'Sivakumar', 'Ravi', 'Thavarajah', 'Suresh', 'Murugesu', 'Nadarajah', 'Balasingham', 'Kandasamy', 'Vijayakumar', 'Ganeshan', 'Sinnathamby'],
+    female: ['Kamala', 'Selvi', 'Mala', 'Kanthimathi', 'Thevi', 'Vasanthi', 'Sathya', 'Pushpa', 'Rajeswari'],
+    surname: ['Subramaniam', 'Arumugam', 'Rasiah', 'Kanagaratnam', 'Sivapalan', 'Thambiah', 'Nagarajah', 'Velupillai', 'Chelliah', 'Mylvaganam']
+  },
+  M: {
+    male: ['Mohamed', 'Abdul', 'Ahamed', 'Faizal', 'Rizwan', 'Nazeer', 'Hameed', 'Mubarak', 'Ismail', 'Farook', 'Jaufer', 'Thowfeek', 'Rasheed', 'Nawas'],
+    female: ['Fathima', 'Nusrath', 'Rizana', 'Shafna', 'Zainab', 'Haseena', 'Rukaiya', 'Mumtaz'],
+    surname: ['Lebbe', 'Marikkar', 'Cassim', 'Hassan', 'Rahuman', 'Sulaiman', 'Ibrahim', 'Mohideen', 'Kariapper', 'Samsudeen', 'Jalaldeen', 'Careem']
+  }
+};
+
+// Builds n mock farmers. Pure: it only reads the index built by buildOriginItems_().
+// Each answer is [questionId, optionKey]. Nothing is written here.
+function generateMockFarmers_(index, n, seed) {
+  const rnd = rng_(seed);
+  const pick = a => a[Math.floor(rnd() * a.length)];
+  const chance = p => rnd() < p;
+  const int = (lo, hi) => lo + Math.floor(rnd() * (hi - lo + 1));
+  const weighted = pairs => {
+    const total = pairs.reduce((s, p) => s + p[1], 0);
+    let r = rnd() * total;
+    for (let i = 0; i < pairs.length; i++) { r -= pairs[i][1]; if (r < 0) return pairs[i][0]; }
+    return pairs[pairs.length - 1][0];
+  };
+  const pad = (v, w) => String(v).padStart(w, '0');
+
+  const plan = [];
+  [['Anuradhapura', 0.35], ['Polonnaruwa', 0.20], ['Ampara', 0.25], ['Hambantota', 0.20]].forEach(p => {
+    for (let i = 0; i < Math.round(n * p[1]); i++) plan.push(p[0]);
+  });
+  while (plan.length < n) plan.push('Anuradhapura');
+  plan.length = n;
+  for (let i = plan.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); const t = plan[i]; plan[i] = plan[j]; plan[j] = t; }
+
+  const dsByDistrict = {};
+  Object.keys(index.ds).forEach(k => { (dsByDistrict[index.ds[k].district] = dsByDistrict[index.ds[k].district] || []).push(k); });
+
+  const usedNic = {};
+  const usedPhone = {};
+  const farmers = [];
+  const startTime = Date.UTC(2025, 10, 1);
+  const spanTime = Date.UTC(2026, 9, 20) - startTime;
+
+  for (let i = 0; i < n; i++) {
+    const district = plan[i];
+    const dsName = pick(dsByDistrict[district]);
+    const d = index.ds[dsName];
+
+    // ethnicity decides the name style and language
+    const eastern = EAST_ETHNICITY[dsName];
+    let eth = 'S';
+    if (eastern === 'M') eth = 'M';
+    else if (eastern === 'T') eth = 'T';
+    else if (eastern === 'MT') eth = chance(0.5) ? 'M' : 'T';
+    else eth = weighted([['S', 94], ['M', 4], ['T', 2]]);
+    const female = chance(0.17);
+    const pool = NAMES[eth];
+    const given = pick(female ? pool.female : pool.male);
+    let name;
+    if (eth === 'S') name = chance(0.4) ? given + ' ' + pick(pool.middle) + ' ' + pick(pool.surname) : given + ' ' + pick(pool.surname);
+    else name = given + ' ' + pick(pool.surname);
+    const language = eth === 'S' ? 'Sinhala' : (eth === 'M' && !eastern && chance(0.3) ? 'Sinhala' : 'Tamil');
+
+    // NIC and date of birth agree with each other
+    const year = int(1950, 2002);
+    const doy = int(1, 365);
+    const dob = new Date(Date.UTC(year, 0, doy)).toISOString().slice(0, 10);
+    let nic = '';
+    if (!chance(0.1)) {
+      for (let tries = 0; tries < 20; tries++) {
+        const day = pad(female ? doy + 500 : doy, 3);
+        const useNew = year >= 2000 || chance(0.25);
+        const candidate = useNew ? String(year) + day + pad(int(0, 9999), 4) + int(0, 9) : String(year).slice(2) + day + pad(int(0, 999), 3) + int(0, 9) + 'V';
+        if (!usedNic[candidate]) { usedNic[candidate] = true; nic = candidate; break; }
+      }
+    }
+
+    let phone = '';
+    while (!phone || usedPhone[phone]) phone = '+94' + weighted([['70', 4], ['71', 8], ['72', 4], ['74', 3], ['75', 5], ['76', 9], ['77', 12], ['78', 7]]) + pad(int(0, 9999999), 7);
+    usedPhone[phone] = true;
+    let alt = '';
+    if (chance(0.15)) {
+      while (!alt || usedPhone[alt]) alt = '+94' + weighted([['70', 4], ['71', 8], ['72', 4], ['74', 3], ['75', 5], ['76', 9], ['77', 12], ['78', 7]]) + pad(int(0, 9999999), 7);
+      usedPhone[alt] = true;
+    }
+
+    // a village that belongs to the farmer's own division: a Yaya village there, or the division town itself
+    const own = (YAYA_SEED[district] || []).filter(y => y[1] === dsName).map(y => y[0]);
+    const village = own.length && chance(0.6) ? pick(own) : dsName.replace(/ \((Muslim|Tamil)\)$/, '');
+    const consent = weighted([['Yes', 40], ['No', 10], ['Unknown', 50]]);
+    const doNotContact = consent === 'No' ? chance(0.3) : chance(0.02);
+
+    // fields
+    const fields = [];
+    const fieldCount = weighted([[1, 55], [2, 32], [3, 13]]);
+    for (let f = 0; f < fieldCount; f++) {
+      const crop = f === 0 && chance(0.6) ? 'Paddy' : weighted([['Paddy', 70], ['Maize', 9], ['Soybean', 3], ['Chilli', 6], ['Big onion', 5], ['Vegetables', 6], ['Other', 1]]);
+      const raw = crop === 'Paddy' ? Math.exp(0.7 + 0.6 * (rnd() + rnd() + rnd() - 1.5) * 1.6) : 0.25 + rnd() * 3.5;
+      const acres = Math.min(15, Math.max(0.25, Math.round(raw * 4) / 4));
+      const centre = DISTRICT_CENTRE[district];
+      const gps = chance(0.6);
+      fields.push({
+        crop: crop, acres: acres,
+        season: crop === 'Paddy' ? weighted([['Both', 50], ['Maha', 35], ['Yala', 15]]) : weighted([['Maha', 45], ['Yala', 45], ['Both', 10]]),
+        latitude: gps ? Math.round((centre[0] + (rnd() - 0.5) * 0.3) * 1e6) / 1e6 : '',
+        longitude: gps ? Math.round((centre[1] + (rnd() - 0.5) * 0.3) * 1e6) / 1e6 : '',
+        notes: ''
+      });
+    }
+
+    // origin answers
+    const answers = [];
+    const route = rnd();
+    const irrigation = route < 0.55 || route >= 0.80;
+    const agriculture = route >= 0.55;
+    if (irrigation) {
+      answers.push(['Q001', d.scheme], ['Q002', d.rpm], ['Q003', d.committee]);
+      if (chance(0.65)) {
+        if (chance(0.3)) d.kanna.forEach(k => answers.push(['Q008', k]));
+        else answers.push(['Q008', pick(d.kanna)]);
+      }
+    }
+    if (agriculture) {
+      if (d.aiInter && chance(0.25)) {
+        answers.push(['Q004', d.doaInter], ['Q005', d.interDir], ['Q006', d.aiInter]);
+      } else {
+        answers.push(['Q004', d.doaProv], ['Q005', d.provDir], ['Q006', d.ai]);
+        if (d.yayas.length && chance(0.5)) answers.push(['Q007', pick(d.yayas)]);
+        if (chance(0.5)) answers.push(['Q008', d.aiKanna]);
+      }
+    }
+
+    farmers.push({
+      core: {
+        full_name: name, nic: nic, date_of_birth: nic || chance(0.4) ? dob : '', gender: female ? 'Female' : 'Male', language: language,
+        farmer_type: weighted([['Individual farmer', 92], ['Sole proprietorship', 3], ['Partnership', 2], ['Company', 1], ['Other', 2]]),
+        phone_primary: phone, phone_alt: alt,
+        address: int(1, 250) + ', ' + pick(['Temple Road', 'Tank Road', 'School Lane', 'Main Street', 'Station Road', 'Canal Road']) + ', ' + village,
+        district: district, ds_division: dsName, gn_division: village + pick(['', ' East', ' West', ' North', ' South']),
+        village: village, marketing_consent: consent, do_not_contact: doNotContact ? 'Yes' : 'No', status: 'Active', notes: MOCK_NOTE
+      },
+      fields: fields,
+      answers: answers,
+      created: new Date(startTime + Math.floor(rnd() * spanTime))
+    });
+  }
+  return farmers;
+}
+
+// Registers n mock farmers (default 1000) with fields and origin answers. They are written in batches, and the run stops
+// before Apps Script's 6 minute limit. If it stops early, run it again with the same n: it carries on where it left off.
+// budgetMs and batch are only for testing.
+function seedMockFarmers(n, budgetMs, batch) {
+  requireRole_(['Admin']);
+  const started = Date.now();
+  n = n || 1000;
+  budgetMs = budgetMs === undefined ? 240000 : budgetMs;
+  batch = batch || 2000;
+  const existing = countMockFarmers_();
+  if (existing > 0 && Number(getConfig_('mock_farmers_target')) !== n) {
+    throw new Error('Mock farmers from a different run exist. Run removeMockFarmers() first.');
+  }
+  if (existing >= n) return { farmers: 0, fields: 0, answers: 0, done: true, total: existing };
+  const optId = {};
+  readAll_('FormOptions').forEach(o => { if (o.source === SEED_SOURCE) optId[o.question_id + '|' + o.label] = o.option_id; });
+  if (!Object.keys(optId).length) throw new Error('Run seedOriginOptions() first.');
+  const owner = currentEmail_();
+  // The same n always gives the same people in the same order, so a later run can skip the ones already written.
+  const gen = generateMockFarmers_(buildOriginItems_().index, n, 20261021).slice(existing);
+  setConfig_('mock_farmers_target', n, 'Size of the mock farmer run in progress');
+
+  const totals = { farmers: 0, fields: 0, answers: 0 };
+  for (let from = 0; from < gen.length; from += batch) {
+    const part = gen.slice(from, from + batch);
+    const fieldCount = part.reduce((s, f) => s + f.fields.length, 0);
+    const answerCount = part.reduce((s, f) => s + f.answers.length, 0);
+    const farmerIds = nextIds_('F', 6, part.length);
+    const fieldIds = nextIds_('FLD', 6, fieldCount);
+    const answerIds = nextIds_('A', 6, answerCount);
+    const farmerRows = [];
+    const fieldRows = [];
+    const answerRows = [];
+    let fi = 0;
+    let ai = 0;
+    part.forEach((g, i) => {
+      const id = farmerIds[i];
+      const stamp = { created_at: g.created, created_by: owner, updated_at: g.created, updated_by: owner };
+      farmerRows.push(Object.assign({ farmer_id: id }, g.core, stamp));
+      g.fields.forEach(f => fieldRows.push(Object.assign({ field_id: fieldIds[fi++], farmer_id: id, active: 'Yes' }, f, stamp)));
+      g.answers.forEach(a => {
+        const key = a[1];   // already 'Q001|label'
+        if (!optId[key]) throw new Error('Missing seeded option for ' + key);
+        answerRows.push(Object.assign({ answer_id: answerIds[ai++], farmer_id: id, question_id: a[0], option_id: optId[key], value: '', active: 'Yes' }, stamp));
+      });
+    });
+    // answers first, farmers last: a farmer only counts as written once everything of theirs is in
+    appendObjects_('Fields', fieldRows);
+    appendObjects_('FarmerAnswers', answerRows);
+    appendObjects_('Farmers', farmerRows);
+    totals.farmers += farmerRows.length; totals.fields += fieldRows.length; totals.answers += answerRows.length;
+    Logger.log('Written so far: ' + (existing + totals.farmers) + ' of ' + n + ' farmers (' + Math.round((Date.now() - started) / 1000) + ' s)');
+    if (from + batch < gen.length && Date.now() - started >= budgetMs) break;
+  }
+  const total = existing + totals.farmers;
+  audit_('create', 'Farmers', '', 'seeded ' + totals.farmers + ' mock farmers, ' + totals.fields + ' fields, ' + totals.answers + ' answers (' + total + ' of ' + n + ')');
+  if (total >= n) indexRebuild_();
+  Logger.log(total >= n ? 'Done: ' + total + ' mock farmers.' : 'Stopped early at ' + total + ' of ' + n + '. Run seedMockFarmers(' + n + ') again to continue.');
+  return { farmers: totals.farmers, fields: totals.fields, answers: totals.answers, done: total >= n, total: total };
+}
+
+// The editor's Run button cannot pass arguments, so this is the 30,000 farmer run. Run it again if it stops early.
+function seedMockFarmers30000() { return seedMockFarmers(30000); }
+
+
+// ---- ServiceReportData.gs
+// Numbers for the Service report screen, the best-customer ranking, and the service export. Counting happens here, so the
+// browser only receives a small summary however many services there are.
+//
+// A report is: a date range, optional service kinds / pilots / crops, an "area" (the same filters as the farmer finder: district,
+// division, origin boxes such as a tank or Govi committee, saved groups), and a way to group the answer.
+
+const REPORT_GROUP_LIMIT = 150;
+const REPORT_TOP_LIMIT = 50;
+const REPORT_MAX_MONTHS = 36;
+const REPORT_RANKS = ['acres', 'services', 'amount', 'satisfaction'];
+const FARMER_GROUPS = ['district', 'division'];
+
+function originLabel_(S, option) {
+  return String(option.path).split('>').map(id => (S.optionById[id] ? S.optionById[id].label : id)).join(' › ');
+}
+
+// What the area picker needs: districts, divisions, every origin box (with its full route as the label) and the saved groups.
+function getAreaOptions() {
+  requireRole_(['Admin', 'Manager']);
+  const S = originStructure_();
+  const divisions = [];
+  const seen = {};
+  indexLoad_().entries.forEach(e => { const d = e.v[10]; if (d && !seen[d]) { seen[d] = true; divisions.push(d); } });
+  divisions.sort();
+  const origin = S.options.filter(o => o.active === 'Yes').map(o => ({ id: o.option_id, question_id: o.question_id, label: originLabel_(S, o) }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  return plain_({
+    districts: listsMap_().district, divisions: divisions, origin: origin,
+    origin_questions: S.origin.map(q => ({ question_id: q.question_id, label: q.label })),
+    segments: listSegments()
+  });
+}
+
+function cleanReportInput_(input, S) {
+  const f = input || {};
+  const out = {
+    from: cleanDate_(f.from, 'From'), to: cleanDate_(f.to, 'To'),
+    service_types: cleanList_(f.service_types), pilots: cleanList_(f.pilots).map(s => s.toLowerCase()), crops: cleanList_(f.crops),
+    area: cleanFilters_(f.area || [], S.optionById), status: clean_(f.status), group_by: String(f.group_by || 'division'), rank_by: String(f.rank_by || 'acres')
+  };
+  if (out.from && out.to && out.from > out.to) throw new Error('"From" is after "To".');
+  if (out.status && SERVICE_STATUSES.indexOf(out.status) === -1) throw new Error('Unknown status.');
+  const g = out.group_by;
+  const okGroup = ['district', 'division', 'service_type', 'pilot', 'crop', 'month'].indexOf(g) !== -1 || (/^origin:Q\d+$/.test(g) && S.questionById[g.slice(7)]);
+  if (!okGroup) throw new Error('Choose how to group the report.');
+  if (REPORT_RANKS.indexOf(out.rank_by) === -1) throw new Error('Choose how to rank the customers.');
+  return out;
+}
+
+// The names of the group(s) a service falls into. A farmer who chose several boxes under one question counts in each.
+function reportGroupNames_(groupBy, entry, row, S) {
+  switch (groupBy) {
+    case 'district': return [entry && entry.v[9] ? entry.v[9] : '(not recorded)'];
+    case 'division': return [entry && entry.v[10] ? entry.v[10] : '(not recorded)'];
+    case 'service_type': return [row.service_type || '(not recorded)'];
+    case 'pilot': return [row.pilot_name || row.pilot_email || '(not recorded)'];
+    case 'crop': return [row.crop || '(not recorded)'];
+    case 'month': return [serviceDay_(row).slice(0, 7) || '(no date)'];
+    default: {
+      const qid = groupBy.slice(7);
+      const names = [];
+      (entry ? entry.a : []).forEach(x => { const o = x[1] === qid && x[2] ? S.optionById[x[2]] : null; if (o) names.push(originLabel_(S, o)); });
+      return names.length ? names : ['(not recorded)'];
+    }
+  }
+}
+
+// The farmers an area filter lets through, as { id: index entry }. With no area filter that is everyone.
+function reportFarmers_(f) {
+  const view = indexLoad_();
+  if (!f.area.length) return view.byId;
+  const ctx = finderContext_();
+  const filters = f.area.some(x => x.type === 'status') ? f.area : f.area.concat([{ type: 'status', value: 'all' }]);
+  const allowed = {};
+  ctx.farmers.forEach(fm => { if (matchFarmer_(fm, filters, ctx)) allowed[fm.farmer_id] = view.byId[fm.farmer_id]; });
+  return allowed;
+}
+
+// The service columns the report works from; the export wants every column (wide = true)
+const REPORT_COLS_ = ['service_id', 'farmer_id', 'status', 'requested_date', 'service_date', 'duration_min', 'pilot_name', 'pilot_email', 'service_type', 'crop', 'acres_covered', 'amount_charged', 'satisfaction'];
+function reportRows_(f, allowed, wide) {
+  const wantStatus = f.status || '';
+  const live = wide ? readAll_('Services') : readColumns_('Services', REPORT_COLS_);
+  // old jobs that moved to the archive: only the months of the chosen dates are read (nothing while nothing is archived)
+  const all = live.concat(withoutLiveIds_(archivedServiceRows_(f.from, f.to), live));
+  return all.filter(r => {
+    if (!allowed[r.farmer_id]) return false;
+    if (wantStatus ? String(r.status) !== wantStatus : false) return false;
+    const day = serviceDay_(r);
+    if (f.from && (!day || day < f.from)) return false;
+    if (f.to && (!day || day > f.to)) return false;
+    if (f.service_types.length && f.service_types.indexOf(String(r.service_type)) === -1) return false;
+    if (f.pilots.length && f.pilots.indexOf(String(r.pilot_email).toLowerCase()) === -1) return false;
+    if (f.crops.length && f.crops.indexOf(String(r.crop)) === -1) return false;
+    return true;
+  });
+}
+
+function monthsBetween_(first, last, noCap) {
+  const out = [];
+  let y = Number(first.slice(0, 4)), m = Number(first.slice(5, 7));
+  const ey = Number(last.slice(0, 4)), em = Number(last.slice(5, 7));
+  while ((y < ey || (y === ey && m <= em)) && (noCap || out.length < REPORT_MAX_MONTHS)) {
+    out.push(y + '-' + ('0' + m).slice(-2));
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return out;
+}
+
+function getServiceReport(input) {
+  requireRole_(['Admin', 'Manager']);
+  const S = originStructure_();
+  const f = cleanReportInput_(input, S);
+  f.status = 'Completed';
+  const allowed = reportFarmers_(f);
+  const rows = reportRows_(f, allowed);
+  const byId = indexLoad_().byId;
+
+  const farmerStats = {};
+  const groups = {};
+  const month = {};
+  const type = {}, pilot = {}, crop = {};
+  const stars = [0, 0, 0, 0, 0];
+  let acres = 0, minutes = 0, flownAcres = 0, amount = 0, rated = 0, ratingSum = 0;
+  const addTo = (map, name, r) => {
+    const g = map[name] = map[name] || { name: name, services: 0, acres: 0, amount: 0, farmers: {}, rated: 0, ratingSum: 0 };
+    g.services++; g.acres += Number(r.acres_covered) || 0; g.amount += Number(r.amount_charged) || 0; g.farmers[r.farmer_id] = true;
+    if (Number(r.satisfaction)) { g.rated++; g.ratingSum += Number(r.satisfaction); }
+  };
+  rows.forEach(r => {
+    const e = byId[r.farmer_id];
+    const a = Number(r.acres_covered) || 0;
+    acres += a; amount += Number(r.amount_charged) || 0;
+    if (Number(r.duration_min) > 0) { minutes += Number(r.duration_min); flownAcres += a; }
+    const sat = Number(r.satisfaction);
+    if (sat >= 1 && sat <= 5) { rated++; ratingSum += sat; stars[sat - 1]++; }
+    const fs = farmerStats[r.farmer_id] = farmerStats[r.farmer_id] || { farmer_id: r.farmer_id, services: 0, acres: 0, amount: 0, rated: 0, ratingSum: 0, last: '' };
+    fs.services++; fs.acres += a; fs.amount += Number(r.amount_charged) || 0; fs.last = serviceDay_(r) > fs.last ? serviceDay_(r) : fs.last;
+    if (sat) { fs.rated++; fs.ratingSum += sat; }
+    reportGroupNames_(f.group_by, e, r, S).forEach(n => addTo(groups, n, r));
+    addTo(type, r.service_type || '(not recorded)', r);
+    addTo(pilot, r.pilot_name || r.pilot_email || '(not recorded)', r);
+    addTo(crop, r.crop || '(not recorded)', r);
+    const m = serviceDay_(r).slice(0, 7);
+    if (m) { month[m] = month[m] || { month: m, services: 0, acres: 0 }; month[m].services++; month[m].acres += a; }
+  });
+
+  // How many registered farmers are in each group, so a group's reach (served / registered) can be shown.
+  const registered = {};
+  if (FARMER_GROUPS.indexOf(f.group_by) !== -1 || /^origin:/.test(f.group_by)) {
+    Object.keys(allowed).forEach(id => {
+      const e = allowed[id];
+      if (!e || e.v[14] !== 'Active') return;
+      reportGroupNames_(f.group_by, e, {}, S).forEach(n => { registered[n] = (registered[n] || 0) + 1; });
+    });
+  }
+  const shape = g => ({ name: g.name, services: g.services, farmers: Object.keys(g.farmers).length, acres: round2_(g.acres), amount: Math.round(g.amount),
+    avg_satisfaction: g.rated ? round2_(g.ratingSum / g.rated) : null, registered: registered[g.name] === undefined ? null : registered[g.name] });
+  const byAcres = (a, b) => b.acres - a.acres || b.services - a.services || String(a.name).localeCompare(String(b.name));
+  const groupList = Object.keys(groups).map(k => shape(groups[k]));
+  if (f.group_by === 'month') groupList.sort((a, b) => String(a.name).localeCompare(String(b.name))); else groupList.sort(byAcres);
+  // Groups with registered farmers but no service yet matter too: they are the places still to reach.
+  if (Object.keys(registered).length) Object.keys(registered).forEach(n => { if (!groups[n]) groupList.push({ name: n, services: 0, farmers: 0, acres: 0, amount: 0, avg_satisfaction: null, registered: registered[n] }); });
+
+  const rankKey = { acres: 'acres', services: 'services', amount: 'amount', satisfaction: 'avg' }[f.rank_by];
+  const top = Object.keys(farmerStats).map(id => {
+    const s = farmerStats[id], e = byId[id];
+    const groupNames = FARMER_GROUPS.indexOf(f.group_by) !== -1 || /^origin:/.test(f.group_by) ? reportGroupNames_(f.group_by, e, {}, S) : [];
+    return { farmer_id: id, full_name: e ? e.v[1] : id, phone_primary: e ? e.v[7] : '', place: e ? [e.v[11], e.v[10]].filter(Boolean).join(', ') : '', group: groupNames.join(' · '),
+      services: s.services, acres: round2_(s.acres), amount: Math.round(s.amount), avg: s.rated ? round2_(s.ratingSum / s.rated) : 0, last: s.last };
+  }).sort((a, b) => b[rankKey] - a[rankKey] || b.acres - a.acres || b.services - a.services || a.full_name.localeCompare(b.full_name)).slice(0, REPORT_TOP_LIMIT);
+
+  const monthKeys = Object.keys(month).sort();
+  // at most REPORT_MAX_MONTHS months are drawn: when the history is longer it is the NEWEST months that are kept (the older ones are still in the totals)
+  const lastMonth = monthKeys.length ? monthKeys[monthKeys.length - 1] : '';
+  const firstShown = monthKeys.length ? (monthsBetween_(monthKeys[0], lastMonth, true).slice(-REPORT_MAX_MONTHS)[0]) : '';
+  const monthList = monthKeys.length ? monthsBetween_(firstShown, lastMonth).map(k => ({ month: k, services: month[k] ? month[k].services : 0, acres: month[k] ? round2_(month[k].acres) : 0 })) : [];
+  const servedIds = Object.keys(farmerStats);
+  const inArea = Object.keys(allowed).filter(id => allowed[id] && allowed[id].v[14] === 'Active').length;
+  // the work of a removed farmer still counts as work done, but "served of registered" only counts farmers who are still registered (so it never passes 100%)
+  const servedActive = servedIds.filter(id => allowed[id] && allowed[id].v[14] === 'Active').length;
+  const list = map => Object.keys(map).map(k => shape(map[k])).sort(byAcres);
+
+  return plain_({
+    totals: { services: rows.length, farmers: servedIds.length, acres: round2_(acres), hours: round2_(minutes / 60), acres_per_hour: minutes > 0 ? round2_(flownAcres / (minutes / 60)) : null,
+      amount: Math.round(amount), avg_satisfaction: rated ? round2_(ratingSum / rated) : null, rated: rated,
+      repeat_farmers: servedIds.filter(id => farmerStats[id].services >= 2).length, acres_per_service: rows.length ? round2_(acres / rows.length) : 0 },
+    reach: { registered: inArea, served: servedActive, share: inArea ? Math.round(servedActive / inArea * 1000) / 10 : 0 },
+    by_month: monthList, groups: groupList.slice(0, REPORT_GROUP_LIMIT), groups_truncated: groupList.length > REPORT_GROUP_LIMIT,
+    by_type: list(type), by_pilot: list(pilot), by_crop: list(crop), stars: stars, top: top, group_by: f.group_by, rank_by: f.rank_by
+  });
+}
+
+// The service log as a CSV for Excel: one line per service, with the farmer's place and origin.
+function exportServices(input) {
+  const user = requireRole_(['Admin', 'Manager']);
+  const S = originStructure_();
+  const f = cleanReportInput_(input, S);
+  const allowed = reportFarmers_(f);
+  const rows = sortServices_(reportRows_(f, allowed, true).map(r => serviceOut_(r, user)));
+  const byId = indexLoad_().byId;
+  const header = ['Service ID', 'Farmer ID', 'Farmer', 'Phone', 'District', 'DS division', 'Village', 'Origin', 'Status', 'Requested date', 'Service date', 'Start', 'End', 'Minutes',
+    'Pilot', 'Drone', 'Service', 'Crop', 'Acres covered', 'Product', 'Litres', 'Amount (Rs)', 'Payment', 'Satisfaction (1-5)', 'Feedback', 'Notes'];
+  const lines = [header.map(csvCell_).join(',')];
+  rows.forEach(r => {
+    const e = byId[r.farmer_id];
+    const origin = e ? e.a.map(x => (x[2] && S.optionById[x[2]] ? originLabel_(S, S.optionById[x[2]]) : '')).filter(Boolean).join(' | ') : '';
+    lines.push([r.service_id, r.farmer_id, e ? e.v[1] : '', e ? phoneForCsv_(e.v[7]) : '', e ? e.v[9] : '', e ? e.v[10] : '', e ? e.v[11] : '', origin, r.status, r.requested_date, r.service_date,
+      r.start_time, r.end_time, r.duration_min, r.pilot_name, r.drone, r.service_type, r.crop, r.acres_covered, r.product_used, r.quantity_l, r.amount_charged, r.payment_status,
+      r.satisfaction, r.feedback, r.notes].map(csvCell_).join(','));
+  });
+  audit_('export', 'Services', '', rows.length + ' services exported; filters: ' + JSON.stringify(f).slice(0, 400));
+  return { csv: lines.join('\r\n'), count: rows.length };
+}
+
+// ---- Services.gs
+// The service log: every spraying job (or booking) CAFT does for a farmer, who flew it, how big it was and how the farmer felt about it.
+// Pilots record their own jobs; managers and admins can record and correct any; everyone who can see a farmer's profile sees that
+// farmer's history. Reports and exports are in ServiceReportData.gs.
+
+const SERVICE_STATUSES = ['Requested', 'Scheduled', 'Completed', 'Cancelled'];
+const PAYMENT_STATUSES = ['Paid', 'Partly paid', 'Unpaid', 'Free'];
+const SERVICE_LISTS = [['service_type', 'Kinds of service'], ['drone', 'Drones']];
+const SERVICE_ROLES = ['Admin', 'Manager', 'Pilot'];
+const MAX_SERVICE_ACRES = 5000;
+const LOCAL_OFFSET_MINUTES = 330;     // Sri Lanka time (UTC+5:30): the "today" a pilot means, whatever the server clock says
+const PILOT_EDIT_DAYS = 7;            // a pilot can correct their own records for this many days
+const SERVICE_LIST_LIMIT = 300;       // rows shown in the service log screen
+const SERVICE_LIST_COLS_ = ['service_id', 'farmer_id', 'status', 'requested_date', 'service_date', 'start_time', 'duration_min', 'pilot_email', 'service_type', 'crop', 'acres_covered', 'amount_charged', 'satisfaction'];   // what the log screen needs from every record
+const RECENT_SERVICE_READ = 400;     // how far back from the end of the tab "recent services" looks
+
+function requireServiceUser_() { return requireRole_(SERVICE_ROLES); }
+
+function localToday_() { return new Date(Date.now() + LOCAL_OFFSET_MINUTES * 60000).toISOString().slice(0, 10); }
+function isTime_(s) { return /^([01]\d|2[0-3]):[0-5]\d$/.test(s); }
+function minutesOf_(t) { return Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)); }
+function timeText_(v) {
+  if (v instanceof Date) return ('0' + v.getHours()).slice(-2) + ':' + ('0' + v.getMinutes()).slice(-2);
+  return String(v === undefined || v === null ? '' : v);
+}
+function serviceDay_(r) { return isoDay_(r.service_date) || isoDay_(r.requested_date); }
+
+function serviceListValues_(name, includeOff) {
+  return readAll_('Lists').filter(l => l.list_name === name && (includeOff || l.active === 'Yes')).map(l => String(l.value));
+}
+
+// People a record can be credited to: the signed-in person, plus (for managers and admins) every active pilot.
+function pilotChoices_(user) {
+  const me = { email: String(user.email).toLowerCase(), name: user.name };
+  if (user.role === 'Pilot') return [me];
+  const out = [];
+  readAll_('Users').forEach(u => {
+    if (u.active !== 'Yes' || hiddenRow_(u)) return;
+    const email = String(u.email).toLowerCase();
+    if (u.role === 'Pilot' || email === me.email) out.push({ email: email, name: u.name });
+  });
+  if (!out.some(p => p.email === me.email)) out.push(me);
+  return out.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+// ---------- reading rows ----------
+
+function serviceCol_(name) { return SCHEMA.Services.indexOf(name) + 1; }
+
+// Sheet row numbers of one farmer's service rows (reads a single column, so it stays fast with many rows).
+function serviceRowNumbersForFarmer_(farmerId) {
+  const sh = sheet_('Services');
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  const rows = [];
+  sh.getRange(2, serviceCol_('farmer_id'), last - 1, 1).getValues().forEach((r, i) => { if (String(r[0]) === farmerId) rows.push(i + 2); });
+  return rows;
+}
+
+function findServiceRow_(serviceId) {
+  const sh = sheet_('Services');
+  const last = sh.getLastRow();
+  if (last < 2 || !serviceId) return null;
+  const ids = sh.getRange(2, 1, last - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) if (String(ids[i][0]) === serviceId) return readRowsAt_('Services', [i + 2])[0];
+  return findArchivedService_(serviceId);   // an old job that moved to the archive (a read-only view with _archived)
+}
+
+// The last n rows of the tab (new records are always added at the end).
+function readServicesTail_(n) {
+  const last = sheet_('Services').getLastRow();
+  if (last < 2) return [];
+  const from = Math.max(2, last - n + 1);
+  const rows = [];
+  for (let r = from; r <= last; r++) rows.push(r);
+  return readRowsAt_('Services', rows);
+}
+
+function farmerCard_(farmerId) {
+  const e = indexEntry_(farmerId);
+  if (!e) return null;
+  const f = entryFarmer_(e);
+  const crops = [];
+  e.f.forEach(x => { if (crops.indexOf(x[1]) === -1) crops.push(x[1]); });
+  return { farmer_id: e.id, full_name: f.full_name, phone_primary: f.phone_primary, village: f.village, ds_division: f.ds_division, district: f.district,
+    status: f.status, do_not_contact: f.do_not_contact, marketing_consent: f.marketing_consent, total_acres: entryAcres_(e), crops: crops,
+    latitude: f.latitude, longitude: f.longitude, gps_source: f.gps_source };
+}
+
+// A record as the browser gets it: no helper keys, the developer's email hidden, and money hidden from other pilots' records.
+function serviceOut_(r, user) {
+  const o = stripRow_(r);
+  delete o._archived;
+  o.requested_date = isoDay_(o.requested_date);
+  o.service_date = isoDay_(o.service_date);
+  o.start_time = timeText_(o.start_time);
+  o.end_time = timeText_(o.end_time);
+  if (user && user.role === 'Pilot' && String(r.pilot_email).toLowerCase() !== String(user.email).toLowerCase()) { o.amount_charged = ''; o.payment_status = ''; }
+  return o;
+}
+
+function sortServices_(rows) {
+  return rows.sort((a, b) => serviceDay_(b).localeCompare(serviceDay_(a)) || String(b.start_time).localeCompare(String(a.start_time)) || String(b.service_id).localeCompare(String(a.service_id)));
+}
+
+function isMine_(user, r) { return String(r.pilot_email).toLowerCase() === String(user.email).toLowerCase(); }
+
+// What the record's "history" numbers say: only completed jobs count towards how much a farmer bought.
+function summarizeServices_(rows, hideMoney) {
+  const done = rows.filter(r => r.status === 'Completed');
+  let acres = 0, minutes = 0, amount = 0, rated = 0, ratingSum = 0;
+  const byType = {};
+  done.forEach(r => {
+    acres += Number(r.acres_covered) || 0;
+    minutes += Number(r.duration_min) || 0;
+    amount += Number(r.amount_charged) || 0;
+    if (Number(r.satisfaction)) { rated++; ratingSum += Number(r.satisfaction); }
+    const t = r.service_type || 'Not recorded';
+    byType[t] = (byType[t] || 0) + 1;
+  });
+  const days = done.map(r => isoDay_(r.service_date)).filter(Boolean).sort();
+  return {
+    completed: done.length, acres: round2_(acres), hours: round2_(minutes / 60), amount: hideMoney ? null : Math.round(amount),
+    avg_satisfaction: rated ? round2_(ratingSum / rated) : null, rated: rated, first: days[0] || '', last: days[days.length - 1] || '',
+    open: rows.filter(r => r.status === 'Requested' || r.status === 'Scheduled').length, cancelled: rows.filter(r => r.status === 'Cancelled').length,
+    by_type: Object.keys(byType).map(k => ({ name: k, services: byType[k] })).sort((a, b) => b.services - a.services)
+  };
+}
+
+// ---------- screens: options, farmer history, lists ----------
+
+function getServiceOptions() {
+  const user = requireServiceUser_();
+  return plain_({
+    statuses: SERVICE_STATUSES, payment_statuses: PAYMENT_STATUSES,
+    service_types: serviceListValues_('service_type'), drones: serviceListValues_('drone'), crops: listsMap_().crop,
+    pilots: pilotChoices_(user), me: { email: String(user.email).toLowerCase(), name: user.name, role: user.role },
+    today: localToday_(), edit_days: PILOT_EDIT_DAYS
+  });
+}
+
+// Farmer search for the service screens: no NIC numbers, so a pilot only sees what is needed to find and contact the right person.
+function findFarmersForService(query) {
+  requireServiceUser_();
+  return plain_(searchEntries_(query, 30, e => e.v[14] === 'Active').map(e => {
+    const v = e.v;
+    return { farmer_id: e.id, full_name: v[1], phone_primary: v[7], village: v[11], ds_division: v[10], district: v[9], status: v[14], total_acres: entryAcres_(e) };
+  }));
+}
+
+// One farmer's service log with the totals: the "how much has this customer bought" view.
+function getFarmerServices(farmerId) {
+  const user = requireServiceUser_();
+  const card = farmerCard_(String(farmerId || ''));
+  if (!card) throw new Error('Farmer not found.');
+  const all = farmerServiceRows_(card.farmer_id);
+  const hideMoney = user.role === 'Pilot';
+  const rows = sortServices_(all.map(r => serviceOut_(r, user)));
+  return plain_({ farmer: card, summary: summarizeServices_(all.map(r => serviceOut_(r, user)), hideMoney), rows: rows.slice(0, 200), total: rows.length });
+}
+
+function getService(serviceId) {
+  const user = requireServiceUser_();
+  const rec = findServiceRow_(String(serviceId || ''));
+  if (!rec) throw new Error('Service record not found.');
+  if (user.role === 'Pilot' && !isMine_(user, rec)) throw new Error('Not authorised for this record.');
+  return plain_({ service: serviceOut_(rec, user), farmer: farmerCard_(rec.farmer_id), can_edit: canEditService_(user, rec) });
+}
+
+function canEditService_(user, rec) {
+  if (user.role === 'Admin' || user.role === 'Manager') return true;
+  if (user.role !== 'Pilot' || !isMine_(user, rec)) return false;
+  const made = new Date(rec.created_at).getTime();
+  return isFinite(made) && Date.now() - made <= PILOT_EDIT_DAYS * 86400000;
+}
+
+function addFarmerNames_(rows) {
+  const byId = indexLoad_().byId;
+  rows.forEach(r => {
+    const e = byId[r.farmer_id];
+    r.farmer_name = e ? e.v[1] : r.farmer_id;
+    r.farmer_place = e ? [e.v[11], e.v[10]].filter(Boolean).join(', ') : '';
+  });
+  return rows;
+}
+
+// The latest records for the entry screen: a pilot's own, or everyone's for managers and admins.
+function listRecentServices() {
+  const user = requireServiceUser_();
+  let rows;
+  if (user.role === 'Pilot') {
+    // a pilot's own latest jobs, wherever they lie: the other pilots' records in the last rows of the tab must not push them out of sight
+    const sh = sheet_('Services');
+    const last = sh.getLastRow();
+    const mine = [];
+    if (last >= 2) sh.getRange(2, serviceCol_('pilot_email'), last - 1, 1).getValues().forEach((r, i) => { if (String(r[0]).toLowerCase() === String(user.email).toLowerCase()) mine.push(i + 2); });
+    rows = readRowsAt_('Services', mine.slice(-RECENT_SERVICE_READ));
+  } else rows = readServicesTail_(RECENT_SERVICE_READ);
+  const out = sortServices_(rows.map(r => Object.assign(serviceOut_(r, user), { can_edit: canEditService_(user, r) })).slice()).slice(0, 15);
+  return plain_(addFarmerNames_(out));
+}
+
+function cleanServiceFilter_(input, user) {
+  const f = input || {};
+  const out = { from: cleanDate_(f.from, 'From'), to: cleanDate_(f.to, 'To'), pilot: '', type: clean_(f.service_type).slice(0, 60), status: clean_(f.status), crop: clean_(f.crop).slice(0, 60), farmer_id: clean_(f.farmer_id).slice(0, 20) };
+  if (out.from && out.to && out.from > out.to) throw new Error('"From" is after "To".');
+  if (out.status && SERVICE_STATUSES.indexOf(out.status) === -1) throw new Error('Unknown status.');
+  out.pilot = user.role === 'Pilot' ? String(user.email).toLowerCase() : String(f.pilot_email || '').trim().toLowerCase();
+  return out;
+}
+
+function serviceMatches_(r, f) {
+  const day = serviceDay_(r);
+  if (f.from && (!day || day < f.from)) return false;
+  if (f.to && (!day || day > f.to)) return false;
+  if (f.pilot && String(r.pilot_email).toLowerCase() !== f.pilot) return false;
+  if (f.type && String(r.service_type) !== f.type) return false;
+  if (f.status && String(r.status) !== f.status) return false;
+  if (f.crop && String(r.crop) !== f.crop) return false;
+  if (f.farmer_id && String(r.farmer_id) !== f.farmer_id) return false;
+  return true;
+}
+
+// The service log screen: all records that match the filters (a pilot only ever gets their own), newest first.
+function listServices(filterInput) {
+  const user = requireServiceUser_();
+  const f = cleanServiceFilter_(filterInput, user);
+  // Two steps, so the whole tab is not read in full: the columns the filters, the totals and the sort order need for every record, then the
+  // complete rows of only the ones that are shown.
+  const liveAll = readColumns_('Services', SERVICE_LIST_COLS_);
+  const matched = liveAll.filter(r => serviceMatches_(r, f));
+  const hideMoney = user.role === 'Pilot';
+  const light = matched.map(r => { const o = serviceOut_(r, user); o._row = r._row; return o; });
+  // old jobs that moved to the archive: only the months the dates touch are read (none at all while nothing is archived)
+  const archived = {};
+  withoutLiveIds_(archivedServiceRows_(f.from, f.to).filter(r => serviceMatches_(r, f)), liveAll).forEach(r => {
+    const o = serviceOut_(r, user); o._row = 0; archived[String(r.service_id)] = r; light.push(o);
+  });
+  const top = sortServices_(light.slice()).slice(0, SERVICE_LIST_LIMIT);
+  const full = {}; readRowsSpan_('Services', top.filter(o => o._row).map(o => o._row)).forEach(r => { full[r._row] = r; });
+  const shown = top.map(o => { const r = o._row ? full[o._row] : archived[String(o.service_id)]; return Object.assign(serviceOut_(r, user), { can_edit: canEditService_(user, r) }); });
+  return plain_({ rows: addFarmerNames_(shown), total: light.length, truncated: light.length > SERVICE_LIST_LIMIT,
+    summary: summarizeServices_(light, hideMoney) });
+}
+
+// ---------- saving ----------
+
+// Checks one submitted record and returns the cleaned columns to store, or throws a message in plain words.
+function validateService_(input, user, existing) {
+  const keep = existing || {};
+  const status = String(input.status || keep.status || 'Completed');
+  if (SERVICE_STATUSES.indexOf(status) === -1) throw new Error('Choose a status.');
+  if (status === 'Cancelled' && !existing) throw new Error('Only an existing record can be cancelled.');
+  const today = localToday_();
+  let requested = cleanDate_(input.requested_date, 'Requested date');
+  const serviceDate = cleanDate_(input.service_date, 'Service date');
+  if (status === 'Requested' && !requested) requested = today;
+  if (requested && requested > today) throw new Error('The requested date cannot be in the future.');
+  if (status === 'Completed') {
+    if (!serviceDate) throw new Error('Service date is required.');
+    if (serviceDate > today) throw new Error('A completed service cannot be dated in the future.');
+  }
+  if (status === 'Scheduled' && !serviceDate) throw new Error('Choose the day the service is planned for.');
+  if (requested && serviceDate && requested > serviceDate && status !== 'Requested') throw new Error('The service cannot be dated before the day it was requested.');
+
+  const start = String(input.start_time || '').trim();
+  const end = String(input.end_time || '').trim();
+  if (start && !isTime_(start)) throw new Error('Start time is not a valid time.');
+  if (end && !isTime_(end)) throw new Error('End time is not a valid time.');
+  if ((start && !end) || (end && !start)) throw new Error('Enter both the start time and the end time.');
+  if (start && end && minutesOf_(end) <= minutesOf_(start)) throw new Error('The end time must be after the start time.');
+  if (status === 'Completed' && user.role === 'Pilot' && !start) throw new Error('Start time and end time are required.');
+
+  // who flew it
+  let pilotEmail = String(keep.pilot_email || '');
+  let pilotName = String(keep.pilot_name || '');
+  if (user.role === 'Pilot') {
+    pilotEmail = String(user.email).toLowerCase(); pilotName = user.name;
+  } else {
+    const chosen = String(input.pilot_email || '').trim().toLowerCase();
+    if (chosen && !(existing && chosen === 'system')) {
+      const row = findUserByEmail_(chosen);
+      if (!row || row.active !== 'Yes' || hiddenRow_(row) || row.role === 'DataEntry') throw new Error('Choose the pilot from the list.');
+      pilotEmail = String(row.email).toLowerCase(); pilotName = row.name;
+    } else if (!existing && !pilotEmail) {
+      if (status === 'Completed') throw new Error('Choose the pilot who did the job.');
+    }
+  }
+
+  const type = checkList_(clean_(input.service_type), serviceListValues_('service_type'), 'Service type', keep.service_type);
+  if ((status === 'Completed' || status === 'Scheduled') && !type) throw new Error('Choose the kind of service.');
+  const crop = checkList_(clean_(input.crop), listsMap_().crop, 'Crop', keep.crop);
+  if (status === 'Completed' && !crop) throw new Error('Choose the crop.');
+  const drones = serviceListValues_('drone');
+  const drone = drones.length ? checkList_(clean_(input.drone), drones, 'Drone', keep.drone) : '';
+  const acres = cleanNumber_(input.acres_covered, 'Acres covered', 0, MAX_SERVICE_ACRES);
+  if (status === 'Completed' && (acres === '' || acres <= 0)) throw new Error('Acres covered must be more than 0.');
+  const payment = clean_(input.payment_status);
+  if (payment && PAYMENT_STATUSES.indexOf(payment) === -1) throw new Error('Choose a payment status from the list.');
+  let satisfaction = '';
+  if (input.satisfaction !== '' && input.satisfaction !== null && input.satisfaction !== undefined) {
+    satisfaction = Number(input.satisfaction);
+    if (!Number.isInteger(satisfaction) || satisfaction < 1 || satisfaction > 5) throw new Error('Satisfaction is a score from 1 to 5.');
+    if (status !== 'Completed') {
+      if (!existing) throw new Error('Satisfaction can be recorded once the service is completed.');
+      satisfaction = '';   // a record changed to cancelled (or back to a booking) no longer carries a score
+    }
+  }
+  const amount = cleanNumber_(input.amount_charged, 'Amount charged', 0, 100000000);
+  return {
+    status: status, requested_date: requested, service_date: serviceDate, start_time: start, end_time: end,
+    duration_min: start && end ? minutesOf_(end) - minutesOf_(start) : '',
+    pilot_name: pilotName, pilot_email: pilotEmail, drone: drone, service_type: type, crop: crop,
+    acres_covered: acres === '' ? '' : round2_(acres), product_used: clean_(input.product_used).slice(0, 80),
+    quantity_l: cleanNumber_(input.quantity_l, 'Quantity', 0, 100000), amount_charged: amount === '' ? '' : round2_(amount),
+    payment_status: payment, satisfaction: satisfaction, feedback: clean_(input.feedback).slice(0, 300), notes: clean_(input.notes).slice(0, 300)
+  };
+}
+
+// A stored record in the shape of a form submission, so an edit that mentions only some fields keeps the rest.
+function inputFromRecord_(r) {
+  const o = {};
+  SCHEMA.Services.forEach(h => { o[h] = r[h]; });
+  o.requested_date = isoDay_(r.requested_date); o.service_date = isoDay_(r.service_date);
+  o.start_time = timeText_(r.start_time); o.end_time = timeText_(r.end_time);
+  return o;
+}
+
+function saveService(input) {
+  const user = requireServiceUser_();
+  return withLock_(() => saveServiceLocked_(user, input || {}));
+}
+
+function saveServiceLocked_(user, input) {
+  let existing = null;
+  if (input.service_id) {
+    existing = findServiceRow_(String(input.service_id));
+    if (!existing) throw new Error('Service record not found.');
+    if (!canEditService_(user, existing)) throw new Error('Not authorised: a pilot can only change their own records from the last ' + PILOT_EDIT_DAYS + ' days.');
+    // Whatever the change does not mention stays as it was (cancelling a job, or adding the satisfaction score later).
+    input = Object.assign(inputFromRecord_(existing), input);
+  }
+  const farmerId = existing ? existing.farmer_id : String(input.farmer_id || '').trim();
+  if (!farmerId || !indexEntry_(farmerId)) throw new Error('Choose the farmer first.');
+  const core = validateService_(input, user, existing);
+
+  if (existing) {
+    if (existing._archived) existing = restoreServiceRow_(existing.service_id);   // an old job is brought back to the live sheet to be corrected
+    const obj = Object.assign({}, existing, core, auditCols_(false));
+    writeRowObject_('Services', existing._row, obj);
+    audit_('update', 'Services', obj.service_id, farmerId + ' ' + core.status);
+    return { service_id: obj.service_id, created: false };
+  }
+  // The same job saved twice in a row (a double tap on a slow connection) is refused.
+  const me = String(user.email).toLowerCase();
+  const twin = readServicesTail_(60).some(r => String(r.farmer_id) === farmerId && String(r.status) === core.status && isoDay_(r.service_date) === core.service_date &&
+    String(r.service_type) === core.service_type && timeText_(r.start_time) === core.start_time && timeText_(r.end_time) === core.end_time &&
+    Number(r.acres_covered) === Number(core.acres_covered) && String(r.created_by).toLowerCase() === me && Date.now() - new Date(r.created_at).getTime() < 600000);
+  if (twin) throw new Error('This service was already saved a moment ago.');
+  const id = nextId_('SV', 6);
+  const obj = Object.assign({ service_id: id, farmer_id: farmerId }, core, auditCols_(true));
+  appendObjects_('Services', [obj]);
+  audit_('create', 'Services', id, farmerId + ' ' + core.status + ' ' + (core.acres_covered === '' ? '' : core.acres_covered + ' ac'));
+  return { service_id: id, created: true };
+}
+
+// ---------- Admin: the lists behind the service form ----------
+
+function getServiceSetup() {
+  requireRole_(['Admin']);
+  const rows = readAll_('Lists');
+  return plain_({ lists: SERVICE_LISTS.map(l => ({ name: l[0], label: l[1], values: rows.filter(r => r.list_name === l[0]).map(r => ({ value: String(r.value), active: r.active === 'Yes' })) })) });
+}
+
+function serviceListName_(name) {
+  if (!SERVICE_LISTS.some(l => l[0] === name)) throw new Error('Unknown list.');
+  return name;
+}
+
+// The sheet row of a value in the Lists tab, or 0.
+function listRowOf_(listName, value) {
+  const sh = sheet_('Lists');
+  const last = sh.getLastRow();
+  if (last < 2) return 0;
+  const vals = sh.getRange(2, 1, last - 1, 2).getValues();
+  for (let i = 0; i < vals.length; i++) if (vals[i][0] === listName && String(vals[i][1]).toLowerCase() === String(value).toLowerCase()) return i + 2;
+  return 0;
+}
+
+function addServiceListValue(listName, value) {
+  requireRole_(['Admin']);
+  const name = serviceListName_(listName);
+  const v = clean_(value).slice(0, 60);
+  if (!v) throw new Error('Type the new value first.');
+  withLock_(() => {
+    const row = listRowOf_(name, v);
+    if (row) {
+      if (sheet_('Lists').getRange(row, 3).getValue() === 'Yes') throw new Error('"' + v + '" is already in the list.');
+      touch_('Lists');
+      sheet_('Lists').getRange(row, 3).setValue('Yes');
+    } else {
+      appendObjects_('Lists', [{ list_name: name, value: v, active: 'Yes' }]);
+    }
+    audit_('update', 'Lists', name, 'added ' + v);
+  });
+  return true;
+}
+
+function setServiceListValueActive(listName, value, active) {
+  requireRole_(['Admin']);
+  const name = serviceListName_(listName);
+  withLock_(() => {
+    const row = listRowOf_(name, clean_(value));
+    if (!row) throw new Error('That value is not in the list.');
+    touch_('Lists');
+    sheet_('Lists').getRange(row, 3).setValue(active ? 'Yes' : 'No');
+    audit_('update', 'Lists', name, (active ? 'switched on ' : 'switched off ') + value);
+  });
+  return true;
+}
+
+// ---- Setup.gs
+// Builds the database tabs and loads starter data. Safe to run again: it only adds what is missing
+// and never overwrites existing rows.
+
+function setupDatabase() {
+  requireRole_(['Admin']);
+  resetDbMemo_();
+  const ss = db_();
+  PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', ss.getId());
+
+  const report = [];
+  Object.keys(SCHEMA).forEach(name => report.push(ensureSheet_(ss, name)));
+
+  seedConfig_();
+  seedOwnerAdmin_();
+  seedLists_();
+  seedServiceLists_();
+  seedStarterQuestions_();
+
+  const defaultSheet = ss.getSheetByName('Sheet1');
+  if (defaultSheet && ss.getSheets().length > 1 && defaultSheet.getLastRow() <= 1) ss.deleteSheet(defaultSheet);
+
+  Logger.log(report.join('\n'));
+  return report;
+}
+
+function ensureSheet_(ss, name) {
+  const headers = SCHEMA[name];
+  let sh = ss.getSheetByName(name);
+  let status = 'ok';
+  if (!sh) {
+    sh = ss.insertSheet(name);
+    status = 'created';
+  }
+  // A table that gained columns needs room for them first.
+  if (sh.getMaxColumns() < headers.length) sh.insertColumnsAfter(sh.getMaxColumns(), headers.length - sh.getMaxColumns());
+  const existing = sh.getRange(1, 1, 1, headers.length).getValues()[0];
+  // FarmerIndex is derived data (see FarmerIndex.gs): if its layout changed it is simply emptied and rebuilt on first use.
+  if (name === 'FarmerIndex' && !existing.every(c => c === '') && existing.join('|') !== headers.join('|')) { sh.clear(); status = 'reset'; existing.fill(''); }
+  const blank = existing.every(c => c === '');
+  const filled = existing.slice();
+  while (filled.length && filled[filled.length - 1] === '') filled.pop();
+  const isOlderVersion = filled.length > 0 && filled.length < headers.length && filled.every((c, i) => c === headers[i]);
+  if (blank) {
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#e8f0e8');
+  } else if (isOlderVersion) {
+    // The tab has the first columns of the current design: add the new ones to the right, data stays where it is.
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold').setBackground('#e8f0e8');
+    status = 'columns added';
+  } else if (existing.join('|') !== headers.join('|')) {
+    if (sh.getLastRow() <= 1) {
+      // No data yet, so the headers can be rewritten safely.
+      sh.getRange(1, 1, 1, Math.max(headers.length, sh.getLastColumn())).clearContent();
+      sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold').setBackground('#e8f0e8');
+      status = 'headers updated';
+    } else {
+      status = 'HEADER MISMATCH (has data, left untouched, fix by hand)';
+    }
+  }
+  // A new tab has 26 columns. Every cell in the grid counts toward Google's 10 million cell limit, used or not,
+  // so the columns after the last header are removed.
+  const extraColumns = sh.getMaxColumns() - headers.length;
+  if (extraColumns > 0 && status.indexOf('MISMATCH') === -1) sh.deleteColumns(headers.length + 1, extraColumns);
+  headers.forEach((h, i) => {
+    if (isTextColumn_(h)) sh.getRange(2, i + 1, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat('@');
+  });
+  return name + ': ' + status;
+}
+
+function seedConfig_() {
+  if (readAll_('Config').length) return;
+  appendObjects_('Config', [
+    { key: 'app_name', value: 'CAFT Farmer Database', notes: '' },
+    { key: 'duplicate_check_mode', value: 'block', notes: 'block or warn on duplicate NIC / phone' },
+    { key: 'export_row_limit', value: 5000, notes: 'Max rows in one export' },
+    { key: 'backup_folder_id', value: '', notes: 'Drive folder for nightly backups (set later)' }
+  ]);
+}
+
+// The account that runs setup becomes the first Admin.
+function seedOwnerAdmin_() {
+  if (readAll_('Users').length) return;
+  const email = Session.getEffectiveUser().getEmail().toLowerCase();
+  appendObjects_('Users', [Object.assign({
+    user_id: nextId_('U', 3),
+    email: email,
+    name: email.split('@')[0],
+    role: 'Admin',
+    label: 'Owner',
+    active: 'Yes',
+    must_change_password: 'No'
+  }, auditCols_(true))]);
+}
+
+function seedLists_() {
+  if (readAll_('Lists').length) return;
+  const lists = {
+    crop: ['Paddy', 'Maize', 'Soybean', 'Chilli', 'Big onion', 'Vegetables', 'Other'],
+    farmer_type: ['Individual farmer', 'Sole proprietorship', 'Partnership', 'Company', 'Other'],
+    language: ['Sinhala', 'Tamil', 'English'],
+    season: ['Maha', 'Yala', 'Both'],
+    gender: ['Male', 'Female', 'Other'],
+    district: [
+      'Ampara', 'Anuradhapura', 'Badulla', 'Batticaloa', 'Colombo', 'Galle', 'Gampaha', 'Hambantota',
+      'Jaffna', 'Kalutara', 'Kandy', 'Kegalle', 'Kilinochchi', 'Kurunegala', 'Mannar', 'Matale',
+      'Matara', 'Monaragala', 'Mullaitivu', 'Nuwara Eliya', 'Polonnaruwa', 'Puttalam', 'Ratnapura',
+      'Trincomalee', 'Vavuniya'
+    ]
+  };
+  const rows = [];
+  Object.keys(lists).forEach(name => lists[name].forEach(v => rows.push({ list_name: name, value: v, active: 'Yes' })));
+  appendObjects_('Lists', rows);
+}
+
+// The choices for the service log. Added only when the lists are not there yet, so it is safe to run again; the Admin edits them
+// on the Service setup screen. (Starter values: CAFT sprays paddy fertilizer by drone; the other kinds are common spray jobs.)
+function seedServiceLists_() {
+  const have = {};
+  readAll_('Lists').forEach(l => { have[l.list_name] = true; });
+  const lists = { service_type: ['Fertilizer spraying', 'Pesticide spraying', 'Weedicide spraying', 'Other'] };
+  const rows = [];
+  Object.keys(lists).forEach(name => { if (!have[name]) lists[name].forEach(v => rows.push({ list_name: name, value: v, active: 'Yes' })); });
+  if (rows.length) appendObjects_('Lists', rows);
+}
+
+// The slide's gates as empty questions with their dependencies. The admin fills in the options.
+function seedStarterQuestions_() {
+  if (readAll_('FormQuestions').length) return;
+  const IRR = 'Irrigation & Mahaweli route';
+  const DOA = 'Department of Agriculture route';
+  const starter = [
+    ['Irrigation & Mahaweli (tank / system / block)', IRR, 'single', '', 1],
+    ['RPM', IRR, 'single', 'Q001', 2],
+    ['Govi Committee', IRR, 'single', 'Q002', 3],
+    ['Dept. of Agriculture (provincial / inter-provincial)', DOA, 'single', '', 1],
+    ['Provincial Director', DOA, 'single', 'Q004', 2],
+    ['AI Officer', DOA, 'single', 'Q005', 3],
+    ['Yaya 50 Programme', DOA, 'single', 'Q006', 4],
+    ['Kanna Meeting', 'Shared', 'multi', 'Q003,Q006', 1]
+  ];
+  const rows = starter.map((q, i) => Object.assign({
+    question_id: 'Q' + String(i + 1).padStart(3, '0'),
+    section: q[1],
+    label: q[0],
+    help_text: '',
+    answer_type: q[2],
+    parent_question_ids: q[3],
+    is_origin: 'Yes',
+    required: 'No',
+    usable_in_products: 'Yes',
+    order: q[4],
+    active: 'Yes'
+  }, auditCols_(true)));
+  appendObjects_('FormQuestions', rows);
+  setConfig_('counter_Q', rows.length, 'Last issued number for Q');
+}
+
+// ---------- moving the app to another Google account ----------
+// The developer (owner) account is the Google account that runs the script. After the app is copied to a new Google account, run this ONCE from the
+// script editor of the new project: the old owner's sign-in account (same password) becomes the new Google address, and the old address is replaced by
+// the new one in every "created by / updated by / by / user / pilot email" column, so nobody sees the old personal address and the developer's records
+// still read "system" to everybody else. Safe to run again (the second run finds nothing to change).
+const OWNER_EMAIL_COLUMNS_ = ['created_by', 'updated_by', 'by', 'user', 'pilot_email'];
+
+function moveOwnerAccount(oldEmail) {
+  requireRole_(['Admin']);
+  resetDbMemo_();
+  const oldE = String(oldEmail || '').trim().toLowerCase();
+  if (!oldE) throw new Error('Give the old owner address when you run this.');
+  const newE = ownerEmail_();
+  if (!newE || oldE === newE) throw new Error('Run this from the new owner\'s script editor (the old and new address are the same).');
+  const report = { from: oldE, to: newE, account: 'unchanged', changed: {} };
+  withLock_(() => {
+    const oldRow = findUserByEmail_(oldE);
+    const newRow = findUserByEmail_(newE);
+    if (oldRow && newRow) throw new Error('Both ' + oldE + ' and ' + newE + ' already have accounts. Nothing was changed; remove one first.');
+    if (oldRow) {
+      updateById_('Users', oldRow.user_id, Object.assign({ email: newE, active: 'Yes' }, auditCols_(false)));
+      report.account = 'moved';
+    } else if (!newRow) report.account = 'none found for the old address';
+    Object.keys(SCHEMA).forEach(tab => {
+      if (tab === 'FarmerIndex' || tab === 'ArchiveIndex') return;
+      OWNER_EMAIL_COLUMNS_.forEach(h => {
+        const col = SCHEMA[tab].indexOf(h) + 1;
+        if (!col) return;
+        const sh = sheet_(tab), last = sh.getLastRow();
+        if (last < 2) return;
+        const range = sh.getRange(2, col, last - 1, 1), vals = range.getValues();
+        let n = 0;
+        vals.forEach(r => { if (String(r[0]).toLowerCase() === oldE) { r[0] = newE; n++; } });
+        if (n) { range.setValues(vals); touch_(tab); report.changed[tab + '.' + h] = n; }
+      });
+    });
+    audit_('update', 'Users', '', 'owner account moved from ' + oldE + ' to ' + newE);
+  });
+  Logger.log(JSON.stringify(report));
+  return report;
+}
+
+// ---- SyncData.gs
+// Keeps the copy of the data that every browser holds up to date, by sending only what changed.
+//
+// The app keeps its own copy of the farmer list, the service records and the last answer of the other read-only screens on the device
+// (see Sync.html), so a screen can draw at once without waiting for the server. Three things make that safe:
+//   1. Change stamps. Every write helper in Db.gs notes which tab it touched; when the outermost lock is released, one small stamp per
+//      kind of data is written to the script cache ("rev_farmers", "rev_services", ...). The stamp is a new random-ish value every
+//      time, so the browser only has to compare it with the one it remembers. syncStatus() returns all stamps in one cheap call.
+//      The cache is used (not the script properties) because the properties allow only 50,000 reads and writes a day for the whole app,
+//      and every browser asks for the stamps every 30 seconds. The cache forgets a stamp after 6 hours or when it is short of room;
+//      a missing stamp is simply made again with a new value, which only makes the browsers ask for that data once more (never less).
+//   2. Farmer chunks. The farmer index already keeps the farmers in chunks of 100 and writes a time stamp on every chunk it changes
+//      (column C of the FarmerIndex tab). getFarmerChunks() sends only the chunks whose stamp differs from the one the browser holds.
+//   3. Service rows. Every service row has updated_at; getServiceRows() sends only the rows changed since the last sync (with a few
+//      seconds of overlap), plus a row count so the browser can notice if rows were ever removed behind its back.
+
+const REV_PREFIX_ = 'rev_';
+const REV_TTL_ = 21600;              // the longest the cache keeps a value (6 hours)
+// Which tab belongs to which kind of data. Tabs that are not listed (AuditLog, Config, Products ...) have no stamp.
+const REV_TABS_ = {
+  Farmers: 'farmers', Fields: 'farmers', FarmerAnswers: 'farmers', FarmerIndex: 'farmers',
+  Services: 'services', Messages: 'messages', Outreach: 'outreach',
+  FormQuestions: 'form', FormOptions: 'form', Lists: 'lists', Places: 'places', Users: 'users', Segments: 'segments'
+};
+const SYNC_CHUNKS_PER_CALL = 30;      // farmer chunks (100 farmers each) sent in one answer
+const SERVICE_SYNC_OVERLAP_MS = 5000; // rows changed this long before the last stamp are sent again, so nothing is missed
+var REV_TOUCHED_ = {};
+
+// Called by the write helpers: this tab has changed (the stamp is written when the lock is released).
+function touch_(tab) {
+  const kind = REV_TABS_[tab];
+  if (kind) REV_TOUCHED_[kind] = true;
+}
+
+function newStamp_() { return Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36) + Math.floor(Math.random() * 1296).toString(36); }
+function revKinds_() { const out = []; Object.keys(REV_TABS_).forEach(t => { if (out.indexOf(REV_TABS_[t]) === -1) out.push(REV_TABS_[t]); }); return out; }
+
+// Writes a new stamp for every kind of data touched since the last call. A failure is tried once more and then logged: the data
+// is already saved, so a save must never fail because of a stamp.
+function flushRevs_() {
+  const kinds = Object.keys(REV_TOUCHED_);
+  if (!kinds.length) return;
+  REV_TOUCHED_ = {};
+  const out = {};
+  kinds.forEach(k => { out[REV_PREFIX_ + k] = newStamp_(); });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { CacheService.getScriptCache().putAll(out, REV_TTL_); return; } catch (e) { if (attempt) Logger.log('Could not write change stamps: ' + e); }
+  }
+}
+
+// The stamp of every kind of data. A kind the cache has forgotten gets a new stamp now.
+function currentRevs_() {
+  const cache = CacheService.getScriptCache();
+  const kinds = revKinds_();
+  const got = cache.getAll(kinds.map(k => REV_PREFIX_ + k));
+  const revs = {}, missing = {};
+  kinds.forEach(k => {
+    let v = got[REV_PREFIX_ + k];
+    if (!v) { v = newStamp_(); missing[REV_PREFIX_ + k] = v; }
+    revs[k] = v;
+  });
+  if (Object.keys(missing).length) { try { cache.putAll(missing, REV_TTL_); } catch (e) { /* the next call tries again */ } }
+  return revs;
+}
+
+// The one cheap call the app makes again and again: the stamps (what changed), today's date and the server clock.
+function syncStatus() {
+  const user = requireRole_(ROLES);
+  return { revs: currentRevs_(), today: localToday_(), now: Date.now(), role: user.role, demo: mockServicesOn_() };
+}
+
+// The read-only screen functions whose answers the browser may keep (it must list the same names, see DEPS in Sync.html).
+const SYNCED_READS_ = ['listRecentServices', 'listServices', 'getServiceReport', 'getEarthData', 'getFarmerLogbook', 'getFarmerView', 'getFarmerServices', 'getFarmer', 'getService',
+  'getOriginMap', 'getFarmerOrigin', 'listMessages', 'listUsers', 'listSegments', 'getExportInfo', 'getAreaOptions', 'getFinderOptions', 'getServiceSetup', 'getServiceOptions',
+  'getDesignerData', 'getFormDefinition', 'getRegistrationData', 'previewAudience', 'listAudience', 'getEarthGeo'];
+
+// A read-only screen function together with the change stamps as they were just BEFORE it ran. The browser stores the answer with those
+// stamps, so it knows exactly when the answer goes out of date (a stamp read after the answer could claim the answer is newer than it is).
+// The function runs as the same signed-in person, so its own permission check applies.
+function syncedRead(fn, args) {
+  requireRole_(ROLES);
+  const name = String(fn || '');
+  if (SYNCED_READS_.indexOf(name) === -1 || API_NAMES_.indexOf(name) === -1 || typeof globalThis[name] !== 'function') throw new Error('Unknown action.');
+  const revs = currentRevs_();
+  const data = globalThis[name].apply(null, Array.isArray(args) ? args : []);
+  return { revs: revs, data: data };
+}
+
+// ---------- the farmer list ----------
+
+// How to find a farmer's tank and Govi committee: the first origin question's top box and the box right below it.
+// Returns a function(entry) -> { root: option or null, kid: option or null }. Shared by the map and the farmer list.
+function originRouter_(S) {
+  const order = {};
+  S.origin.forEach(q => { order[q.question_id] = Number(q.order) || 0; });
+  return function (e) {
+    const opts = [];
+    e.a.forEach(x => { const o = x[2] ? S.optionById[x[2]] : null; if (o) opts.push(o); });
+    if (!opts.length) return { root: null, kid: null };
+    opts.sort((a, b) => (order[a.question_id] || 0) - (order[b.question_id] || 0) || String(a.path).length - String(b.path).length);
+    const rootId = String(opts[0].path).split('>')[0];
+    const root = S.optionById[rootId];
+    if (!root) return { root: null, kid: null };
+    const kidOption = opts.filter(o => { const p = String(o.path).split('>'); return p[0] === rootId && p.length >= 2; })[0];
+    const kid = kidOption ? S.optionById[String(kidOption.path).split('>')[1]] || null : null;
+    return { root: root, kid: kid };
+  };
+}
+
+function stampText_(v) { return v && typeof v.toISOString === 'function' ? v.toISOString() : String(v === undefined || v === null ? '' : v); }
+
+// The chunks of the index, reading neighbouring rows together when many are needed (about a second for 30,000 farmers).
+function indexChunksBulk_(numbers) {
+  const st = indexState_();
+  const need = numbers.filter(n => !st.chunks[n]);
+  if (need.length > 3) {
+    const lo = Math.min.apply(null, need), hi = Math.max.apply(null, need);
+    const values = indexSheet_().getRange(chunkRow_(lo), 1, hi - lo + 1, INDEX_META_COL - 1).getValues();
+    need.forEach(n => { st.chunks[n] = decodeChunk_(values[n - lo].slice(INDEX_PIECE_COL - 1).map(String)); });
+  }
+  return numbers.map(n => indexChunk_(n));
+}
+
+// A farmer as one short row for the browser's search list:
+// [0 id, 1 name, 2 NIC, 3 phone, 4 second phone, 5 district, 6 division, 7 village, 8 status, 9 acres, 10 tank id, 11 committee id, 12 messages ok, 13 do not contact, 14 registered on, 15 latitude, 16 longitude, 17 GPS source]
+// A pilot's copy has no NIC numbers (a pilot may search by NIC on the server, but never sees the numbers).
+function lightFarmer_(e, route, hideNic) {
+  const v = e.v;
+  const r = route(e);
+  return [e.id, v[1], hideNic ? '' : v[2], v[7], v[8], v[9], v[10], v[11], v[14], entryAcres_(e), r.root ? r.root.option_id : '', r.kid ? r.kid.option_id : '', v[12], v[13], v[15], v[16], v[17], v[18]];
+}
+
+// The farmer chunks the browser does not have yet (or has an older version of). known = { chunk number: stamp the browser holds }.
+// Answers at most SYNC_CHUNKS_PER_CALL chunks; `more` says the browser should ask again. names = labels of the tanks and committees used.
+function getFarmerChunks(known, limit) {
+  const user = requireRole_(['Admin', 'Manager', 'Pilot']);
+  indexEnsure_(true);
+  const sh = indexSheet_();
+  const last = sh.getLastRow();
+  let total = last >= 2 ? last - 1 : 0;
+  const stamps = total ? sh.getRange(2, 3, total, 1).getValues().map(r => stampText_(r[0])) : [];
+  while (total > 0 && stamps[total - 1] === '') total--;      // the status note sits in the first row of an otherwise empty index
+  const have = known && typeof known === 'object' ? known : {};
+  const todo = [];
+  for (let n = 0; n < total; n++) if (String(have[n] === undefined ? '' : have[n]) !== stamps[n]) todo.push(n);
+  const take = todo.slice(0, Math.max(1, Math.min(Number(limit) || SYNC_CHUNKS_PER_CALL, 60)));
+  const S = originStructure_();
+  const route = originRouter_(S);
+  const hideNic = user.role === 'Pilot';
+  const names = {};
+  const lists = indexChunksBulk_(take);
+  const chunks = take.map((n, i) => ({ n: n, stamp: stamps[n], rows: lists[i].map(e => {
+    const row = lightFarmer_(e, route, hideNic);
+    [10, 11].forEach(k => { if (row[k]) names[row[k]] = null; });
+    return row;
+  }) }));
+  Object.keys(names).forEach(id => { names[id] = S.optionById[id] ? S.optionById[id].label : id; });
+  return plain_({ total: total, chunks: chunks, more: todo.length > take.length, left: todo.length - take.length, names: names, revs: currentRevs_() });
+}
+
+// ---------- the service rows ----------
+
+// The services the signed-in person may see, as short rows:
+// [0 service id, 1 farmer id, 2 day, 3 status (position in `statuses`), 4 acres, 5 satisfaction, 6 kind (position in `types`), 7 pilot (position in `pilots`)]
+// since = the stamp from the last answer ('' for everything). A pilot only receives their own rows.
+// wantMessages (managers and admins): also the day and size of every message sent, for the Home figures.
+function getServiceRows(since, wantMessages) {
+  const user = requireServiceUser_();
+  const sh = sheet_('Services');
+  const last = sh.getLastRow();
+  const me = String(user.email).toLowerCase();
+  const statuses = SERVICE_STATUSES;
+  const rowPilotName = {};
+  const out = { rows: [], statuses: statuses, types: [], pilots: [], pilot_names: {}, stamp: '', count: 0, full: !since, revs: null };
+  let recs = [];
+  let top = '';
+  const liveIds = {};
+  if (last >= 2) {
+    const n = last - 1;
+    const ids = sh.getRange(2, 1, n, 1).getValues();
+    const stamps = sh.getRange(2, serviceCol_('updated_at'), n, 1).getValues();
+    const pilotCol = user.role === 'Pilot' ? sh.getRange(2, serviceCol_('pilot_email'), n, 1).getValues() : null;
+    const cut = since ? new Date(Date.parse(String(since)) - SERVICE_SYNC_OVERLAP_MS).toISOString() : '';
+    const pick = [];
+    for (let i = 0; i < n; i++) {
+      if (ids[i][0] === '') continue;
+      if (pilotCol && String(pilotCol[i][0]).toLowerCase() !== me) continue;
+      out.count++;
+      liveIds[String(ids[i][0])] = true;
+      const st = stampText_(stamps[i][0]);
+      if (st > top) top = st;
+      if (!since || st >= cut) pick.push(i + 2);
+    }
+    if (pick.length > 300) {
+      // many rows (the first sync): read only the columns that are needed, one column at a time
+      const names = ['service_id', 'farmer_id', 'status', 'service_date', 'requested_date', 'acres_covered', 'satisfaction', 'service_type', 'pilot_email', 'pilot_name'];
+      const cols = names.map(c => sh.getRange(2, serviceCol_(c), n, 1).getValues());
+      recs = pick.map(row => { const o = {}; names.forEach((c, k) => { o[c] = cols[k][row - 2][0]; }); return o; });
+    } else recs = readRowsAt_('Services', pick);
+  }
+  // Jobs that moved to the archive are still part of the person's copy: they come with the first download (from the compact file; a pilot only gets
+  // their own), they are counted every time (so the count never drops when a month is archived), and they do not change afterwards.
+  if (archiveOn_()) {
+    out.count += archivedServiceCount_(user);
+    const aTop = archivedServiceStamp_();
+    if (aTop > top) top = aTop;
+    if (!since) archivedCompact_().forEach(c => { if (!liveIds[c[CP_ID]] && (user.role !== 'Pilot' || c[CP_PILOT] === me)) recs.push(compactObject_(c)); });
+  }
+  out.stamp = top;
+  const typeAt = {}, pilotAt = {};
+  recs.forEach(r => {
+    const t = String(r.service_type || ''), p = String(r.pilot_email || '').toLowerCase();
+    if (p && r.pilot_name) rowPilotName[p] = String(r.pilot_name);
+    if (typeAt[t] === undefined) { typeAt[t] = out.types.length; out.types.push(t); }
+    if (pilotAt[p] === undefined) { pilotAt[p] = out.pilots.length; out.pilots.push(p); }
+    const rating = Number(r.satisfaction);
+    out.rows.push([r.service_id, r.farmer_id, serviceDay_(r), statuses.indexOf(String(r.status)), Number(r.acres_covered) || 0, rating >= 1 && rating <= 5 ? rating : 0, typeAt[t], pilotAt[p]]);
+  });
+  if (user.role !== 'Pilot') pilotChoices_(user).forEach(p => { out.pilot_names[p.email] = p.name; });
+  else out.pilot_names[me] = user.name;
+  // a pilot who is not an account (the made-up pilots of the demo history) is shown by the name written on the record
+  out.pilots.forEach(p => { if (p && !out.pilot_names[p] && rowPilotName[p]) out.pilot_names[p] = rowPilotName[p]; });
+  if (wantMessages && MESSAGE_ROLES.indexOf(user.role) !== -1) {
+    out.messages = readAll_('Messages').map(m => [isoDay_(m.created_at), Number(m.recipients) || 0]);
+  }
+  out.revs = currentRevs_();
+  return plain_(out);
+}
+
+// The local database engine. It is placed after the server code in one script (see tools/build_engine.js), so it can use the server's own functions
+// (api functions, indexRebuild_, resetDbMemo_ ...) and its variables (CURRENT_USER_ ...). It keeps a copy of the tables the person may see in the
+// sheets of shims.js, brings that copy up to date with only what changed on the server, and runs the server's functions on it.
+//
+//   IO.rpc(fn, args)      calls the server (api door); resolves with the result or rejects with an Error
+//   IO.store              { load() -> {meta, tables}|null, saveTable(name, rows), saveMeta(meta), clear() }
+//   IO.progress(info)     optional: called while the copy is being made
+var __ENG_FMT = 2;
+var __ENG = { meta: null, temps: null };
+var __ENG_READS = ['getRegistrationData', 'getFormDefinition', 'getFarmer', 'getFarmerView', 'findFarmers', 'getOriginMap', 'getFarmerOrigin', 'getDashboard', 'getFinderOptions', 'runFinder',
+  'listSegments', 'getServiceOptions', 'findFarmersForService', 'getFarmerServices', 'getService', 'listRecentServices', 'listServices', 'getAreaOptions', 'getServiceReport', 'previewAudience',
+  'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows'];
+var __ENG_WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer'];
+var __ENG_DATA_ENTRY = ['getRegistrationData', 'getFormDefinition', 'saveFarmer'];     // a data entry account receives no farmer data, so only these can be answered on the device
+
+// Numbers handed out on the device are in a range the server never reaches (F900001, SV900001 ...); they are replaced by the real ones once the server has the save.
+function __tempId(prefix, width) {
+  var m = __ENG.meta;
+  m.seq[prefix] = (m.seq[prefix] || 0) + 1;
+  var id = prefix + String(9 * Math.pow(10, width - 1) + m.seq[prefix]);
+  m.temps[id] = prefix;
+  if (__ENG.temps) __ENG.temps.push(id);
+  return id;
+}
+nextId_ = function (prefix, width) { return __tempId(prefix, width); };
+nextIds_ = function (prefix, width, n) { var ids = []; for (var i = 0; i < n; i++) ids.push(__tempId(prefix, width)); return ids; };
+
+function __makeEngine(IO) {
+  var E = { user: null, ready: false };
+  var meta = null, plan = null, dirty = {}, saveTimer = null, indexFresh = false, indexMemo = null, saved = {};
+  var sheetOf = function (name) { return __SS.getSheetByName(name); };
+  var tableNames = function () { return plan ? plan.map(function (t) { return t.name; }) : []; };
+  var farmerTables = { Farmers: 1, Fields: 1, FarmerAnswers: 1 };
+
+  function freshMeta(user) { return { fmt: __ENG_FMT, userId: user.user_id, role: user.role, plan: null, tables: {}, temps: {}, seq: {}, complete: false, archived: false }; }
+  function initSheets() { __SS.sheets = []; Object.keys(SCHEMA).forEach(function (n) { __SS.insertSheet(n).setHeaders(SCHEMA[n]); }); indexFresh = false; indexMemo = null; saved = {}; }
+
+  // ---------- keeping the copy ----------
+  function normalize(row, n) {
+    var o = new Array(n);
+    for (var i = 0; i < n; i++) { var v = row[i]; o[i] = v === undefined || v === null ? '' : (typeof v === 'string' && v.charCodeAt(0) === 126 && v.indexOf(LOCAL_DATE_MARK_) === 0 ? new Date(v.slice(LOCAL_DATE_MARK_.length)) : v); }
+    return o;
+  }
+  function posMap(name) {
+    var sh = sheetOf(name), pos = new Map(), last = sh.getLastRow();
+    for (var r = 2; r <= last; r++) { var row = sh.d[r - 1]; if (row && row[0] !== '' && row[0] !== undefined) pos.set(String(row[0]), r); }
+    return pos;
+  }
+  function liveCount(name) {
+    var sh = sheetOf(name), last = sh.getLastRow(), n = 0;
+    for (var r = 2; r <= last; r++) { var row = sh.d[r - 1]; if (row && row.some(function (v) { return v !== '' && v !== undefined; }) && !meta.temps[String(row[0])]) n++; }
+    return n;
+  }
+  function markDirty(name) { dirty[name] = true; if (!saveTimer) saveTimer = setTimeout(saveNow, 400); }
+  function saveNow() {
+    saveTimer = null;
+    if (!meta) return Promise.resolve();       // (the copy was wiped)
+    var names = Object.keys(dirty); dirty = {};
+    var work = names.filter(function (n) { return tableNames().indexOf(n) !== -1; }).map(function (n) { return IO.store.saveTable(n, sheetOf(n).exportRows(SCHEMA[n].length)); });
+    work.push(IO.store.saveMeta(meta));
+    return Promise.all(work).catch(function () { /* storage refused: the copy still works from memory */ });
+  }
+  function applyRows(name, rows, replace) {
+    var sh = sheetOf(name), headers = SCHEMA[name], n = headers.length;
+    if (replace) {
+      var keep = [];
+      if (name !== 'Lists' && name !== 'Config') for (var r = 2; r <= sh.getLastRow(); r++) { var row = sh.d[r - 1]; if (row && meta.temps[String(row[0])]) keep.push(row.slice()); }
+      sh.setHeaders(headers);
+      rows.forEach(function (x) { sh.d.push(normalize(x, n)); });
+      keep.forEach(function (x) { sh.d.push(x); });
+      sh.lastRow = sh.d.length; sh.stale = true; sh.maxRows = Math.max(1000, sh.d.length + 500); sh.version++;
+      return;
+    }
+    var pos = posMap(name);
+    rows.forEach(function (x) {
+      var key = String(x[0]), at = pos.get(key), o = normalize(x, n);
+      if (at) sh.d[at - 1] = o; else { var r2 = sh.getLastRow() + 1; sh.d[r2 - 1] = o; sh.lastRow = r2; pos.set(key, r2); }
+    });
+    sh.maxRows = Math.max(sh.maxRows, sh.getLastRow() + 500); sh.version++;
+  }
+  function rebuildIndex() {
+    resetDbMemo_(); CURRENT_USER_ = E.user; LOCK_DEPTH_ = 0;
+    try { sheetOf('FarmerIndex').setHeaders(SCHEMA.FarmerIndex); INDEX_MEMO_ = null; indexRebuild_(); indexMemo = INDEX_MEMO_; indexFresh = true; }
+    finally { CURRENT_USER_ = null; }
+  }
+  function pullTable(t, rev, force) {
+    var m = meta.tables[t.name] || (meta.tables[t.name] = {});
+    var full = force || !m.done || !t.delta || !m.stamp;
+    var got = [], last = null;
+    function page(from) {
+      return IO.rpc('getTableDelta', [t.name, full ? '' : m.stamp, from]).then(function (res) {
+        last = res; res.rows.forEach(function (x) { got.push(x); });
+        if (res.more) return page(res.next);
+      });
+    }
+    return page(0).then(function () {
+      var replace = full || last.snapshot;
+      applyRows(t.name, got, replace);
+      if (!replace && liveCount(t.name) !== last.count) return pullTable(t, rev, true);       // rows were removed behind our back: take the table again
+      m.stamp = last.stamp; m.count = last.count; m.rev = rev; m.done = true;
+      if (t.name === 'Services') meta.archived = !!last.archived;
+      markDirty(t.name);
+      return t.name;
+    });
+  }
+  // Brings every table of the plan up to date (only the kinds whose stamp changed; everything on the first run). revs = the change stamps from syncStatus.
+  E.sync = function (revs, force) {
+    if (!E.user) return Promise.resolve([]);
+    if (E.syncing) { E.again = { revs: revs || (E.again && E.again.revs), force: force || (E.again && E.again.force) }; return E.syncing; }
+    var touched = {};
+    var getPlan = plan ? Promise.resolve() : IO.rpc('getLocalPlan', []).then(function (p) { plan = p.tables; meta.plan = plan; });
+    E.syncing = getPlan.then(function () {
+      var todo = plan.filter(function (t) { var m = meta.tables[t.name] || {}; return force || !m.done || (revs && revs[t.kind] !== undefined && m.rev !== revs[t.kind]); });
+      var started = todo.length, finished = 0, queue = todo.slice();
+      function worker() {
+        var t = queue.shift();
+        if (!t) return Promise.resolve();
+        return pullTable(t, revs ? revs[t.kind] : '', !!force).then(function (name) { touched[name] = true; finished++; if (IO.progress) IO.progress({ done: finished, total: started, table: name }); return worker(); });
+      }
+      return Promise.all([worker(), worker(), worker()]);
+    }).then(function () {
+      var names = Object.keys(touched);
+      if (names.some(function (n) { return farmerTables[n]; }) || (!indexFresh && plan.some(function (t) { return t.name === 'Farmers'; }) && !E.ready)) { if (plan.some(function (t) { return t.name === 'Farmers'; })) rebuildIndex(); }
+      meta.complete = plan.every(function (t) { return meta.tables[t.name] && meta.tables[t.name].done; });
+      E.ready = meta.complete && !meta.archived;
+      if (names.length) saveNow();
+      return names;
+    }).then(function (names) {
+      E.syncing = null;
+      if (E.again) { var a = E.again; E.again = null; return E.sync(a.revs, a.force).then(function (more) { return names.concat(more); }); }
+      return names;
+    }, function (e) { E.syncing = null; E.again = null; throw e; });
+    return E.syncing;
+  };
+
+  // ---------- starting ----------
+  E.init = function (user) {
+    E.user = user; E.ready = false; plan = null;
+    initSheets();
+    return IO.store.load().then(function (data) {
+      meta = freshMeta(user);
+      if (data && data.meta && data.meta.fmt === __ENG_FMT && data.meta.userId === user.user_id && data.meta.role === user.role) {
+        meta = data.meta;
+        Object.keys(data.tables || {}).forEach(function (n) { if (sheetOf(n) && SCHEMA[n]) sheetOf(n).importRows(SCHEMA[n], data.tables[n]); });
+        plan = meta.plan;
+      } else if (data) return IO.store.clear();
+    }).then(function () {
+      __ENG.meta = meta;
+      if (meta.complete && plan) {
+        if (plan.some(function (t) { return t.name === 'Farmers'; })) rebuildIndex();
+        E.ready = !meta.archived;
+      }
+      return { ready: E.ready };
+    });
+  };
+  E.reset = function () { clearTimeout(saveTimer); saveTimer = null; dirty = {}; meta = null; plan = null; E.user = null; E.ready = false; initSheets(); return IO.store.clear(); };
+  E.flush = function () { clearTimeout(saveTimer); return meta ? saveNow() : Promise.resolve(); };
+
+  // ---------- running the server's functions on the copy ----------
+  E.allowed = function (fn) {
+    if (!E.ready || !E.user) return false;
+    if (E.user.role === 'DataEntry') return __ENG_DATA_ENTRY.indexOf(fn) !== -1;
+    return __ENG_READS.indexOf(fn) !== -1 || __ENG_WRITES.indexOf(fn) !== -1;
+  };
+  E.run = function (fn, args) {
+    if (!E.allowed(fn)) throw new Error('LOCAL_UNSUPPORTED: ' + fn);
+    var keep = indexFresh ? INDEX_MEMO_ || indexMemo : null;
+    resetDbMemo_(); INDEX_MEMO_ = keep; LOCK_DEPTH_ = 0; CURRENT_USER_ = E.user;
+    var versions = {};
+    tableNames().forEach(function (n) { versions[n] = sheetOf(n).version; });
+    __ENG.temps = [];
+    try {
+      var out = globalThis[fn].apply(null, Array.isArray(args) ? args : []);
+      var temps = __ENG.temps;
+      // a screen that only reads but had to make rows (the map makes its first places) is a job for the server: nothing of it stays on the device
+      if (temps.length && __ENG_READS.indexOf(fn) !== -1) { var drop = temps.slice(); __ENG.temps = null; E.purge(drop); throw new Error('LOCAL_UNSUPPORTED: ' + fn + ' needs the server first'); }
+      return { result: JSON.parse(JSON.stringify(out === undefined ? null : out)), temps: temps };
+    } finally {
+      __ENG.temps = null; CURRENT_USER_ = null; indexMemo = INDEX_MEMO_;
+      tableNames().forEach(function (n) { if (sheetOf(n).version !== versions[n]) markDirty(n); });
+    }
+  };
+  // The server has the save: take its real rows in, then drop the temporary ones made on the device (in one step, so nothing flickers).
+  E.purge = function (ids) {
+    var set = {}; ids.forEach(function (id) { set[id] = true; });
+    var farmerSide = false;
+    tableNames().forEach(function (name) {
+      var sh = sheetOf(name), last = sh.getLastRow(), changed = false;
+      for (var r = 2; r <= last; r++) { var row = sh.d[r - 1]; if (row && set[String(row[0])]) { sh.d[r - 1] = []; changed = true; } }
+      if (changed) { sh.stale = true; sh.version++; markDirty(name); if (farmerTables[name]) farmerSide = true; }
+    });
+    ids.forEach(function (id) { delete meta.temps[id]; });
+    if (farmerSide) rebuildIndex();
+    markDirty('Config');
+  };
+  E.finish = function (ids, revs) {
+    return E.sync(revs, false).then(function () { E.purge(ids); });
+  };
+  E.invalidate = function (names) { names.forEach(function (n) { if (meta.tables[n]) { meta.tables[n].done = false; meta.tables[n].rev = ''; } }); meta.complete = false; markDirty('Config'); };
+  E.status = function () { return { ready: E.ready, complete: !!(meta && meta.complete), archived: !!(meta && meta.archived), tables: meta ? Object.keys(meta.tables).length : 0, plan: plan ? plan.length : 0 }; };
+  return E;
+}
+
+// The messages the page sends to the engine (the worker glue uses this inside the worker; the tests use it too).
+//   state: { engine, token }   makeIO(message) builds the engine's IO when it starts   post(reply) sends an answer back
+function __engineMessage(state, d, makeIO, post) {
+  var id = d.id;
+  function ok(v) { post({ id: id, ok: v === undefined ? null : v }); }
+  function err(e) { post({ id: id, err: String((e && e.message) || e) }); }
+  try {
+    if (d.type === 'init') { state.engine = __makeEngine(makeIO(d)); state.engine.init(d.user).then(ok, err); }
+    else if (d.type === 'token') { state.token = d.token; ok(true); }
+    else if (!state.engine) err('LOCAL_NOT_READY');
+    else if (d.type === 'sync') state.engine.sync(d.revs, d.force).then(ok, err);
+    else if (d.type === 'run') ok(state.engine.run(d.fn, d.args));
+    else if (d.type === 'finish') state.engine.finish(d.ids, d.revs).then(ok, err);
+    else if (d.type === 'purge') { state.engine.purge(d.ids); ok(true); }
+    else if (d.type === 'invalidate') { state.engine.invalidate(d.names); ok(true); }
+    else if (d.type === 'flush') state.engine.flush().then(ok, err);
+    else if (d.type === 'status') ok(state.engine.status());
+    else if (d.type === 'reset') state.engine.reset().then(function () { state.engine = null; ok(true); }, err);
+    else err('unknown message');
+  } catch (e) { err(e); }
+}
+
+// Worker glue: runs the engine inside a Web Worker. The page talks to it with messages (handled by __engineMessage in core.js); the engine reaches the
+// server with fetch (no Google cookies) and keeps its copy of the tables in IndexedDB.
+if (typeof importScripts === 'function' && typeof self !== 'undefined' && typeof postMessage === 'function') {
+  (function () {
+    var state = { engine: null, api: '', token: '' };
+    function plain(html) { return String(html || '').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300); }
+    function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    function rpc(fn, args) {
+      var tries = 0;
+      function attempt() {
+        return fetch(state.api, { method: 'POST', credentials: 'omit', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ fn: 'api', args: [state.token, fn, args] }) })
+          .then(function (r) { return r.text(); })
+          .then(function (t) {
+            var j = null;
+            try { j = JSON.parse(t); } catch (e) { /* Google's own error page */ }
+            if (!j) throw new Error(plain(t) || 'The server did not answer.');
+            if (j.err) throw new Error(j.err);
+            return j.ok;
+          })
+          .catch(function (e) {
+            var m = String(e && e.message);
+            var busy = /invoked too many times|too many simultaneous|rate limit|Please wait a bit|busy saving|server error occurred|temporarily unavailable/i.test(m);
+            if (busy && tries < 4) { tries++; return sleep(1000 * tries * (0.7 + Math.random() * 0.6)).then(attempt); }
+            throw e;
+          });
+      }
+      return attempt();
+    }
+    var store = (function () {
+      var dbp = null;
+      function db() {
+        if (!dbp) dbp = new Promise(function (res, rej) {
+          var q = indexedDB.open('govilink-engine', 1);
+          q.onupgradeneeded = function () { q.result.createObjectStore('kv'); };
+          q.onsuccess = function () { res(q.result); };
+          q.onerror = function () { rej(q.error); };
+        });
+        return dbp;
+      }
+      function tx(mode, fn) {
+        return db().then(function (d) { return new Promise(function (res, rej) { var t = d.transaction('kv', mode), out = fn(t.objectStore('kv')); t.oncomplete = function () { res(out); }; t.onerror = t.onabort = function () { rej(t.error); }; }); });
+      }
+      return {
+        load: function () {
+          return tx('readonly', function (os) {
+            var o = { tables: {}, meta: null, got: false }, r = os.openCursor();
+            r.onsuccess = function () { var c = r.result; if (!c) return; o.got = true; if (c.key === 'meta') o.meta = c.value; else if (String(c.key).indexOf('T:') === 0) o.tables[String(c.key).slice(2)] = c.value; c.continue(); };
+            return o;
+          }).then(function (o) { return o.got ? o : null; }).catch(function () { return null; });
+        },
+        saveTable: function (n, rows) { return tx('readwrite', function (os) { os.put(rows, 'T:' + n); }); },
+        saveMeta: function (m) { return tx('readwrite', function (os) { os.put(m, 'meta'); }); },
+        clear: function () { return tx('readwrite', function (os) { os.clear(); }).catch(function () {}); }
+      };
+    })();
+    function makeIO(d) {
+      state.api = d.apiUrl; state.token = d.token;
+      return { rpc: rpc, store: store, progress: function (p) { postMessage({ event: 'progress', p: p }); } };
+    }
+    self.onmessage = function (ev) { __engineMessage(state, ev.data, makeIO, function (m) { postMessage(m); }); };
+  })();
+}

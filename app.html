@@ -1528,9 +1528,14 @@ function runJob(job) {
   p.then(function (r) { finish(true, r); }, function (e) { finish(false, e); });
 }
 var busyNoteAt = 0;
-function callWith(low, fn, args) {
+function callWith(low, fn, args, noLocal) {
   // saves that may wait for a connection are kept on the device when the server cannot be reached (Sync.submit sends them through submitOp)
   if (!low && typeof Sync !== 'undefined' && Sync.queues(fn)) return Sync.submit(fn, args);
+  // a read the local database can answer is answered on the device (the server only when the device cannot)
+  if (!noLocal && typeof Sync !== 'undefined') {
+    var lp = Sync.local(fn, args);
+    if (lp) return lp.catch(function (e) { if (e && e.local) return callWith(low, fn, args, true); throw Object.assign(new Error(String((e && e.message) || e).replace(/^(Error|Exception):\s*/, '')), { kind: 'final' }); });
+  }
   var write = typeof Sync === 'undefined' || Sync.isWrite(fn);
   var idem = fn === 'submitOp';          // done once however often it arrives, so it may be sent again after a broken connection; one try is enough (the queue is the second chance)
   var most = idem ? 1 : (write ? 4 : 3);
@@ -2272,6 +2277,7 @@ var Sync = (function () {
       if (needPk()) jobs.push(syncPk());
       if (needSp()) jobs.push(syncSp());
       if (needFp()) jobs.push(syncFp());
+      if (Engine.enabled()) { if (cleanup.length) jobs.push(finishOps(cleanup.slice())); jobs.push(Engine.sync(st.revs).catch(function (e) { failed(e); })); }
       return Promise.all(jobs);
     }).then(function () {
       st.pending = null; st.revsStage = null;
@@ -2385,6 +2391,11 @@ var Sync = (function () {
   // otherwise the server is asked, as before.
   function fast(fn, args, opts) {
     args = args || []; opts = opts || {};
+    if (Engine.canRun(fn)) return fastEngine(fn, args, opts);
+    return fastPacks(fn, args, opts);
+  }
+  function fastPacks(fn, args, opts) {
+    args = args || []; opts = opts || {};
     var def = LOCAL[fn];
     if (!def || !localAble(def)) return fastStored(fn, args, opts);
     var offline = function () { return queue.length > 0 || !st.online; };       // (a busy server is not "offline": the copy may be out of date)
@@ -2429,6 +2440,7 @@ var Sync = (function () {
       if (sv.done) emit('services');
       check();
       nextRound();
+      Engine.start().then(function () { if (user && Engine.enabled()) check(); });
       try {
         document.addEventListener('visibilitychange', onVisible);
         window.addEventListener('online', onOnline);
@@ -2445,11 +2457,12 @@ var Sync = (function () {
       check().then(nextRound, nextRound);
     }, pollDelay());
   }
-  function onVisible() { if (!document.hidden && user && Date.now() - st.revsAt > 8000) check(); }
+  function onVisible() { if (document.hidden) Engine.flush(); else if (user && Date.now() - st.revsAt > 8000) check(); }
   function onOnline() { if (user) check(); }
   // wipe = true when the person signed out: the copy on this device is deleted
   function stop(wipe) {
     clearTimeout(st.timer); st.timer = null; clearTimeout(flushTimer); flushTimer = null;
+    Engine.stop(wipe);
     try { document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('online', onOnline); } catch (e) { /* no page events */ }
     if (wipe) Store.wipe(); else Store.flush();
     user = ''; role = '';
@@ -2457,7 +2470,7 @@ var Sync = (function () {
     job = { farmers: null, services: null, again: {} };
     fm = { chunks: {}, total: 0, names: {}, formRev: '', rev: '', done: false, loaded: 0, all: [], byId: {}, hay: [], dig: [] };
     sv = { rows: {}, n: 0, stamp: '', rev: '', msgRev: '', messages: [], pilotNames: {}, done: false };
-    pk = newPk(); spk = newSp(); fpk = newFp(); ov = { recs: {}, rows: {} }; queue = []; idmap = {}; flushing = null;
+    pk = newPk(); spk = newSp(); fpk = newFp(); ov = { recs: {}, rows: {} }; queue = []; idmap = {}; cleanup = []; flushing = null;
     emit('status');
   }
 
@@ -2492,6 +2505,109 @@ var Sync = (function () {
       return settled(1500).then(function () { return search(query, { limit: opts.limit, activeOnly: opts.activeOnly }); });
     }
     return call(opts.server || 'findFarmers', query);
+  }
+
+  // ---------- the local database (the engine runs in a Web Worker: engine.js) ----------
+  // On the hosted page the app keeps the whole database the person may see on the device and runs the server's own code on it (engine/). Reads are answered
+  // from it, saves are made on it first and sent to the server in the background (the queue below), and only what changed on the server is brought in.
+  // If the engine is not there (the Apps Script page, a browser without workers) or not ready yet, everything works as before.
+  var Engine = (function () {
+    var worker = null, seq = 0, waits = {}, status = { started: false, ready: false, done: 0, total: 0 };
+    var READS = ['getRegistrationData', 'getFormDefinition', 'getFarmer', 'getFarmerView', 'findFarmers', 'getOriginMap', 'getFarmerOrigin', 'getDashboard', 'getFinderOptions', 'runFinder',
+      'listSegments', 'getServiceOptions', 'findFarmersForService', 'getFarmerServices', 'getService', 'listRecentServices', 'listServices', 'getAreaOptions', 'getServiceReport', 'previewAudience',
+      'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows'];
+    var WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer'];
+    var DATA_ENTRY = ['getRegistrationData', 'getFormDefinition', 'saveFarmer'];
+    function available() { return typeof Worker !== 'undefined' && typeof API_URL !== 'undefined' && !!API_URL && !(typeof google !== 'undefined' && google.script && google.script.run); }
+    function send(msg) {
+      return new Promise(function (resolve, reject) { var id = ++seq; waits[id] = { resolve: resolve, reject: reject }; msg.id = id; worker.postMessage(msg); });
+    }
+    function onMessage(ev) {
+      var d = ev.data || {};
+      if (d.event === 'progress') { status.done = d.p.done; status.total = d.p.total; emit('status'); return; }
+      var w = waits[d.id];
+      if (!w) return;
+      delete waits[d.id];
+      if (d.err !== undefined) { var e = new Error(String(d.err)); if (/^LOCAL_/.test(e.message)) e.local = true; w.reject(e); } else w.resolve(d.ok);
+    }
+    function lost() { var w = waits; waits = {}; Object.keys(w).forEach(function (k) { var e = new Error('LOCAL_UNSUPPORTED: the local database stopped'); e.local = true; w[k].reject(e); }); status.ready = false; }
+    function start() {
+      if (worker || !available() || !user) return Promise.resolve();
+      try { worker = new Worker('engine.js'); } catch (e) { worker = null; return Promise.resolve(); }
+      worker.onmessage = onMessage;
+      worker.onerror = function () { lost(); };
+      status.started = true; status.ready = false; status.done = 0; status.total = 0;
+      return send({ type: 'init', apiUrl: API_URL, token: Session.token, user: Session.user }).then(function (r) { status.ready = !!(r && r.ready); emit('status'); }).catch(function () { status.ready = false; });
+    }
+    function refreshStatus() { return send({ type: 'status' }).then(function (s) { status.ready = !!s.ready; emit('status'); return s; }); }
+    function sync(revs, force) { return worker ? send({ type: 'sync', revs: revs, force: !!force }).then(refreshStatus, function (e) { return refreshStatus().catch(function () {}).then(function () { throw e; }); }) : Promise.resolve(); }
+    function canRun(fn) {
+      if (!worker || !status.ready) return false;
+      return role === 'DataEntry' ? DATA_ENTRY.indexOf(fn) !== -1 : (READS.indexOf(fn) !== -1 || WRITES.indexOf(fn) !== -1);
+    }
+    function run(fn, args) { return send({ type: 'run', fn: fn, args: args || [] }); }
+    function finish(ids, revs) { return send({ type: 'finish', ids: ids, revs: revs }); }
+    function purge(ids) { return send({ type: 'purge', ids: ids }); }
+    function invalidate(names) { return send({ type: 'invalidate', names: names }); }
+    function flushNow() { if (worker) send({ type: 'flush' }).catch(function () {}); }
+    function token(t) { if (worker) send({ type: 'token', token: t }).catch(function () {}); }
+    function stop(wipe) {
+      if (!worker) return;
+      var w = worker;
+      worker = null; status.ready = false;
+      // a wipe deletes the copy; otherwise whatever is not saved yet is saved first. Either way the worker is stopped a moment later.
+      try { w.postMessage({ id: ++seq, type: wipe ? 'reset' : 'flush' }); } catch (e) { /* gone already */ }
+      setTimeout(function () { try { w.terminate(); } catch (e) { /* gone already */ } }, 1500);
+      lost();
+    }
+    return { start: start, sync: sync, canRun: canRun, run: run, finish: finish, purge: purge, invalidate: invalidate, flush: flushNow, token: token, stop: stop, enabled: function () { return !!worker; }, ready: function () { return !!worker && status.ready; },
+      progress: function () { return status; }, available: available };
+  })();
+  // a read answered on the device: a promise, or null when the server has to be asked (the caller then does what it did before)
+  function localRead(fn, args) {
+    if (!Engine.canRun(fn)) return null;
+    return Engine.run(fn, args).then(function (r) { return r.result; });
+  }
+  function fastEngine(fn, args, opts) {
+    var p = Engine.run(fn, args).then(function (r) { return r.result; }).catch(function (e) {
+      if (e && e.local) { setTimeout(function () { if (user) check(); }, 3000); return fastPacks(fn, args, opts); }      // the server first (and the device gets what it made)
+      throw e;
+    });
+    p.later = function () { /* the device copy is the answer */ };
+    return p;
+  }
+  // a save made on the device first; the server gets the same save in the background (flush)
+  function submitLocal(fn, args, opId) {
+    var inp = args[0] || {};
+    return Engine.run(fn, args).then(function (r) {
+      var tid = fn === 'saveFarmer' ? inp.farmer_id : (fn === 'saveService' ? inp.service_id : '');
+      var creator = tid ? queue.filter(function (o) { return o.state === 'wait' && o.fn === fn && o.temps.indexOf(tid) !== -1; })[0] : null;
+      var res = r.result && typeof r.result === 'object' ? r.result : {};
+      if (creator) {
+        // changing something that has not been sent yet: the waiting save becomes the changed record (the server has never seen the old one)
+        var merged = clone(args);
+        if (merged[0]) { delete merged[0].farmer_id; delete merged[0].service_id; (merged[0].fields || []).forEach(function (f) { if (f.field_id && creator.temps.indexOf(f.field_id) !== -1) delete f.field_id; }); }
+        creator.args = merged; creator.temps = creator.temps.concat(r.temps);
+      } else {
+        var op = { id: opId, fn: fn, args: clone(args), at: Date.now(), state: 'wait', error: '', temp: {}, temps: r.temps || [], local: true, label: labelOf(fn, args) };
+        if (fn === 'saveFarmer' && res.farmer_id && op.temps.indexOf(res.farmer_id) !== -1) op.temp.farmer_id = res.farmer_id;
+        if (fn === 'saveService' && res.service_id && op.temps.indexOf(res.service_id) !== -1) op.temp.service_id = res.service_id;
+        queue.push(op);
+      }
+      saveQueue(); emit('records'); emit('farmers'); emit('services'); emit('status');
+      scheduleFlush(300);
+      res.queued = true;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) setTimeout(function () { try { showMsg('Saved on this phone. It will be sent by itself when the connection is back.', false); } catch (e) { /* no message area */ } }, 60);
+      return res;
+    }).catch(function (e) {
+      if (e && e.local) return null;                                  // the device cannot do this one: the caller sends it to the server as before
+      throw Object.assign(new Error(String((e && e.message) || e).replace(/^(Error|Exception):\s*/, '')), { kind: 'final' });
+    });
+  }
+  // the server has the save: the device takes the real rows in and drops its temporary ones
+  function finishOps(ids) {
+    if (!ids.length || !Engine.enabled()) return Promise.resolve();
+    return call('syncStatus').then(function (s) { return Engine.finish(ids, s.revs); }).then(function () { cleanup = cleanup.filter(function (x) { return ids.indexOf(x) === -1; }); saveQueue(); }, function () { /* tried again with the next save */ });
   }
 
   // ---------- the complete records on the device ----------
@@ -2627,9 +2743,9 @@ var Sync = (function () {
     });
     return job.fp;
   }
-  function needPk() { return canList() && (!pk.done || pk.rev !== st.revs.farmers); }
-  function needSp() { return canList() && (!spk.done || spk.rev !== st.revs.services); }
-  function needFp() { return canList() && (!fpk.done || fpk.rev !== st.revs.form); }
+  function needPk() { return canList() && !Engine.enabled() && (!pk.done || pk.rev !== st.revs.farmers); }
+  function needSp() { return canList() && !Engine.enabled() && (!spk.done || spk.rev !== st.revs.services); }
+  function needFp() { return canList() && !Engine.enabled() && (!fpk.done || fpk.rev !== st.revs.form); }
 
   // ---------- answering the screens from the complete records ----------
   function recOf(id) { return ov.recs[id] || pk.recs[id] || null; }
@@ -2752,9 +2868,9 @@ var Sync = (function () {
   var QUEUEABLE = { saveFarmer: 1, saveService: 1, addInteraction: 1, saveFarmerGps: 1 };
   var CORE_COPY = ['full_name', 'nic', 'date_of_birth', 'gender', 'language', 'farmer_type', 'phone_primary', 'phone_alt', 'address', 'district', 'ds_division', 'gn_division', 'village',
     'marketing_consent', 'do_not_contact', 'notes', 'latitude', 'longitude', 'gps_source', 'gps_accuracy'];
-  var queue = [], idmap = {}, flushing = null, flushTimer = null;
-  function saveQueue() { Store.set(key('queue'), { ops: queue, idmap: idmap }); }
-  function hydrateQueue() { var q = Store.get(key('queue')); queue = q && q.ops ? q.ops : []; idmap = q && q.idmap ? q.idmap : {}; }
+  var queue = [], idmap = {}, cleanup = [], flushing = null, flushTimer = null;       // cleanup: temporary numbers whose real rows are still to be taken in
+  function saveQueue() { Store.set(key('queue'), { ops: queue, idmap: idmap, cleanup: cleanup }); }
+  function hydrateQueue() { var q = Store.get(key('queue')); queue = q && q.ops ? q.ops : []; idmap = q && q.idmap ? q.idmap : {}; cleanup = q && q.cleanup ? q.cleanup : []; queue.forEach(function (o) { if (!o.temps) o.temps = []; }); }
   function rand(n) { var s = ''; while (s.length < n) s += Math.floor(Math.random() * 36).toString(36); return s.toUpperCase(); }
   function pending() { return queue.filter(function (o) { return o.state === 'wait'; }).length; }
   function needAttention() { return queue.filter(function (o) { return o.state === 'error'; }).length; }
@@ -2772,7 +2888,7 @@ var Sync = (function () {
     function baseRec(id) { return recs[id] || pk.recs[id] || null; }
     function baseRow(id) { return rows[id] || spk.rows[id] || null; }
     queue.forEach(function (op) {
-      if (op.state === 'error') return;
+      if (op.state === 'error' || op.local) return;
       var a = op.args, inp = a[0] || {};
       if (op.fn === 'saveFarmer') {
         var id = inp.farmer_id || op.temp.farmer_id, old = baseRec(id), rec = old ? clone(old) : { farmer: { farmer_id: id, status: 'Active', created_at: nowIso(), created_by: me() }, fields: [], answers: [] };
@@ -2818,7 +2934,8 @@ var Sync = (function () {
   }
   function usesTemp(op) {
     var text = JSON.stringify(subst(op.args));
-    return /"NEW-[A-Z0-9-]+"/.test(text);
+    if (/"NEW-[A-Z0-9-]+"/.test(text)) return true;
+    return queue.some(function (o) { return o !== op && o.temps.some(function (t) { return !idmap[t] && text.indexOf('"' + t + '"') !== -1; }); });       // it names a record that an earlier waiting save has still to create
   }
   function labelOf(fn, a) {
     var i = a[0] || {};
@@ -2834,7 +2951,7 @@ var Sync = (function () {
     return { queued: true };
   }
   function enqueue(fn, args, opId) {
-    var op = { id: opId, fn: fn, args: clone(args), at: Date.now(), state: 'wait', error: '', temp: {}, label: labelOf(fn, args) };
+    var op = { id: opId, fn: fn, args: clone(args), at: Date.now(), state: 'wait', error: '', temp: {}, temps: [], label: labelOf(fn, args) };
     var i = op.args[0] || {};
     if (fn === 'saveFarmer' && !i.farmer_id) op.temp.farmer_id = 'NEW-F' + rand(5);
     if (fn === 'saveService' && !i.service_id) op.temp.service_id = 'NEW-SV' + rand(5);
@@ -2848,6 +2965,10 @@ var Sync = (function () {
   // Called by call() for every save of these kinds (see callWith in Common.html).
   function submit(fn, args) {
     var id = 'OP' + Date.now().toString(36).toUpperCase() + rand(8);
+    if (Engine.canRun(fn)) return submitLocal(fn, args, id).then(function (r) { return r === null ? submitNetwork(fn, args, id) : r; });
+    return submitNetwork(fn, args, id);
+  }
+  function submitNetwork(fn, args, id) {
     if (queue.length || (typeof navigator !== 'undefined' && navigator.onLine === false)) return Promise.resolve(enqueue(fn, args, id));
     return call('submitOp', id, fn, args).catch(function (e) {
       var kind = e && e.kind;
@@ -2868,9 +2989,10 @@ var Sync = (function () {
         if (op.temp.service_id && res && res.service_id) idmap[op.temp.service_id] = res.service_id;
         queue = queue.filter(function (o) { return o !== op; });
         if (!queue.length) idmap = {};
+        if (op.local && op.temps.length) cleanup = cleanup.concat(op.temps);
         saveQueue(); rebuildOverlay();
         emit('records'); emit('farmers'); emit('services'); emit('status');
-        return next();
+        return (op.local ? finishOps(op.temps) : Promise.resolve()).then(next);
       }, function (e) {
         var kind = e && e.kind;
         if (!kind || kind === 'unsure' || kind === 'refused' || kind === 'daily') { scheduleFlush(30000); return; }      // not now: the same save is sent again later
@@ -2883,8 +3005,14 @@ var Sync = (function () {
     flushing = next().then(function () { flushing = null; emit('status'); if (pending()) scheduleFlush(30000); }, function () { flushing = null; });
     return flushing;
   }
+  function tablesOf(fn) { return fn === 'saveService' ? ['Services'] : (fn === 'addInteraction' ? ['Outreach'] : ['Farmers', 'Fields', 'FarmerAnswers']); }
   function discard(id) {
+    var gone = queue.filter(function (o) { return o.id === id; })[0];
     queue = queue.filter(function (o) { return o.id !== id; });
+    if (gone && gone.local && Engine.enabled()) {
+      // the save never reached the server: what it did on the device is taken back (the temporary rows go, the changed rows are taken again from the server)
+      Engine.purge(gone.temps).then(function () { return Engine.invalidate(tablesOf(gone.fn)); }).then(function () { return check(); }).catch(function () { /* the next check tries again */ });
+    }
     if (!queue.length) idmap = {};
     saveQueue(); rebuildOverlay(); emit('records'); emit('farmers'); emit('services'); emit('status');
   }
@@ -2931,8 +3059,9 @@ var Sync = (function () {
   // ---------- what the screens may ask ----------
   function state() {
     var syncing = !!(st.pending || job.farmers || job.services || job.pk || job.sp || job.fp);
-    var first = canList() && (!fm.done || !sv.done || !pk.done || !spk.done || !fpk.done);
-    return { state: st.busy ? 'busy' : (!st.online ? 'offline' : (first ? 'first' : (syncing ? 'syncing' : 'ready'))), at: st.okAt, loaded: fm.done ? pk.loaded : fm.loaded, total: fm.done ? pk.total : fm.total, error: st.error, pending: pending(), attention: needAttention() };
+    var engineBusy = Engine.enabled() && !Engine.ready();
+    var first = engineBusy || (canList() && !Engine.enabled() && (!fm.done || !sv.done || !pk.done || !spk.done || !fpk.done)) || (canList() && Engine.enabled() && (!fm.done || !sv.done));
+    return { state: st.busy ? 'busy' : (!st.online ? 'offline' : (first ? 'first' : (syncing ? 'syncing' : 'ready'))), at: st.okAt, loaded: engineBusy ? Engine.progress().done : (fm.done ? pk.loaded : fm.loaded), total: engineBusy ? Engine.progress().total : (fm.done ? pk.total : fm.total), error: st.error, pending: pending(), attention: needAttention() };
   }
   function pad(n) { return (n < 10 ? '0' : '') + n; }
 
@@ -2968,6 +3097,7 @@ var Sync = (function () {
   return {
     prefetch: function () { if (!user) return Promise.resolve(); PREFETCH_GAP = 0; st.pf = true; return runPrefetch(user); },   // (the tests use this: the real one starts by itself after the lists are up to date)
     demoChip: demoChip, demo: function () { return st.demo; }, start: start, stop: stop, check: check, refresh: refresh, wrote: wrote, isWrite: isWrite, settled: settled, fast: fast, on: on, state: state, chip: chip,
+    local: function (fn, args) { return isWrite(fn) ? null : localRead(fn, args); }, engine: Engine,
     submit: submit, queues: function (fn) { return !!user && QUEUEABLE[fn] === 1; }, pending: pending, attention: needAttention, unsent: function () { return queue.length; }, showQueue: showQueue, discard: discard, flush: flush,
     today: today, COL: COL, looksLikeNic: looksLikeNic, find: find, pollDelay: pollDelay,
     farmers: {
