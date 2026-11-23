@@ -73,10 +73,7 @@
   <div id="gate">
     <div class="card">
       <img class="logo" src="icon-192.png" alt="GoviLink">
-      <h1 id="gatetitle">Install GoviLink</h1>
-      <p class="lead" id="gatelead">GoviLink works as an app on your computer or phone. Install it once, then open it from its icon whenever you need it.</p>
-
-      <button class="install" id="installbtn" type="button" disabled>Preparing…</button>
+      <button class="install" id="installbtn" type="button">Install GoviLink</button>
 
       <div class="notice ok hide" id="doneNote"><b>GoviLink is installed.</b> Close this page and open <b>GoviLink</b> from its icon: the Start menu or desktop on a computer, or the home screen on a phone. Then sign in.</div>
       <div class="notice warn hide" id="alreadyNote"><b>GoviLink is already installed on this device.</b> Open it from its icon (Start menu or desktop on a computer, home screen on a phone) and sign in there.</div>
@@ -89,7 +86,6 @@
           <li><span class="k">Android:</span> in Chrome tap the menu (⋮) → <span class="k">Install app</span>.</li>
         </ol>
         <p style="font-size:12.5px; margin:0 0 14px; color:#5a6a62">Firefox and some other browsers cannot install apps; please use Chrome or Edge. If you removed GoviLink earlier, your browser may take a little while to offer the button above; the address-bar icon or menu always works.</p></div>
-      <p class="small">GoviLink · for CAFT staff</p>
     </div>
   </div>
 
@@ -128,48 +124,31 @@
         installed = true;
         show('doneNote', true); show('alreadyNote', false); show('howOther', false); show('howIos', false);
         btn.classList.add('hide');
-        $('gatetitle').textContent = 'GoviLink is installed';
-        $('gatelead').textContent = 'You can close this page now.';
       }
 
       window.addEventListener('beforeinstallprompt', function (e) {
         e.preventDefault();
         deferred = e;
         if (installed) return;
-        btn.disabled = false;
-        btn.textContent = 'Install GoviLink';
         show('howOther', false);
       });
       window.addEventListener('appinstalled', finished);
 
       btn.addEventListener('click', function () {
-        if (!deferred) { show('howOther', true); return; }
+        if (!deferred) { show(ios ? 'howIos' : 'howOther', true); return; }
         deferred.prompt();
         deferred.userChoice.then(function (choice) { deferred = null; if (choice.outcome === 'accepted') finished(); else { btn.textContent = 'Install GoviLink'; } });
       });
 
-      if (ios) {
-        btn.classList.add('hide');
-        show('howIos', true);
-        $('gatelead').textContent = 'GoviLink works as an app on your phone. Install it once, then open it from your home screen.';
-        return;
-      }
+      if (ios) return;   // iPhone and iPad cannot install with a button: tapping it shows the two steps
 
       // Chrome can tell us if the app is already on this device
       if (navigator.getInstalledRelatedApps) {
         navigator.getInstalledRelatedApps().then(function (apps) {
-          if (apps && apps.length && !installed) { show('alreadyNote', true); btn.textContent = 'Install again'; }
+          if (apps && apps.length && !installed) { show('alreadyNote', true); }
         }).catch(function () {});
       }
 
-      // If the browser has not offered installation after a few seconds, show how to do it by hand
-      setTimeout(function () {
-        if (!deferred && !installed) {
-          btn.disabled = false;
-          btn.textContent = 'How to install';
-          show('howOther', true);
-        }
-      }, 4000);
     }
 
     if (inApp) startApp(); else startGate();
