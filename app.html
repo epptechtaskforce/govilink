@@ -2597,7 +2597,7 @@ var Sync = (function () {
     var READS = ['getRegistrationData', 'getFormDefinition', 'getFarmer', 'getFarmerView', 'findFarmers', 'getOriginMap', 'getFarmerOrigin', 'getDashboard', 'getFinderOptions', 'runFinder',
       'listSegments', 'getServiceOptions', 'findFarmersForService', 'getFarmerServices', 'getService', 'listRecentServices', 'listServices', 'getAreaOptions', 'getServiceReport', 'previewAudience',
       'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows', 'getLand', 'getFarmerLands', 'findLands', 'getServiceFlowOptions', 'listServiceFlow', 'getServiceMap', 'getServiceRoad'];
-    var WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer'];
+    var WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer', 'createServiceRequest', 'updateServiceRequest', 'cancelService', 'scheduleService', 'completeService', 'recordPayment'];
     var DATA_ENTRY = ['getRegistrationData', 'getFormDefinition', 'saveFarmer'];
     function available() { return typeof Worker !== 'undefined' && typeof API_URL !== 'undefined' && !!API_URL && !(typeof google !== 'undefined' && google.script && google.script.run); }
     function send(msg) {
@@ -2946,7 +2946,7 @@ var Sync = (function () {
   // server cannot be reached) the save waits in this queue, on the device, and is sent by itself, in order, when the connection is back. Meanwhile the
   // device copy shows the save as if it was done (the "overlay"). A save the server refuses for a reason (a wrong number, a duplicate) stays in the queue
   // marked "needs attention", with the reason, until the person discards it.
-  var QUEUEABLE = { saveFarmer: 1, saveService: 1, addInteraction: 1, saveFarmerGps: 1 };
+  var QUEUEABLE = { saveFarmer: 1, saveService: 1, addInteraction: 1, saveFarmerGps: 1, createServiceRequest: 1, updateServiceRequest: 1, cancelService: 1, scheduleService: 1, completeService: 1, recordPayment: 1 };
   var CORE_COPY = ['full_name', 'nic', 'date_of_birth', 'gender', 'language', 'farmer_type', 'phone_primary', 'phone_alt', 'address', 'district', 'ds_division', 'gn_division', 'village',
     'marketing_consent', 'do_not_contact', 'notes', 'latitude', 'longitude', 'gps_source', 'gps_accuracy'];
   var queue = [], idmap = {}, cleanup = [], flushing = null, flushTimer = null;       // cleanup: temporary numbers whose real rows are still to be taken in
@@ -3023,6 +3023,12 @@ var Sync = (function () {
     if (fn === 'saveFarmer') return (i.farmer_id ? 'Change farmer ' : 'New farmer ') + (i.full_name || '');
     if (fn === 'saveService') return (i.service_id ? 'Change job ' : 'New job ') + (i.service_date || i.requested_date || '');
     if (fn === 'addInteraction') return 'Call or note';
+    if (fn === 'createServiceRequest') return 'New service request (' + ((i.items || []).length || 1) + (((i.items || []).length || 1) === 1 ? ' land)' : ' lands)');
+    if (fn === 'updateServiceRequest') return 'Change a request';
+    if (fn === 'cancelService') return 'Cancel a service';
+    if (fn === 'scheduleService') return 'Schedule a service';
+    if (fn === 'completeService') return 'Operation report';
+    if (fn === 'recordPayment') return 'Payment';
     return 'Farm location';
   }
   function queuedResult(op) {
@@ -3064,10 +3070,12 @@ var Sync = (function () {
       var op = queue.filter(function (o) { return o.state === 'wait'; })[0];
       if (!op) return Promise.resolve();
       if (usesTemp(op)) { op.state = 'error'; op.error = 'It depends on a record that could not be saved.'; saveQueue(); rebuildOverlay(); emit('status'); return next(); }
-      return call('submitOp', op.id, op.fn, subst(op.args)).then(function (res) {
+      return call('submitOp', op.id, op.fn, subst(op.args), op.at).then(function (res) {
         if (res && res.duplicate) { op.state = 'error'; op.error = res.duplicate.join('; ') + '.'; saveQueue(); rebuildOverlay(); emit('status'); return next(); }
         if (op.temp.farmer_id && res && res.farmer_id) idmap[op.temp.farmer_id] = res.farmer_id;
         if (op.temp.service_id && res && res.service_id) idmap[op.temp.service_id] = res.service_id;
+        // a request for several lands made several rows: each temporary number gets its real one (in the order they were made)
+        if (res && res.service_ids && op.temps) { var tsv = op.temps.filter(function (t) { return /^SV/.test(t); }); res.service_ids.forEach(function (rid, k) { if (tsv[k]) idmap[tsv[k]] = rid; }); }
         queue = queue.filter(function (o) { return o !== op; });
         if (!queue.length) idmap = {};
         if (op.local && op.temps.length) cleanup = cleanup.concat(op.temps);
@@ -3086,7 +3094,7 @@ var Sync = (function () {
     flushing = next().then(function () { flushing = null; emit('status'); if (pending()) scheduleFlush(30000); }, function () { flushing = null; });
     return flushing;
   }
-  function tablesOf(fn) { return fn === 'saveService' ? ['Services'] : (fn === 'addInteraction' ? ['Outreach'] : ['Farmers', 'Fields', 'FarmerAnswers']); }
+  function tablesOf(fn) { return fn === 'saveService' || QUEUEABLE[fn] === 1 && /Service|Payment|cancel|complete|schedule/i.test(fn) ? ['Services'] : (fn === 'addInteraction' ? ['Outreach'] : ['Farmers', 'Fields', 'FarmerAnswers']); }
   function discard(id) {
     var gone = queue.filter(function (o) { return o.id === id; })[0];
     queue = queue.filter(function (o) { return o.id !== id; });
@@ -8389,11 +8397,12 @@ var SvcRequest = (function () {
     function success(r) {
       var f = S.farmer;
       clear(landsBox); clear(sendBox); clear(farmerBox); clear(doneBox);
-      var box = h('div', { class: 'card sv-done' }, ico('check', 'green'), h('h2', { text: r.service_ids.length === 1 ? 'Request recorded' : r.service_ids.length + ' requests recorded' }),
-        h('p', { class: 'hint', text: f.full_name + ' · ' + r.request_group }), h('div', { class: 'sv-donelist' }));
+      var ids = r.service_ids || [];
+      var box = h('div', { class: 'card sv-done' }, ico('check', 'green'), h('h2', { text: ids.length <= 1 ? 'Request recorded' : ids.length + ' requests recorded' }),
+        h('p', { class: 'hint', text: f.full_name + (r.queued ? ' · saved on this phone, it is sent by itself when there is a connection' : (r.request_group ? ' · ' + r.request_group : '')) }), h('div', { class: 'sv-donelist' }));
       doneBox.appendChild(box);
       call('listServiceFlow', { farmer_id: f.farmer_id, stage: 'Requested', limit: 30 }).then(function (d) {
-        d.rows.filter(function (c) { return r.service_ids.indexOf(c.service_id) !== -1; }).forEach(function (c) { box.querySelector('.sv-donelist').appendChild(Svc.row(c)); });
+        d.rows.filter(function (c) { return ids.indexOf(c.service_id) !== -1; }).forEach(function (c) { box.querySelector('.sv-donelist').appendChild(Svc.row(c)); });
       }).catch(function () {});
       box.appendChild(h('div', { class: 'row', style: 'margin-top:16px;justify-content:center;gap:10px;flex-wrap:wrap' },
         h('button', { class: 'b', type: 'button', onclick: function () { Nav.open('Services', { tab: 'request' }); } }, icon('plus'), 'Record another'),

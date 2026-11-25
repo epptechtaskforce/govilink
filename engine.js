@@ -4587,7 +4587,8 @@ function mockServicesStatusFromEditor() { const r = devMockServicesStatus(); Log
 const PACK_CHUNKS_PER_CALL = 10;     // farmer chunks (100 farmers each) in one answer
 const PACK_SERVICE_PAGE = 2500;      // job rows in one answer
 const OPLOG_KEEP_ROWS_ = 4000;       // the log of finished operations is cut back to this many rows
-const QUEUEABLE_FUNCTIONS_ = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps'];
+const QUEUEABLE_FUNCTIONS_ = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'createServiceRequest', 'updateServiceRequest', 'cancelService', 'scheduleService', 'completeService', 'recordPayment'];
+const REPLAY_MAX_DAYS_ = 30;       // a save that waited longer than this is replayed with today's date
 
 // ---------- the complete farmer records ----------
 
@@ -4662,7 +4663,8 @@ function getFormPack() {
 
 // ---------- a save that is done once, however often it arrives ----------
 
-function submitOp(opId, fn, args) {
+// madeAt (milliseconds, optional): when the person pressed save on the phone. The save is replayed as of that day.
+function submitOp(opId, fn, args, madeAt) {
   requireRole_(ROLES);
   const id = String(opId || '');
   const name = String(fn || '');
@@ -4679,7 +4681,11 @@ function submitOp(opId, fn, args) {
         if (String(row[2]).toLowerCase() === currentEmail_()) return JSON.parse(String(row[3]));      // an id that somebody else used is not an answer for this person
       }
     }
-    const result = plain_(globalThis[name].apply(null, Array.isArray(args) ? args : []));
+    const made = Number(madeAt);
+    const asOf = isFinite(made) && made > Date.now() - REPLAY_MAX_DAYS_ * 86400000 && made <= Date.now() + 300000 ? new Date(made + LOCAL_OFFSET_MINUTES * 60000).toISOString().slice(0, 10) : '';
+    let result;
+    REPLAY_DAY_ = asOf;
+    try { result = plain_(globalThis[name].apply(null, Array.isArray(args) ? args : [])); } finally { REPLAY_DAY_ = ''; }
     if (result && result.duplicate) return result;      // nothing was saved yet (the person is asked to confirm first): the same save may come again
     appendObjects_('OpLog', [{ op_id: id, fn: name, user: currentEmail_(), result: JSON.stringify(result === undefined ? null : result), at: new Date().toISOString() }]);
     const after = sheet_('OpLog').getLastRow();
@@ -6239,7 +6245,9 @@ const RECENT_SERVICE_READ = 400;     // how far back from the end of the tab "re
 
 function requireServiceUser_() { return requireRole_(SERVICE_ROLES); }
 
-function localToday_() { return new Date(Date.now() + LOCAL_OFFSET_MINUTES * 60000).toISOString().slice(0, 10); }
+// While a save that waited on a phone is replayed (see submitOp), "today" is the day the person pressed save, so a day that was fine then is fine now.
+var REPLAY_DAY_ = '';
+function localToday_() { return REPLAY_DAY_ || new Date(Date.now() + LOCAL_OFFSET_MINUTES * 60000).toISOString().slice(0, 10); }
 function isTime_(s) { return /^([01]\d|2[0-3]):[0-5]\d$/.test(s); }
 function minutesOf_(t) { return Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)); }
 function timeText_(v) {
@@ -7084,7 +7092,7 @@ var __ENG = { meta: null, temps: null };
 var __ENG_READS = ['getRegistrationData', 'getFormDefinition', 'getFarmer', 'getFarmerView', 'findFarmers', 'getOriginMap', 'getFarmerOrigin', 'getDashboard', 'getFinderOptions', 'runFinder',
   'listSegments', 'getServiceOptions', 'findFarmersForService', 'getFarmerServices', 'getService', 'listRecentServices', 'listServices', 'getAreaOptions', 'getServiceReport', 'previewAudience',
   'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows', 'getLand', 'getFarmerLands', 'findLands', 'getServiceFlowOptions', 'listServiceFlow', 'getServiceMap', 'getServiceRoad'];
-var __ENG_WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer'];
+var __ENG_WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer', 'createServiceRequest', 'updateServiceRequest', 'cancelService', 'scheduleService', 'completeService', 'recordPayment'];
 var __ENG_DATA_ENTRY = ['getRegistrationData', 'getFormDefinition', 'saveFarmer'];     // a data entry account receives no farmer data, so only these can be answered on the device
 
 // Numbers handed out on the device are in a range the server never reaches (F900001, SV900001 ...); they are replaced by the real ones once the server has the save.
