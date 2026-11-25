@@ -401,6 +401,11 @@
   .msgbox { width:100%; min-height:140px; }
   .counter { color:var(--muted); font-size:12.5px; text-align:right; }
   .previewbox { background:var(--soft); border:1px solid var(--line); border-radius:10px; padding:12px 14px; white-space:pre-wrap; word-break:break-word; }
+  .modal.form { max-width:520px; text-align:left; max-height:92vh; overflow:auto; }
+  .lform .lf { margin-top:12px; } .lform .lf label { display:block; font-size:12.5px; color:var(--muted); margin:0 0 4px; font-weight:500; }
+  .lform .two { display:grid; grid-template-columns:1fr 1fr; gap:10px; } @media (max-width:420px) { .lform .two { grid-template-columns:1fr; } }
+  .lform input, .lform select { width:100%; box-sizing:border-box; }
+  .pickrow.past { opacity:.78; background:var(--soft); }
   .modalbg { position:fixed; inset:0; background:rgba(16,24,40,.55); z-index:400; display:grid; place-items:center; padding:20px; }
   .modal { background:#fff; border-radius:14px; padding:24px; max-width:420px; width:100%; box-shadow:var(--shadow-md); text-align:center; animation:pop .16s ease-out; }
   .modal .ico { margin:0 auto 12px; width:48px; height:48px; border-radius:50%; } .modal .ico svg { width:22px; height:22px; }
@@ -2001,6 +2006,7 @@ var Sync = (function () {
   var DEPS = {
     listRecentServices: ['services', 'farmers'], listServices: ['services', 'farmers'], getServiceReport: ['services', 'farmers', 'form'],
     getEarthData: ['farmers', 'services', 'places', 'form'], getFarmerLogbook: ['services', 'messages', 'outreach', 'farmers'],
+    getLand: ['farmers'], getFarmerLands: ['farmers'], findLands: ['farmers'],
     getFarmerView: ['farmers', 'form'], getFarmerServices: ['services', 'farmers'], getFarmer: ['farmers'], getService: ['services', 'farmers'],
     getOriginMap: ['farmers', 'form'], getFarmerOrigin: ['farmers', 'form'], listMessages: ['messages'], listUsers: ['users'], listSegments: ['segments'],
     getExportInfo: KINDS, getAreaOptions: ['form', 'farmers', 'segments', 'lists'], getFinderOptions: ['lists', 'farmers', 'segments'],
@@ -2013,7 +2019,7 @@ var Sync = (function () {
   // calls that do not change anything on the server (every other call counts as a save)
   var READS = {};
   Object.keys(DEPS).concat(['getFarmerPack', 'getServicePack', 'getFormPack', 'getHome', 'getEarthGeo', 'getExtraScreen', 'syncStatus', 'getFarmerChunks', 'getServiceRows', 'syncedRead', 'readTableChunk', 'exportServices', 'exportFinder',
-    'prepareMessage', 'getFarmerContacts', 'runFinder', 'findFarmers', 'findFarmersForService', 'getDashboard', 'devStatus']).forEach(function (n) { READS[n] = true; });
+    'prepareMessage', 'getFarmerContacts', 'runFinder', 'findFarmers', 'findLands', 'findFarmersForService', 'getDashboard', 'devStatus']).forEach(function (n) { READS[n] = true; });
 
   // ---------- the box ----------
   var Store = (function () {
@@ -2515,7 +2521,7 @@ var Sync = (function () {
     var worker = null, seq = 0, waits = {}, status = { started: false, ready: false, done: 0, total: 0 };
     var READS = ['getRegistrationData', 'getFormDefinition', 'getFarmer', 'getFarmerView', 'findFarmers', 'getOriginMap', 'getFarmerOrigin', 'getDashboard', 'getFinderOptions', 'runFinder',
       'listSegments', 'getServiceOptions', 'findFarmersForService', 'getFarmerServices', 'getService', 'listRecentServices', 'listServices', 'getAreaOptions', 'getServiceReport', 'previewAudience',
-      'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows'];
+      'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows', 'getLand', 'getFarmerLands', 'findLands'];
     var WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer'];
     var DATA_ENTRY = ['getRegistrationData', 'getFormDefinition', 'saveFarmer'];
     function available() { return typeof Worker !== 'undefined' && typeof API_URL !== 'undefined' && !!API_URL && !(typeof google !== 'undefined' && google.script && google.script.run); }
@@ -6412,10 +6418,28 @@ var Find = (function () {
     var typing = null;
     function live() {
       clearTimeout(typing);
+      if (mode === 'lands') { if (String(input.value).trim().length >= 2) typing = setTimeout(go, 220); return; }
       if (!Sync.farmers.ready() || String(input.value).trim().length < 2) return;
       typing = setTimeout(go, 160);
     }
+    function landCard(r) {
+      return h('div', { class: 'pickrow fcard', onclick: function () { Nav.open('View land', r.land_id); } }, ico('wheat', 'green'),
+        h('div', { class: 't' }, h('b', { text: LandUI.landTitle(r) + ' · ' + r.acres + ' ac' + (r.crop ? ' · ' + r.crop : '') }),
+          h('small', {}, h('span', {}, icon('user'), r.owner_name), LandUI.placeOf(r) ? h('span', {}, icon('pin'), LandUI.placeOf(r)) : null, r.tank ? h('span', {}, icon('route'), r.tank) : null)),
+        h('span', { class: 'fid', text: r.land_id }), h('span', { class: 'go', style: 'color:var(--faint)' }, icon('chevron')));
+    }
+    function goLands() {
+      hideMsg();
+      setBusy(btn, true);
+      softFetch(results, Sync.fast('findLands', [input.value]), function (rows) {
+        setBusy(btn, false);
+        if (!rows.length) { results.appendChild(emptyBox('search', 'No land found')); return; }
+        results.appendChild(h('p', { class: 'hint', text: rows.length + (rows.length === 50 ? '+' : '') + ' found' }));
+        rows.forEach(function (r) { results.appendChild(landCard(r)); });
+      }, function (e) { setBusy(btn, false); showMsg(e.message, true); });
+    }
     function go() {
+      if (mode === 'lands') return goLands();
       hideMsg();
       setBusy(btn, true);
       var limit = isPilot ? 30 : 50;
@@ -6427,10 +6451,320 @@ var Find = (function () {
       }, function (e) { setBusy(btn, false); showMsg(e.message, true); });
     }
 
+    // Managers and admins can also look for a LAND (by its ID, tank, village or any owner it had)
+    var mode = 'farmers';
+    if (!isPilot) {
+      var segBtns = {};
+      var paintSeg = function () { Object.keys(segBtns).forEach(function (k) { segBtns[k].className = 'chip' + (mode === k ? ' on' : ''); }); };
+      var pickMode = function (m) {
+        if (mode === m) return;
+        mode = m; paintSeg(); clear(results);
+        input.placeholder = m === 'lands' ? 'Land ID, tank, village or owner' : 'Name, phone, village or ID';
+        results.appendChild(emptyBox('search', m === 'lands' ? 'Land ID · tank · village · owner' : 'Name · phone · village · ID'));
+        if (String(input.value).trim().length >= 2) go(); else { try { input.focus({ preventScroll: true }); } catch (e) { input.focus(); } }
+      };
+      segBtns.farmers = h('button', { class: 'chip', type: 'button', text: 'Farmers', onclick: function () { pickMode('farmers'); } });
+      segBtns.lands = h('button', { class: 'chip', type: 'button', text: 'Lands', onclick: function () { pickMode('lands'); } });
+      paintSeg();
+      el.appendChild(h('div', { class: 'chipbar seg', style: 'margin-bottom:10px' }, segBtns.farmers, segBtns.lands));
+    }
     el.appendChild(h('div', { class: 'searchrow' }, h('div', { class: 'searchbox' }, icon('search'), input), btn));
     el.appendChild(results);
     try { input.focus({ preventScroll: true }); } catch (e) { input.focus(); }
     if (arg && arg.query) { input.value = arg.query; go(); }
+  }
+  return { mount: mount };
+})();
+</script>
+
+  <script>
+// Land and who owned it. Three pieces:
+//  - LandUI.farmerCard: on a farmer's profile, the lands they own now and the ones they owned before (with the days), plus "Add land" and "Give a land".
+//  - LandView: the profile of one land: its details and every owner it ever had, newest first. An admin can change the owner or correct the days.
+//  - the small dialogs used by both (add or edit a land, pick a farmer, pick a land).
+// A land has exactly one owner at a time; a transfer closes the old owner's time and opens the new owner's (done by the server in one step).
+var LandUI = (function () {
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function day(iso) { if (!iso) return ''; var p = String(iso).split('-'); return p.length === 3 ? Number(p[2]) + ' ' + MONTHS[Number(p[1]) - 1] + ' ' + p[0] : String(iso); }
+  function today() { var d = new Date(Date.now() + 330 * 60000); return d.toISOString().slice(0, 10); }
+  function years(a, b) {
+    if (!a || !b) return '';
+    var y = (new Date(b) - new Date(a)) / 31557600000;
+    if (y >= 1) return (Math.round(y * 10) / 10) + (Math.round(y * 10) / 10 === 1 ? ' year' : ' years');
+    var m = Math.round(y * 12);
+    return m >= 1 ? m + (m === 1 ? ' month' : ' months') : 'under a month';
+  }
+  // "Since 2 Mar 2017" / "Since registration" for the owner now; "2 Mar 2010 to 30 Jun 2015 · 5.3 years" for a past owner.
+  function when(o) {
+    if (o.current) return o.start_date ? 'Since ' + day(o.start_date) : 'Since we registered it';
+    return (o.start_date ? day(o.start_date) : 'Before we knew it') + ' to ' + day(o.end_date) + (o.start_date ? ' · ' + years(o.start_date, o.end_date) : '');
+  }
+  function placeOf(x) { return [x.village, x.ds_division, x.district].filter(function (v, i, a) { return v && a.indexOf(v) === i; }).join(', '); }
+  function landTitle(x) { return x.land_name || [x.tank, x.village].filter(Boolean)[0] || x.land_id; }
+
+  // ---------- dialogs ----------
+  // A box with a form. onOk returns a promise: while it runs the button is busy, an error is shown in the box, success closes it.
+  function dialog(title, body, okLabel, onOk) {
+    return new Promise(function (resolve) {
+      var bg = h('div', { class: 'modalbg' }), tok = null, err = h('p', { class: 'hint', style: 'color:var(--red);display:none;margin:8px 0 0' });
+      function done(v) { document.removeEventListener('keydown', onKey); if (tok) { var t = tok; tok = null; Back.release(t); } if (bg.parentNode) bg.parentNode.removeChild(bg); resolve(v); }
+      function onKey(e) { if (e.key === 'Escape') done(false); }
+      var ok = h('button', { class: 'b', type: 'button', onclick: function () {
+        err.style.display = 'none'; setBusy(ok, true);
+        Promise.resolve().then(onOk).then(function () { setBusy(ok, false); done(true); }, function (e) { setBusy(ok, false); err.textContent = e && e.message ? e.message : String(e); err.style.display = 'block'; });
+      } }, icon('check'), okLabel);
+      bg.appendChild(h('div', { class: 'modal form', role: 'dialog' }, h('h2', { text: title }), body, err,
+        h('div', { class: 'row', style: 'margin-top:16px' }, h('button', { class: 'b ghost', type: 'button', text: 'Cancel', onclick: function () { done(false); } }), ok)));
+      bg.addEventListener('click', function (e) { if (e.target === bg) done(false); });
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(bg);
+      if (typeof Back !== 'undefined') tok = Back.push(function () { tok = null; done(false); });
+    });
+  }
+  function lab(text, el) { return h('div', { class: 'lf' }, h('label', { text: text }), el); }
+  function select(values, current, blank) {
+    var s = h('select', {}, blank ? h('option', { value: '', text: blank }) : null, values.map(function (v) { return h('option', { value: v, text: v, selected: v === current }); }));
+    return s;
+  }
+  var HOW = ['Bought', 'Inherited', 'Gift', 'Registered', 'Other'];
+
+  // Pick a farmer by typing (answered on the device). get() returns the chosen farmer or null.
+  function farmerPicker(skipId) {
+    var chosen = null, input = h('input', { type: 'text', placeholder: 'Name, phone, village or ID', maxlength: 60, autocomplete: 'off' });
+    var list = h('div', { style: 'margin-top:6px' }), shown = h('div', { class: 'hint', style: 'margin-top:6px' });
+    function paint() { clear(shown); if (chosen) shown.appendChild(h('span', { class: 'pill green' }, icon('check'), chosen.full_name + ' · ' + chosen.farmer_id)); }
+    var timer = null;
+    input.addEventListener('input', function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        var q = input.value.trim(); clear(list);
+        if (q.length < 2) return;
+        Sync.find(q, { limit: 6, activeOnly: true }).then(function (rows) {
+          clear(list);
+          rows.filter(function (r) { return r.farmer_id !== skipId; }).forEach(function (r) {
+            list.appendChild(h('div', { class: 'pickrow', onclick: function () { chosen = r; clear(list); input.value = ''; paint(); } },
+              h('span', { class: 'avatar md', text: initials(r.full_name) }),
+              h('div', { class: 't' }, h('b', { text: r.full_name }), h('small', {}, h('span', { text: r.farmer_id }), r.village ? h('span', {}, icon('pin'), r.village) : null))));
+          });
+          if (!list.firstChild) list.appendChild(h('p', { class: 'hint', text: 'No farmer found' }));
+        }).catch(function () {});
+      }, 160);
+    });
+    return { el: h('div', {}, input, list, shown), get: function () { return chosen; } };
+  }
+
+  // Pick an existing land (not owned by skipOwner).
+  function landPicker(skipOwner) {
+    var chosen = null, input = h('input', { type: 'text', placeholder: 'Land ID, tank, village or owner', maxlength: 60, autocomplete: 'off' });
+    var list = h('div', { style: 'margin-top:6px' }), shown = h('div', { class: 'hint', style: 'margin-top:6px' });
+    function paint() { clear(shown); if (chosen) shown.appendChild(h('span', { class: 'pill green' }, icon('check'), landTitle(chosen) + ' · ' + chosen.land_id + ' · now ' + chosen.owner_name)); }
+    var timer = null;
+    input.addEventListener('input', function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        var q = input.value.trim(); clear(list);
+        if (q.length < 2) return;
+        Sync.fast('findLands', [q]).then(function (rows) {
+          clear(list);
+          rows.filter(function (r) { return r.owner_id !== skipOwner; }).slice(0, 8).forEach(function (r) {
+            list.appendChild(h('div', { class: 'pickrow', onclick: function () { chosen = r; clear(list); input.value = ''; paint(); } },
+              ico('wheat', 'green'),
+              h('div', { class: 't' }, h('b', { text: landTitle(r) + ' · ' + r.acres + ' ac' }), h('small', {}, h('span', { text: r.land_id }), h('span', {}, icon('user'), r.owner_name), placeOf(r) ? h('span', {}, icon('pin'), placeOf(r)) : null))));
+          });
+          if (!list.firstChild) list.appendChild(h('p', { class: 'hint', text: 'No land found' }));
+        }).catch(function () {});
+      }, 160);
+    });
+    return { el: h('div', {}, input, list, shown), get: function () { return chosen; } };
+  }
+
+  // The form of a land's own details. `land` = the current values when editing.
+  function landForm(land, lists) {
+    land = land || {};
+    var f = {
+      name: h('input', { type: 'text', maxlength: 80, value: land.land_name || '', placeholder: 'For example: Behind the temple' }),
+      acres: h('input', { type: 'number', step: 'any', min: '0', inputmode: 'decimal', value: land.acres || '' }),
+      crop: select(lists.crop || [], land.crop, 'Not set'), season: select(lists.season || [], land.season, 'Not set'),
+      village: h('input', { type: 'text', maxlength: 80, value: land.village || '' }), division: h('input', { type: 'text', maxlength: 80, value: land.ds_division || '' }),
+      tank: h('input', { type: 'text', maxlength: 80, value: land.tank || '', placeholder: 'Tank or scheme it is fed from' }),
+      irrigation: h('input', { type: 'text', maxlength: 80, value: land.irrigation || '', placeholder: 'Major tank, minor tank, rain fed, well…' }),
+      geology: h('input', { type: 'text', maxlength: 80, value: land.geology || '', placeholder: 'Soil or geology' }),
+      lat: h('input', { type: 'number', step: 'any', inputmode: 'decimal', value: land.latitude === undefined || land.latitude === null ? '' : land.latitude }),
+      lng: h('input', { type: 'number', step: 'any', inputmode: 'decimal', value: land.longitude === undefined || land.longitude === null ? '' : land.longitude })
+    };
+    var el = h('div', { class: 'lform' }, lab('Name of the land (optional)', f.name),
+      h('div', { class: 'two' }, lab('Acres', f.acres), lab('Crop usually grown', f.crop)),
+      h('div', { class: 'two' }, lab('Season', f.season), lab('Village', f.village)),
+      h('div', { class: 'two' }, lab('DS division', f.division), lab('Tank / scheme', f.tank)),
+      h('div', { class: 'two' }, lab('Irrigation', f.irrigation), lab('Geology / soil', f.geology)),
+      h('div', { class: 'two' }, lab('Latitude', f.lat), lab('Longitude', f.lng)));
+    return { el: el, values: function () {
+      return { land_name: f.name.value, acres: f.acres.value, crop: f.crop.value, season: f.season.value, village: f.village.value, ds_division: f.division.value, tank: f.tank.value,
+        irrigation: f.irrigation.value, geology: f.geology.value, latitude: f.lat.value, longitude: f.lng.value };
+    } };
+  }
+
+  // Calls the server for a change, then waits until the copy on this device has the change before the screen is drawn again.
+  function changed(promise) { return promise.then(function (r) { return Sync.settled(8000).then(function () { return r; }); }); }
+  function lists() { return Sync.fast('getRegistrationData', [], { strict: true }).then(function (d) { return d.lists; }); }
+
+  function addLandDialog(farmer, after) {
+    lists().then(function (ls) {
+      var form = landForm(null, ls), got = h('input', { type: 'date', max: today() }), how = select(HOW, 'Bought');
+      var body = h('div', { class: 'lform' }, h('p', { class: 'hint', text: 'A new land for ' + farmer.full_name }), form.el,
+        h('div', { class: 'two' }, lab('Got it on (if known)', got), lab('How', how)));
+      dialog('Add a land', body, 'Add land', function () {
+        return changed(call('saveLand', Object.assign(form.values(), { farmer_id: farmer.farmer_id, start_date: got.value, how: how.value }))).then(function () { showMsg('Land added', false); after(); });
+      });
+    }).catch(function (e) { showMsg(e.message, true); });
+  }
+
+  function editLandDialog(land, after) {
+    lists().then(function (ls) {
+      var form = landForm(land, ls);
+      dialog('Land details', form.el, 'Save', function () {
+        return changed(call('saveLand', Object.assign(form.values(), { land_id: land.land_id }))).then(function () { showMsg('Saved', false); after(); });
+      });
+    }).catch(function (e) { showMsg(e.message, true); });
+  }
+
+  // A land of someone else is given to this farmer.
+  function takeLandDialog(farmer, after) {
+    var pick = landPicker(farmer.farmer_id), date = h('input', { type: 'date', value: today(), max: today() }), how = select(HOW, 'Bought');
+    var body = h('div', { class: 'lform' }, h('p', { class: 'hint', text: farmer.full_name + ' gets a land that another farmer owns now. That farmer stops owning it on the day below.' }),
+      lab('Which land', pick.el), h('div', { class: 'two' }, lab('Day of the change', date), lab('How', how)));
+    dialog('Give a land to ' + farmer.full_name, body, 'Give land', function () {
+      var l = pick.get();
+      if (!l) throw new Error('Choose the land first.');
+      return changed(call('assignLand', { land_id: l.land_id, farmer_id: farmer.farmer_id, date: date.value, how: how.value })).then(function () { showMsg('Land given', false); after(); });
+    });
+  }
+
+  // This land goes to another farmer (from the land's profile).
+  function changeOwnerDialog(land, owner, after) {
+    var pick = farmerPicker(owner ? owner.farmer_id : ''), date = h('input', { type: 'date', value: today(), max: today() }), how = select(HOW, 'Bought');
+    var body = h('div', { class: 'lform' }, h('p', { class: 'hint', text: (owner ? owner.farmer_name + ' stops owning this land on the day below.' : '') }),
+      lab('New owner', pick.el), h('div', { class: 'two' }, lab('Day of the change', date), lab('How', how)));
+    dialog('Change the owner', body, 'Change owner', function () {
+      var f = pick.get();
+      if (!f) throw new Error('Choose the new owner first.');
+      return changed(call('assignLand', { land_id: land.land_id, farmer_id: f.farmer_id, date: date.value, how: how.value })).then(function () { showMsg('Owner changed', false); after(); });
+    });
+  }
+
+  function pastOwnerDialog(land, after) {
+    var pick = farmerPicker(''), start = h('input', { type: 'date', max: today() }), end = h('input', { type: 'date', max: today() }), how = select(HOW, 'Other');
+    var body = h('div', { class: 'lform' }, h('p', { class: 'hint', text: 'Someone who owned this land before the owner it has now.' }),
+      lab('Farmer', pick.el), h('div', { class: 'two' }, lab('Got it on (if known)', start), lab('Stopped owning it on', end)), lab('How they got it', how));
+    dialog('Add an earlier owner', body, 'Add', function () {
+      var f = pick.get();
+      if (!f) throw new Error('Choose the farmer first.');
+      return changed(call('addPastOwner', { land_id: land.land_id, farmer_id: f.farmer_id, start_date: start.value, end_date: end.value, how: how.value })).then(function () { showMsg('Added', false); after(); });
+    });
+  }
+
+  function editDaysDialog(o, after) {
+    var start = h('input', { type: 'date', value: o.start_date || '', max: today() }), end = h('input', { type: 'date', value: o.end_date || '', max: today(), disabled: o.current });
+    var body = h('div', { class: 'lform' }, h('p', { class: 'hint', text: o.farmer_name + (o.current ? ' owns this land now.' : '') }),
+      h('div', { class: 'two' }, lab('Got it on', start), lab('Stopped owning it on', o.current ? h('input', { type: 'text', value: 'Still the owner', disabled: true }) : end)));
+    dialog('Correct the days', body, 'Save', function () {
+      var patch = { start_date: start.value };
+      if (!o.current) patch.end_date = end.value;
+      return changed(call('editOwnership', o.ownership_id, patch)).then(function () { showMsg('Saved', false); after(); });
+    });
+  }
+
+  // ---------- on a farmer's profile ----------
+  function farmerCard(f, opts) {
+    var canEdit = !!opts.admin && !opts.removed;
+    var body = h('div', {}, loadingBox());
+    var card = h('div', { class: 'card' },
+      h('div', { class: 'cardhead' }, h('h2', {}, ico('wheat', 'sun', 'sm'), 'Land'),
+        canEdit ? h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
+          h('button', { class: 's', type: 'button', onclick: function () { addLandDialog(f, load); } }, icon('plus'), 'Add land'),
+          h('button', { class: 's', type: 'button', onclick: function () { takeLandDialog(f, load); } }, icon('user'), 'Give a land')) : null),
+      body);
+    function row(o) {
+      return h('div', { class: 'pickrow' + (o.current ? '' : ' past'), onclick: function () { Nav.open('View land', o.land_id); } }, ico('wheat', o.current ? 'green' : 'slate'),
+        h('div', { class: 't' }, h('b', { text: landTitle(o) + ' · ' + o.acres + ' ac' + (o.crop ? ' · ' + o.crop : '') }),
+          h('small', {}, h('span', {}, icon('calendar'), when(o)), placeOf(o) ? h('span', {}, icon('pin'), placeOf(o)) : null, o.how && o.how !== 'Registered' ? h('span', { text: o.how }) : null)),
+        h('span', { class: 'fid', text: o.land_id }), h('span', { class: 'go', style: 'color:var(--faint)' }, icon('chevron')));
+    }
+    function draw(d) {
+      if (!d.current.length && !d.past.length) { body.appendChild(emptyBox('wheat', 'No land yet', canEdit ? 'Add a land, or give this farmer a land another farmer owns.' : '')); return; }
+      var total = 0; d.current.forEach(function (c) { total += Number(c.acres) || 0; });
+      body.appendChild(h('h3', { text: d.current.length ? 'Owns now · ' + d.current.length + (d.current.length === 1 ? ' land' : ' lands') + ' · ' + (Math.round(total * 100) / 100) + ' ac' : 'Owns no land now' }));
+      d.current.forEach(function (o) { body.appendChild(row(o)); });
+      if (d.past.length) {
+        body.appendChild(h('h3', { text: 'Owned before' }));
+        d.past.forEach(function (o) { body.appendChild(row(o)); });
+      }
+    }
+    function load() {
+      return softFetch(body, Sync.fast('getFarmerLands', [f.farmer_id]), draw, function (e) { softShow(body, function () { body.appendChild(h('p', { class: 'hint', text: e.message })); }); });
+    }
+    load();
+    return card;
+  }
+
+  return { farmerCard: farmerCard, day: day, when: when, years: years, placeOf: placeOf, landTitle: landTitle, today: today, editLandDialog: editLandDialog, changeOwnerDialog: changeOwnerDialog,
+    pastOwnerDialog: pastOwnerDialog, editDaysDialog: editDaysDialog };
+})();
+
+// The profile of one land.
+var LandView = (function () {
+  function kv(pairs) {
+    return h('div', { class: 'kv' }, pairs.map(function (p) {
+      var v = p[1];
+      return h('div', {}, h('div', { class: 'k', text: p[0] }), h('div', { class: 'v', text: v === undefined || v === null || v === '' ? '—' : String(v) }));
+    }));
+  }
+  function mount(el, landId) {
+    var gen = softLoad(el);
+    Sync.fast('getLand', [landId], { strict: true }).then(function (d) {
+      if (el.__gen !== gen) return;
+      softShow(el, function () { build(el, d, landId); });
+    }).catch(function (e) {
+      if (el.__gen !== gen) return;
+      softShow(el, function () { el.appendChild(h('div', { class: 'card' }, emptyBox('wheat', 'Land not found', e.message), h('div', { style: 'text-align:center' }, h('button', { class: 'b', type: 'button', onclick: function () { Nav.open('Find farmer'); } }, icon('search'), 'Find a farmer')))); });
+    });
+  }
+  function build(el, d, landId) {
+    var l = d.land, role = Session.user && Session.user.role, isAdmin = role === 'Admin';
+    var again = function () { Nav.open('View land', landId); };
+    var owner = d.owner;
+    el.appendChild(h('div', { class: 'pro' },
+      h('div', { class: 'row1' }, ico('wheat', 'green'),
+        h('div', { style: 'flex:1;min-width:200px' }, h('h2', { text: LandUI.landTitle(l) }),
+          h('div', { class: 'where' }, icon('pin'), LandUI.placeOf(l) || l.land_id),
+          h('div', { style: 'margin-top:8px;display:flex;gap:8px;flex-wrap:wrap' }, h('span', { class: 'pill' }, l.land_id), l.active !== 'Yes' ? h('span', { class: 'pill' }, icon('x'), 'Taken off the records') : null))),
+      h('div', { class: 'acts' },
+        owner ? h('button', { class: 'b', type: 'button', onclick: function () { Nav.openFarmer(owner.farmer_id); } }, icon('user'), owner.farmer_name) : null,
+        isAdmin && l.active === 'Yes' ? h('button', { class: 'b ghost', type: 'button', onclick: function () { LandUI.changeOwnerDialog(l, owner, again); } }, icon('userplus'), 'Change owner') : null,
+        (isAdmin || role === 'Pilot') && l.active === 'Yes' ? h('button', { class: 'b ghost', type: 'button', onclick: function () { LandUI.editLandDialog(l, again); } }, icon('edit'), 'Edit') : null)));
+    el.appendChild(h('div', { class: 'nums' },
+      ServiceLog.num('acres', 'sun', String(l.acres), 'acres'), ServiceLog.num('user', 'green', String(d.owners.length), d.owners.length === 1 ? 'owner so far' : 'owners so far'),
+      ServiceLog.num('calendar', 'violet', owner && owner.start_date ? LandUI.day(owner.start_date) : '—', 'owner since')));
+
+    // who owned it, newest first
+    var card = h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', {}, ico('user', 'violet', 'sm'), 'Owners'),
+      isAdmin && l.active === 'Yes' ? h('button', { class: 's', type: 'button', onclick: function () { LandUI.pastOwnerDialog(l, again); } }, icon('plus'), 'Earlier owner') : null));
+    var tl = h('div', { class: 'tl' });
+    d.owners.slice().reverse().forEach(function (o) {
+      tl.appendChild(h('div', { class: 'ti' }, ico(o.current ? 'check' : 'user', o.current ? 'green' : 'slate'),
+        h('div', { class: 'body' }, h('div', { style: 'display:flex;gap:10px;align-items:flex-start' },
+          h('div', { style: 'flex:1;min-width:0;cursor:pointer', onclick: function () { Nav.openFarmer(o.farmer_id); } }, h('b', { text: o.farmer_name || o.farmer_id }),
+            h('div', { class: 'hint', text: LandUI.when(o) + (o.how && o.how !== 'Registered' ? ' · ' + o.how : '') }),
+            o.notes ? h('div', { class: 'hint', text: o.notes }) : null),
+          isAdmin && l.active === 'Yes' ? h('button', { class: 's', type: 'button', title: 'Correct the days', style: 'min-height:34px;padding:4px 10px', onclick: function () { LandUI.editDaysDialog(o, again); } }, icon('edit')) : null))));
+    });
+    card.appendChild(tl);
+    el.appendChild(card);
+
+    el.appendChild(h('details', { class: 'fold', open: '' }, h('summary', {}, ico('wheat', 'sun', 'sm'), 'Details'),
+      h('div', { class: 'foldbody' }, kv([['Crop usually grown', l.crop], ['Season', l.season], ['Tank / scheme', l.tank], ['Irrigation', l.irrigation], ['Geology / soil', l.geology],
+        ['District', l.district], ['DS division', l.ds_division], ['Village', l.village], ['On our records since', l.registered_date ? LandUI.day(l.registered_date) : ''],
+        ['Latitude', l.latitude], ['Longitude', l.longitude], ['Notes', l.notes]]))));
   }
   return { mount: mount };
 })();
@@ -6633,6 +6967,8 @@ var ViewFarmer = (function () {
 
       el.appendChild(h('div', { class: 'card' }, GpsUI.card({ value: f, canEdit: isAdmin && !removed,
         save: function (v) { return call('saveFarmerGps', f.farmer_id, v.latitude, v.longitude, v.gps_source, v.gps_accuracy); } }).el));
+      // the lands this farmer owns now and owned before, with the days (and the buttons to add a land or take over another farmer's land)
+      el.appendChild(LandUI.farmerCard(f, { admin: isAdmin, removed: removed }));
       el.appendChild(originCard(d, f));
       var histBox = h('div');
       el.appendChild(histBox);
@@ -6656,12 +6992,6 @@ var ViewFarmer = (function () {
       el.appendChild(fold('user', 'green', 'Details', h('div', {},
         kv([['NIC', f.nic], ['Birthday', f.date_of_birth], ['Gender', f.gender], ['Language', f.language], ['Type', f.farmer_type]]), h('div', { style: 'height:16px' }),
         kv([['Phone', f.phone_primary], ['Second phone', f.phone_alt], ['District', f.district], ['DS division', f.ds_division], ['GN division', f.gn_division], ['Village', f.village], ['Address', f.address]]))));
-
-      if (d.fields.length) {
-        el.appendChild(fold('wheat', 'sun', 'Land', h('div', {}, d.fields.map(function (x) {
-          return h('div', { class: 'pickrow', style: 'cursor:default' }, ico('wheat', 'green'), h('div', { class: 't' }, h('b', { text: x.crop + ' · ' + x.acres + ' ac' }), h('small', {}, x.season ? h('span', {}, icon('sun'), x.season) : null, x.notes ? h('span', {}, x.notes) : null)));
-        }))));
-      }
 
       // the answers that are not part of the origin route (for example the engagement stage)
       var other = d.answers.filter(function (a) { return !a.is_origin; }).sort(function (a, b) { return a.order - b.order; });
@@ -9263,7 +9593,7 @@ function startApp() {
     tabs.push({ label: 'Service setup', screen: ServiceSetup, icon: 'settings', color: 'slate', title: 'Service setup', short: 'Setup', sub: 'Kinds of service and drones', primary: false });
     tabs.push({ label: 'Accounts', screen: Accounts, icon: 'users', color: 'slate', title: 'People', short: 'People', sub: 'Accounts and who can do what', primary: false });
   }
-  Nav.setTabs(tabs, [{ label: 'View farmer', screen: ViewFarmer, icon: 'user', color: 'green', title: 'Farmer', sub: 'Profile, route and log book', parent: 'Find farmer' }, { label: 'Origin Map', screen: OriginMap, icon: 'network', color: 'aqua', title: 'Tree map', sub: 'How farmers reach each origin', parent: 'Earth' }]);
+  Nav.setTabs(tabs, [{ label: 'View farmer', screen: ViewFarmer, icon: 'user', color: 'green', title: 'Farmer', sub: 'Profile, route and log book', parent: 'Find farmer' }, { label: 'View land', screen: LandView, icon: 'wheat', color: 'sun', title: 'Land', sub: 'Details and every owner it had', parent: 'Find farmer' }, { label: 'Origin Map', screen: OriginMap, icon: 'network', color: 'aqua', title: 'Tree map', sub: 'How farmers reach each origin', parent: 'Earth' }]);
   // The copy of the data kept on this device is opened first (a fraction of a second), so the first screen can draw from it at once.
   var opened = false;
   function first() { if (opened) return; opened = true; Nav.open(tabs[0].label); }

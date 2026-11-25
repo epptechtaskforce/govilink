@@ -613,7 +613,7 @@ const SIGN_IN_FAILED = 'Wrong email or password, or the account is temporarily l
 // What the browser may ask for through api(). Everything else is unreachable from the page.
 const API_NAMES_ = [
   'getFormDefinition', 'getDesignerData', 'saveQuestion', 'setQuestionActive', 'moveQuestion', 'saveOptions', 'updateOption', 'setOptionActive',
-  'getRegistrationData', 'saveFarmer', 'getFarmer', 'getFarmerView', 'findFarmers',
+  'getRegistrationData', 'saveFarmer', 'getFarmer', 'getFarmerView', 'findFarmers', 'getLand', 'getFarmerLands', 'findLands', 'saveLand', 'assignLand', 'addPastOwner', 'editOwnership',
   'getOriginMap', 'getFarmerOrigin', 'getDashboard',
   'getFinderOptions', 'runFinder', 'exportFinder', 'listSegments', 'saveSegment', 'deleteSegment',
   'getExportInfo', 'readTableChunk',
@@ -1101,7 +1101,7 @@ function getDashboard() {
 // The Users table is Admin-only and never includes password data.
 
 // The tables that make up the database. Audit log, config and the empty product tables are left out.
-const EXPORT_TABLES = ['Farmers', 'Fields', 'FarmerAnswers', 'Services', 'Messages', 'Outreach', 'Places', 'FormQuestions', 'FormOptions', 'Lists', 'Segments', 'Users'];
+const EXPORT_TABLES = ['Farmers', 'Fields', 'LandOwners', 'FarmerAnswers', 'Services', 'Messages', 'Outreach', 'Places', 'FormQuestions', 'FormOptions', 'Lists', 'Segments', 'Users'];
 const EXPORT_ADMIN_ONLY = ['Users'];
 const EXPORT_HIDDEN_COLUMNS = { Users: ['password_hash', 'password_salt', 'failed_attempts', 'locked_until'] };
 const EXPORT_CHUNK = 5000;
@@ -1202,19 +1202,26 @@ function sheet_(name) {
   if (SHEET_MEMO_[name]) return SHEET_MEMO_[name];
   let sh = db_().getSheetByName(name);
   // The archive index was added later: an older spreadsheet gets the tab here, once (checked again under the lock, so two requests cannot both make it).
-  if (!sh && (name === 'ArchiveIndex' || name === 'OpLog')) {
+  if (!sh && (name === 'ArchiveIndex' || name === 'OpLog' || name === 'LandOwners')) {
     withLock_(() => { if (!db_().getSheetByName(name)) ensureSheet_(db_(), name); });
     sh = db_().getSheetByName(name);
   }
   if (!sh) throw new Error('Missing tab "' + name + '". Run setupDatabase().');
   // The Farmers tab gained GPS columns at its right end. A tab made before that gets them here, once, so nobody has to run anything
   // by hand and the new code never reads columns that are not there. Checked again under the lock, so two requests cannot both add them.
-  if (name === 'Farmers' && sh.getMaxColumns() < SCHEMA.Farmers.length) {
+  // The Fields tab (the land table) got its own details at the right end the same way.
+  // (A new tab has room for 26 columns, so for Fields the header of the last column is what tells whether the new ones were added.)
+  const lacksColumns_ = () => sh.getMaxColumns() < SCHEMA[name].length || (name === 'Fields' && String(sh.getRange(1, SCHEMA[name].length).getValue()) !== SCHEMA[name][SCHEMA[name].length - 1]);
+  if ((name === 'Farmers' || name === 'Fields') && lacksColumns_()) {
     withLock_(() => {
-      if (sh.getMaxColumns() >= SCHEMA.Farmers.length) return;
-      const headers = SCHEMA.Farmers;
-      sh.insertColumnsAfter(sh.getMaxColumns(), headers.length - sh.getMaxColumns());
+      if (!lacksColumns_()) return;
+      const headers = SCHEMA[name];
+      const before = sh.getMaxColumns() < headers.length ? sh.getMaxColumns() : SCHEMA.Fields.length - 8;
+      if (sh.getMaxColumns() < headers.length) sh.insertColumnsAfter(sh.getMaxColumns(), headers.length - sh.getMaxColumns());
       sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold').setBackground('#e8f0e8');
+      // Text columns (dates, places) stay text, so Sheets never turns "2015-03-02" into a date.
+      const textCols = headers.map((h, i) => (i >= before && isTextColumn_(h) ? colLetter_(i + 1) + ':' + colLetter_(i + 1) : '')).filter(Boolean);
+      if (textCols.length) sh.getRangeList(textCols).setNumberFormat('@');
     });
   }
   SHEET_MEMO_[name] = sh;
@@ -2654,7 +2661,8 @@ function saveFarmerLocked_(user, input) {
     farmerObj = Object.assign({ farmer_id: id, status: 'Active' }, core, gps, auditCols_(true));
     farmerRow = appendObjects_('Farmers', [farmerObj]);
   }
-  const fieldEntries = saveFields_(id, fields, currentFields);
+  ensureLandOwners_();
+  const fieldEntries = saveFields_(id, fields, currentFields, core);
   const answerEntries = saveAnswers_(id, desired, currentAnswers, def.questions);
   audit_(existing ? 'update' : 'create', 'Farmers', id, core.full_name);
   indexApply_([makeEntry_(farmerObj, farmerRow, fieldEntries, answerEntries)]);
@@ -2662,7 +2670,7 @@ function saveFarmerLocked_(user, input) {
 }
 
 // Writes the farmer's fields. Returns the index entries of the fields that are active afterwards.
-function saveFields_(farmerId, fields, currentFields) {
+function saveFields_(farmerId, fields, currentFields, core) {
   const keepIds = {};
   const adds = [];
   const entries = [];
@@ -2679,15 +2687,30 @@ function saveFields_(farmerId, fields, currentFields) {
       adds.push(f);
     }
   });
-  softDeleteRows_('Fields', currentFields.filter(f => !keepIds[f.field_id]).map(f => f._row));
+  const removed = currentFields.filter(f => !keepIds[f.field_id]);
+  softDeleteRows_('Fields', removed.map(f => f._row));
+  // A land taken off the record stops being anyone's: its open owner row is closed today (nothing is erased).
+  if (removed.length) {
+    const gone = {};
+    removed.forEach(f => { gone[String(f.field_id)] = true; });
+    const today = localToday_();
+    readAll_('LandOwners').filter(o => gone[String(o.land_id)] && !isoDay_(o.end_date)).forEach(o => {
+      updateByIdLocked_('LandOwners', o.ownership_id, Object.assign({ end_date: today, notes: 'Taken off the farmer record' }, auditCols_(false)));
+    });
+  }
   if (adds.length) {
     const ids = nextIds_('FLD', 6, adds.length);
+    const place = core || {};
     const rows = adds.map((f, i) => Object.assign({
       field_id: ids[i], farmer_id: farmerId, crop: f.crop, acres: f.acres, season: f.season,
-      latitude: f.latitude, longitude: f.longitude, notes: f.notes, active: 'Yes'
+      latitude: f.latitude, longitude: f.longitude, notes: f.notes, active: 'Yes',
+      registered_date: localToday_(), district: place.district || '', ds_division: place.ds_division || '', village: place.village || ''
     }, auditCols_(true)));
     const first = appendObjects_('Fields', rows);
     rows.forEach((r, i) => entries.push(fieldEntry_(r, first + i)));
+    const oids = nextIds_('OWN', 6, rows.length);
+    appendObjects_('LandOwners', rows.map((r, i) => Object.assign({ ownership_id: oids[i], land_id: r.field_id, farmer_id: farmerId, start_date: '', end_date: '',
+      start_known: 'No', how: 'Registered', notes: '' }, auditCols_(true))));
   }
   return entries;
 }
@@ -3722,6 +3745,334 @@ function getHome() {
   return plain_(out);
 }
 
+// ---- Lands.gs
+// Land and who owned it. The Fields tab is the LAND table (one row per plot, with its own ID that never changes) and LandOwners is the
+// history of owners: farmer, land, the day they got it, the day they stopped owning it.
+//
+// Rules (kept by every function below):
+//  - An active land has exactly ONE current owner: one LandOwners row without an end_date. A farmer may own many lands, or none.
+//  - The owners of a land follow each other without overlap: the next owner starts on the day the previous one ends.
+//  - Fields.farmer_id is the current owner (a copy of the open LandOwners row, so search, the map and the finder keep working unchanged).
+//  - Nothing is ever erased: a transfer closes one row and opens another, a land taken off a record is closed, not deleted.
+//  - Dates are exact days (yyyy-mm-dd). A land we only learned about at registration has an unknown start (start_date empty, start_known No).
+
+const LAND_HOW_ = ['Registered', 'Bought', 'Inherited', 'Gift', 'Other'];
+const LAND_READERS_ = ['Admin', 'Manager', 'Pilot'];
+const LAND_WRITERS_ = ['Admin', 'Pilot'];
+
+function landFromRow_(r) {
+  const c = stripRow_(r);
+  return {
+    land_id: c.field_id, farmer_id: c.farmer_id, land_name: c.land_name, registered_date: isoDay_(c.registered_date), acres: Number(c.acres) || 0,
+    crop: c.crop, season: c.season, latitude: c.latitude, longitude: c.longitude, district: c.district, ds_division: c.ds_division, village: c.village,
+    geology: c.geology, irrigation: c.irrigation, tank: c.tank, notes: c.notes, active: c.active
+  };
+}
+
+function ownerRowOut_(o, names) {
+  return {
+    ownership_id: o.ownership_id, land_id: o.land_id, farmer_id: o.farmer_id, farmer_name: names[o.farmer_id] || '',
+    start_date: isoDay_(o.start_date), end_date: isoDay_(o.end_date), start_known: o.start_known, how: o.how, notes: o.notes, current: isoDay_(o.end_date) === ''
+  };
+}
+
+// Sorting key. An owner with an unknown start comes first, unless they are the current owner: then they got the land when the one before them let go, so they come last.
+function ownerKey_(o) { return isoDay_(o.start_date) || (isoDay_(o.end_date) ? '0000-00-00' : '9999-99-99'); }
+function sortOwners_(list) { return list.slice().sort((a, b) => (ownerKey_(a) < ownerKey_(b) ? -1 : ownerKey_(a) > ownerKey_(b) ? 1 : (isoDay_(a.end_date) ? 0 : 1) - (isoDay_(b.end_date) ? 0 : 1))); }
+
+// What is wrong with this list of owners of ONE land (after a planned change), or '' when it is fine.
+function ownershipProblem_(rows, mustHaveOwner) {
+  const list = sortOwners_(rows);
+  let open = 0;
+  for (let i = 0; i < list.length; i++) {
+    const s = isoDay_(list[i].start_date), e = isoDay_(list[i].end_date);
+    if (!e) open++;
+    if (s && e && e < s) return 'An owner cannot stop owning a land before getting it.';
+    if (i > 0) {
+      const pe = isoDay_(list[i - 1].end_date);
+      if (!s && e) return 'Only the first owner of a land can have an unknown start day.';
+      if (!pe) return 'The land would have two owners at the same time.';
+      if (s && pe > s) return 'This overlaps the time of another owner of this land (' + pe + ' is after ' + s + ').';
+    }
+  }
+  if (mustHaveOwner && open !== 1) return 'A land must always have exactly one current owner.';
+  return '';
+}
+
+function cleanDay_(raw, label, required) {
+  const s = String(raw === undefined || raw === null ? '' : raw).trim().slice(0, 10);
+  if (!s) { if (required) throw new Error(label + ' is required.'); return ''; }
+  if (!isIsoDate_(s)) throw new Error(label + ' is not a valid date.');
+  if (s > localToday_()) throw new Error(label + ' cannot be in the future.');
+  return s;
+}
+
+// ---------- reading ----------
+
+// One land row (with _row) or null. Looks at the id column only, then reads that row.
+function landRow_(landId) {
+  const id = String(landId || '');
+  if (!id) return null;
+  const ids = readColumns_('Fields', ['field_id']);
+  const hit = ids.find(r => String(r.field_id) === id);
+  return hit ? readRowsAt_('Fields', [hit._row])[0] : null;
+}
+
+function farmerNames_() {
+  const names = {};
+  indexLoad_().entries.forEach(e => { names[e.id] = e.v[1]; });
+  return names;
+}
+
+function ownersOfLand_(landId) { return readAll_('LandOwners').filter(o => String(o.land_id) === String(landId)); }
+
+// The one-time carry-over: every active land that has no owner row gets one for its current farmer (start unknown), and the land gets its
+// registered day and place from that farmer. Adds only; never changes an owner, a crop or an area. Safe to run twice.
+function ensureLandOwners_() {
+  if (String(getConfig_('lands_migrated') || '') === 'Yes') return { skipped: true };
+  return withLock_(() => {
+    if (String(getConfig_('lands_migrated') || '') === 'Yes') return { skipped: true };
+    const farmers = {};
+    indexLoad_().entries.forEach(e => { farmers[e.id] = e; });
+    const have = {};
+    readAll_('LandOwners').forEach(o => { have[String(o.land_id)] = true; });
+    const sh = sheet_('Fields');
+    const last = sh.getLastRow();
+    const rows = [];
+    let carried = 0;
+    if (last >= 2) {
+      const H = SCHEMA.Fields;
+      const col = n => H.indexOf(n);
+      const values = sh.getRange(2, 1, last - 1, H.length).getValues();
+      let changed = false;
+      values.forEach(v => {
+        if (v[col('field_id')] === '' || v[col('active')] !== 'Yes') return;
+        const f = farmers[v[col('farmer_id')]];
+        if (!f) return;
+        // The farmer's registered day and place fill only what is empty.
+        if (v[col('registered_date')] === '') { v[col('registered_date')] = f.v[INDEX_FARMER_COLS.indexOf('created_at')] || ''; changed = true; }
+        if (v[col('district')] === '') { v[col('district')] = f.v[INDEX_FARMER_COLS.indexOf('district')] || ''; changed = true; }
+        if (v[col('ds_division')] === '') { v[col('ds_division')] = f.v[INDEX_FARMER_COLS.indexOf('ds_division')] || ''; changed = true; }
+        if (v[col('village')] === '') { v[col('village')] = f.v[INDEX_FARMER_COLS.indexOf('village')] || ''; changed = true; }
+        if (!have[String(v[col('field_id')])]) rows.push({ land_id: v[col('field_id')], farmer_id: v[col('farmer_id')], start_date: '', end_date: '', start_known: 'No', how: 'Registered', notes: 'Carried over from the farmer record' });
+      });
+      if (changed) {
+        // Only the five new place columns are written back (a block, in one go).
+        const from = col('land_name');
+        const block = values.map(v => v.slice(from, from + 5));
+        touch_('Fields');
+        sh.getRange(2, from + 1, block.length, 5).setValues(block);
+      }
+    }
+    if (rows.length) {
+      const ids = nextIds_('OWN', 6, rows.length);
+      const stamp = auditCols_(true);
+      appendObjects_('LandOwners', rows.map((r, i) => Object.assign({ ownership_id: ids[i] }, r, stamp)));
+      carried = rows.length;
+    }
+    setConfig_('lands_migrated', 'Yes', 'Lands were carried over from the old fields (see Lands.gs)');
+    audit_('migrate', 'Lands', '', 'carried ' + carried + ' lands over, each with its farmer as owner');
+    return { carried: carried };
+  });
+}
+
+// One land with every owner it ever had, oldest first.
+function getLand(landId) {
+  requireRole_(LAND_READERS_);
+  ensureLandOwners_();
+  const row = landRow_(landId);
+  if (!row) throw new Error('Land not found.');
+  const names = farmerNames_();
+  const owners = sortOwners_(ownersOfLand_(row.field_id)).map(o => ownerRowOut_(o, names));
+  const cur = owners.find(o => o.current) || null;
+  return plain_({ land: landFromRow_(row), owner: cur, owners: owners, services: null });
+}
+
+// The lands of one farmer, today's and past ones, with the dates they owned them.
+function getFarmerLands(farmerId) {
+  requireRole_(LAND_READERS_);
+  ensureLandOwners_();
+  const id = String(farmerId || '');
+  const mine = readAll_('LandOwners').filter(o => String(o.farmer_id) === id);
+  const lands = {};
+  readAll_('Fields').forEach(r => { lands[r.field_id] = r; });
+  const rows = sortOwners_(mine).reverse().map(o => {
+    const l = lands[o.land_id] || {};
+    return Object.assign(ownerRowOut_(o, {}), { land_name: l.land_name || '', acres: Number(l.acres) || 0, crop: l.crop || '', village: l.village || '', district: l.district || '', tank: l.tank || '' });
+  });
+  rows.sort((a, b) => (a.current === b.current ? 0 : a.current ? -1 : 1));
+  return plain_({ farmer_id: id, current: rows.filter(r => r.current), past: rows.filter(r => !r.current) });
+}
+
+// Finds lands by land ID, name, village, division, district, tank or the name of an owner (past owners too). At most 50.
+function findLands(query) {
+  requireRole_(LAND_READERS_);
+  ensureLandOwners_();
+  const q = String(query || '').trim().toLowerCase();
+  if (q.length < 2) throw new Error('Type at least 2 characters.');
+  const names = farmerNames_();
+  const lands = readColumns_('Fields', ['field_id', 'farmer_id', 'acres', 'crop', 'active', 'land_name', 'district', 'ds_division', 'village', 'tank']).filter(r => r.active === 'Yes');
+  const past = {};
+  readAll_('LandOwners').forEach(o => { if (isoDay_(o.end_date)) (past[o.land_id] = past[o.land_id] || []).push(String(names[o.farmer_id] || '').toLowerCase()); });
+  const out = [];
+  lands.some(r => {
+    const owner = String(names[r.farmer_id] || '');
+    const hit = String(r.field_id).toLowerCase() === q || [r.land_name, r.village, r.ds_division, r.district, r.tank, owner].some(t => String(t).toLowerCase().indexOf(q) !== -1) ||
+      (past[r.field_id] || []).some(n => n.indexOf(q) !== -1);
+    if (hit) out.push({ land_id: r.field_id, land_name: r.land_name, acres: Number(r.acres) || 0, crop: r.crop, village: r.village, ds_division: r.ds_division, district: r.district, tank: r.tank, owner_id: r.farmer_id, owner_name: owner });
+    return out.length >= 50;
+  });
+  return plain_(out);
+}
+
+// ---------- writing ----------
+
+// The index entries of the farmers whose lands changed. `changes` = [{ farmerId, drop: sheet row or 0, add: [fieldEntry] or null }]
+function reindexLands_(changes) {
+  const entries = [];
+  changes.forEach(ch => {
+    const e = indexEntry_(ch.farmerId);
+    if (!e) return;
+    let f = e.f.filter(x => x[0] !== ch.drop && !(ch.add && x[0] === ch.add[0]));
+    if (ch.add) f.push(ch.add);
+    entries.push(Object.assign({}, e, { f: f }));
+  });
+  indexApply_(entries);
+}
+
+function cleanLandPlace_(v, n) { return clean_(v).slice(0, n); }
+
+// Adds a new land to a farmer (who becomes its owner) or changes the details of a land (the owner is not changed here: see assignLand).
+function saveLand(input) {
+  const user = requireRole_(LAND_WRITERS_);
+  return withLock_(() => saveLandLocked_(user, input || {}));
+}
+
+function saveLandLocked_(user, input) {
+  ensureLandOwners_();
+  const lists = listsMap_();
+  const existing = input.land_id ? landRow_(input.land_id) : null;
+  if (input.land_id && !existing) throw new Error('Land not found.');
+  if (existing && existing.active !== 'Yes') throw new Error('This land has been taken off the records.');
+  const keep = existing || {};
+  const acres = cleanNumber_(input.acres, 'Acres', 0, MAX_ACRES);
+  if (acres === '' || acres <= 0) throw new Error('Acres must be more than 0.');
+  const lat = cleanNumber_(input.latitude, 'Latitude', -90, 90), lng = cleanNumber_(input.longitude, 'Longitude', -180, 180);
+  if ((lat === '') !== (lng === '')) throw new Error('Give both latitude and longitude, or neither.');
+  const details = {
+    crop: checkList_(clean_(input.crop), lists.crop, 'Crop', keep.crop), acres: round2_(acres),
+    season: checkList_(clean_(input.season), lists.season, 'Season', keep.season),
+    latitude: lat, longitude: lng,
+    land_name: cleanLandPlace_(input.land_name, 80), district: checkList_(clean_(input.district), lists.district, 'District', keep.district),
+    ds_division: cleanLandPlace_(input.ds_division, 80), village: cleanLandPlace_(input.village, 80),
+    geology: cleanLandPlace_(input.geology, 80), irrigation: cleanLandPlace_(input.irrigation, 80), tank: cleanLandPlace_(input.tank, 80),
+    notes: clean_(input.notes).slice(0, 200)
+  };
+  if (existing) {
+    indexMarkDirty_();
+    const row = Object.assign({}, existing, details, auditCols_(false));
+    writeRowObject_('Fields', existing._row, row);
+    audit_('update', 'Fields', existing.field_id, 'land details');
+    reindexLands_([{ farmerId: existing.farmer_id, drop: existing._row, add: fieldEntry_(row, existing._row) }]);
+    return { land_id: existing.field_id, created: false };
+  }
+  const owner = loadFarmerRecord_(String(input.farmer_id || ''));
+  if (!owner) throw new Error('Choose the farmer who owns this land.');
+  if (owner.farmer.status !== 'Active') throw new Error('This farmer has been removed, so a land cannot be added to them.');
+  const start = cleanDay_(input.start_date, 'The day the farmer got this land', false);
+  const how = LAND_HOW_.indexOf(input.how) !== -1 ? input.how : 'Registered';
+  indexMarkDirty_();
+  const id = nextId_('FLD', 6);
+  const land = Object.assign({ field_id: id, farmer_id: owner.farmer.farmer_id, active: 'Yes', registered_date: localToday_() }, details, auditCols_(true));
+  land.district = land.district || owner.farmer.district; land.ds_division = land.ds_division || owner.farmer.ds_division; land.village = land.village || owner.farmer.village;
+  const landRowNo = appendObjects_('Fields', [land]);
+  appendObjects_('LandOwners', [Object.assign({ ownership_id: nextId_('OWN', 6), land_id: id, farmer_id: owner.farmer.farmer_id, start_date: start, end_date: '',
+    start_known: start ? 'Yes' : 'No', how: how, notes: clean_(input.ownership_notes).slice(0, 200) }, auditCols_(true))]);
+  audit_('create', 'Fields', id, 'new land for ' + owner.farmer.farmer_id);
+  reindexLands_([{ farmerId: owner.farmer.farmer_id, drop: 0, add: fieldEntry_(land, landRowNo) }]);
+  return { land_id: id, created: true };
+}
+
+// Gives a land to another farmer on the given day: the old owner's row is closed, the new owner's row is opened, in one step.
+function assignLand(input) {
+  const user = requireRole_(['Admin']);
+  return withLock_(() => assignLandLocked_(user, input || {}));
+}
+
+function assignLandLocked_(user, input) {
+  ensureLandOwners_();
+  const land = landRow_(input.land_id);
+  if (!land || land.active !== 'Yes') throw new Error('Land not found.');
+  const to = loadFarmerRecord_(String(input.farmer_id || ''));
+  if (!to) throw new Error('Choose the farmer who gets the land.');
+  if (to.farmer.status !== 'Active') throw new Error('This farmer has been removed, so a land cannot be given to them.');
+  if (String(land.farmer_id) === String(to.farmer.farmer_id)) throw new Error('This farmer already owns this land.');
+  const day = cleanDay_(input.date, 'The day of the change', true);
+  const how = LAND_HOW_.indexOf(input.how) !== -1 ? input.how : 'Bought';
+  const owners = ownersOfLand_(land.field_id);
+  const current = owners.find(o => !isoDay_(o.end_date));
+  if (current && isoDay_(current.start_date) && day < isoDay_(current.start_date)) throw new Error('The change day is before the current owner got the land (' + isoDay_(current.start_date) + ').');
+  const after = owners.map(o => (o === current ? Object.assign({}, o, { end_date: day }) : o)).concat([{ start_date: day, end_date: '' }]);
+  const problem = ownershipProblem_(after, true);
+  if (problem) throw new Error(problem);
+  indexMarkDirty_();
+  if (current) updateByIdLocked_('LandOwners', current.ownership_id, Object.assign({ end_date: day }, auditCols_(false)));
+  appendObjects_('LandOwners', [Object.assign({ ownership_id: nextId_('OWN', 6), land_id: land.field_id, farmer_id: to.farmer.farmer_id, start_date: day, end_date: '',
+    start_known: 'Yes', how: how, notes: clean_(input.notes).slice(0, 200) }, auditCols_(true))]);
+  const row = Object.assign({}, land, { farmer_id: to.farmer.farmer_id }, auditCols_(false));
+  writeRowObject_('Fields', land._row, row);
+  audit_('transfer', 'Fields', land.field_id, land.farmer_id + ' -> ' + to.farmer.farmer_id + ' on ' + day);
+  reindexLands_([{ farmerId: land.farmer_id, drop: land._row, add: null }, { farmerId: to.farmer.farmer_id, drop: 0, add: fieldEntry_(row, land._row) }]);
+  return { land_id: land.field_id, farmer_id: to.farmer.farmer_id, from_farmer_id: land.farmer_id, date: day };
+}
+
+// Records an owner of the past (a farmer who owned the land between two days and is no longer the owner), or corrects the days of a row.
+function addPastOwner(input) {
+  requireRole_(['Admin']);
+  return withLock_(() => {
+    ensureLandOwners_();
+    const land = landRow_(input.land_id);
+    if (!land || land.active !== 'Yes') throw new Error('Land not found.');
+    const who = loadFarmerRecord_(String(input.farmer_id || ''));
+    if (!who) throw new Error('Choose the farmer who owned the land.');
+    const start = cleanDay_(input.start_date, 'The day they got the land', false);
+    const end = cleanDay_(input.end_date, 'The day they stopped owning it', true);
+    const rows = ownersOfLand_(land.field_id);
+    const problem = ownershipProblem_(rows.concat([{ start_date: start, end_date: end }]), true);
+    if (problem) throw new Error(problem);
+    const how = LAND_HOW_.indexOf(input.how) !== -1 ? input.how : 'Other';
+    const id = nextId_('OWN', 6);
+    appendObjects_('LandOwners', [Object.assign({ ownership_id: id, land_id: land.field_id, farmer_id: who.farmer.farmer_id, start_date: start, end_date: end,
+      start_known: start ? 'Yes' : 'No', how: how, notes: clean_(input.notes).slice(0, 200) }, auditCols_(true))]);
+    // The owner after them got the land the day they let go (the rule of a transfer): if that day was unknown it is now known.
+    const sorted = sortOwners_(rows.concat([{ ownership_id: id, start_date: start, end_date: end }]));
+    const next = sorted[sorted.findIndex(o => o.ownership_id === id) + 1];
+    if (next && !isoDay_(next.start_date)) updateByIdLocked_('LandOwners', next.ownership_id, Object.assign({ start_date: end, start_known: 'Yes' }, auditCols_(false)));
+    audit_('create', 'LandOwners', id, 'past owner ' + who.farmer.farmer_id + ' of ' + land.field_id);
+    return { ownership_id: id };
+  });
+}
+
+function editOwnership(ownershipId, patch) {
+  requireRole_(['Admin']);
+  return withLock_(() => {
+    ensureLandOwners_();
+    const row = readAll_('LandOwners').find(o => String(o.ownership_id) === String(ownershipId));
+    if (!row) throw new Error('Ownership record not found.');
+    const p = patch || {};
+    const start = p.start_date === undefined ? isoDay_(row.start_date) : cleanDay_(p.start_date, 'The day they got the land', false);
+    const end = p.end_date === undefined ? isoDay_(row.end_date) : cleanDay_(p.end_date, 'The day they stopped owning it', false);
+    const rows = ownersOfLand_(row.land_id).map(o => (String(o.ownership_id) === String(ownershipId) ? Object.assign({}, o, { start_date: start, end_date: end }) : o));
+    const problem = ownershipProblem_(rows, true);
+    if (problem) throw new Error(problem);
+    const how = LAND_HOW_.indexOf(p.how) !== -1 ? p.how : row.how;
+    updateById_('LandOwners', ownershipId, Object.assign({ start_date: start, end_date: end, start_known: start ? 'Yes' : 'No', how: how,
+      notes: p.notes === undefined ? row.notes : clean_(p.notes).slice(0, 200) }, auditCols_(false)));
+    audit_('update', 'LandOwners', ownershipId, 'days corrected');
+    return { ownership_id: ownershipId };
+  });
+}
+
 // ---- Logbook.gs
 // The farmer's log book: everything CAFT has done with or for one farmer, newest first, in one list.
 // It joins three sources: the service log (Services), the messages and calls (Outreach: bulk messages written by Messages.gs and
@@ -4336,21 +4687,23 @@ function submitOp(opId, fn, args) {
 //   table: [stamp kind it belongs to (see REV_TABS_), whether it can be sent as "rows changed since" (it has updated_at)]
 const LOCAL_TABLE_KINDS_ = {
   Config: ['lists', false], Lists: ['lists', false], FormQuestions: ['form', true], FormOptions: ['form', true],
-  Farmers: ['farmers', true], Fields: ['farmers', true], FarmerAnswers: ['farmers', true], Services: ['services', true],
+  Farmers: ['farmers', true], Fields: ['farmers', true], LandOwners: ['farmers', true], FarmerAnswers: ['farmers', true], Services: ['services', true],
   Users: ['users', true], Places: ['places', true], Segments: ['segments', true], Messages: ['messages', true], Outreach: ['outreach', true]
 };
 const LOCAL_PLAN_ = {
-  Admin: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'FarmerAnswers', 'Services', 'Users', 'Places', 'Segments', 'Messages', 'Outreach'],
-  Manager: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'FarmerAnswers', 'Services', 'Users', 'Places', 'Segments', 'Messages', 'Outreach'],
-  Pilot: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'FarmerAnswers', 'Services', 'Users'],
+  Admin: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'LandOwners', 'FarmerAnswers', 'Services', 'Users', 'Places', 'Segments', 'Messages', 'Outreach'],
+  Manager: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'LandOwners', 'FarmerAnswers', 'Services', 'Users', 'Places', 'Segments', 'Messages', 'Outreach'],
+  Pilot: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'LandOwners', 'FarmerAnswers', 'Services', 'Users'],
   DataEntry: ['Config', 'Lists', 'FormQuestions', 'FormOptions']
 };
-const LOCAL_CONFIG_KEYS_ = ['duplicate_check_mode', 'mock_services_on'];       // the only settings a device receives
+const LOCAL_CONFIG_KEYS_ = ['duplicate_check_mode', 'mock_services_on', 'lands_migrated'];       // the only settings a device receives
 const LOCAL_PAGE_ROWS_ = 3000;
 const LOCAL_DATE_MARK_ = '~D:';             // in front of a date sent to the device; the device turns it back into a date
 
 function getLocalPlan() {
   const user = requireRole_(ROLES);
+  // The one-time carry-over of the old fields into lands is done here, on the server, before any device makes its copy (a device must never do it itself).
+  if (user.role !== 'DataEntry') ensureLandOwners_();
   const names = LOCAL_PLAN_[user.role] || [];
   return plain_({ role: user.role, tables: names.map(n => ({ name: n, kind: LOCAL_TABLE_KINDS_[n][0], delta: LOCAL_TABLE_KINDS_[n][1], columns: SCHEMA[n].length })), revs: currentRevs_() });
 }
@@ -4555,9 +4908,19 @@ const SCHEMA = {
     // The farm's GPS point (see GpsData.gs). Last, so an existing Farmers tab is extended without moving anything.
     'latitude', 'longitude', 'gps_source', 'gps_accuracy', 'gps_updated_at'
   ]),
+  // The Fields tab is the LAND table: one row per plot of land, whose ID (field_id, e.g. FLD000012) stays the same whoever owns it.
+  // farmer_id is the CURRENT owner, kept in step with LandOwners by the code (see Lands.gs); the history of owners is in LandOwners.
+  // The land's own details come last, so a tab made before them is extended without moving anything.
   Fields: [
     'field_id', 'farmer_id', 'crop', 'acres', 'season', 'latitude', 'longitude', 'notes', 'active'
-  ].concat(AUDIT_COLS),
+  ].concat(AUDIT_COLS).concat([
+    'land_name', 'registered_date', 'district', 'ds_division', 'village', 'geology', 'irrigation', 'tank'
+  ]),
+
+  // Who owned which land and when: one row per land per owner. start_date is the day the farmer got the land (empty with start_known No when
+  // only the day we learned of it is known), end_date the day they stopped owning it (empty while they still own it). The next owner starts on the
+  // day the previous one ends. A land has at most one open row (no end_date); a farmer may have many. how: Registered / Bought / Inherited / Other.
+  LandOwners: ['ownership_id', 'land_id', 'farmer_id', 'start_date', 'end_date', 'start_known', 'how', 'notes'].concat(AUDIT_COLS),
 
   // Derived copy of the farmer data that keeps search, the map and the finder fast (see FarmerIndex.gs). Rebuilt automatically.
   FarmerIndex: ['chunk', 'count', 'built_at', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'meta'],
@@ -4599,7 +4962,7 @@ const SCHEMA = {
 
 // Columns that must stay text so Sheets never strips leading zeros or turns IDs into numbers.
 const TEXT_COLUMNS = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'meta', 'nic', 'phone_primary', 'phone_alt', 'path', 'parent_question_ids', 'date_of_birth', 'date', 'password_hash', 'password_salt',
-  'requested_date', 'service_date', 'start_time', 'end_time', 'ref', 'period'];
+  'requested_date', 'service_date', 'start_time', 'end_time', 'ref', 'period', 'registered_date', 'start_date', 'end_date', 'land_name', 'village', 'tank', 'geology', 'irrigation', 'ds_division'];
 
 // DataEntry: register farmers only. Manager: find farmers, Origin Map, export, service reports, record services. Admin: everything, plus accounts.
 // Pilot: drone pilot in the field, two jobs: register new farmers (like DataEntry) and record the services they did (and see their own records).
@@ -5921,7 +6284,7 @@ const REV_PREFIX_ = 'rev_';
 const REV_TTL_ = 21600;              // the longest the cache keeps a value (6 hours)
 // Which tab belongs to which kind of data. Tabs that are not listed (AuditLog, Config, Products ...) have no stamp.
 const REV_TABS_ = {
-  Farmers: 'farmers', Fields: 'farmers', FarmerAnswers: 'farmers', FarmerIndex: 'farmers',
+  Farmers: 'farmers', Fields: 'farmers', LandOwners: 'farmers', FarmerAnswers: 'farmers', FarmerIndex: 'farmers',
   Services: 'services', Messages: 'messages', Outreach: 'outreach',
   FormQuestions: 'form', FormOptions: 'form', Lists: 'lists', Places: 'places', Users: 'users', Segments: 'segments'
 };
@@ -5973,7 +6336,7 @@ function syncStatus() {
 }
 
 // The read-only screen functions whose answers the browser may keep (it must list the same names, see DEPS in Sync.html).
-const SYNCED_READS_ = ['listRecentServices', 'listServices', 'getServiceReport', 'getEarthData', 'getFarmerLogbook', 'getFarmerView', 'getFarmerServices', 'getFarmer', 'getService',
+const SYNCED_READS_ = ['listRecentServices', 'listServices', 'getServiceReport', 'getEarthData', 'getFarmerLogbook', 'getFarmerView', 'getFarmerServices', 'getFarmer', 'getService', 'getLand', 'getFarmerLands', 'findLands',
   'getOriginMap', 'getFarmerOrigin', 'listMessages', 'listUsers', 'listSegments', 'getExportInfo', 'getAreaOptions', 'getFinderOptions', 'getServiceSetup', 'getServiceOptions',
   'getDesignerData', 'getFormDefinition', 'getRegistrationData', 'previewAudience', 'listAudience', 'getEarthGeo'];
 
@@ -6137,11 +6500,11 @@ function getServiceRows(since, wantMessages) {
 //   IO.rpc(fn, args)      calls the server (api door); resolves with the result or rejects with an Error
 //   IO.store              { load() -> {meta, tables}|null, saveTable(name, rows), saveMeta(meta), clear() }
 //   IO.progress(info)     optional: called while the copy is being made
-var __ENG_FMT = 2;
+var __ENG_FMT = 3;
 var __ENG = { meta: null, temps: null };
 var __ENG_READS = ['getRegistrationData', 'getFormDefinition', 'getFarmer', 'getFarmerView', 'findFarmers', 'getOriginMap', 'getFarmerOrigin', 'getDashboard', 'getFinderOptions', 'runFinder',
   'listSegments', 'getServiceOptions', 'findFarmersForService', 'getFarmerServices', 'getService', 'listRecentServices', 'listServices', 'getAreaOptions', 'getServiceReport', 'previewAudience',
-  'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows'];
+  'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows', 'getLand', 'getFarmerLands', 'findLands'];
 var __ENG_WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer'];
 var __ENG_DATA_ENTRY = ['getRegistrationData', 'getFormDefinition', 'saveFarmer'];     // a data entry account receives no farmer data, so only these can be answered on the device
 
