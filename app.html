@@ -942,6 +942,81 @@
   .demochip { align-items:center; gap:6px; padding:0 11px; min-height:30px; border-radius:999px; background:#fff8ec; border:1px solid #f1d9b0; color:#93370d; font-size:12px; font-weight:600; white-space:nowrap; }
   .demochip svg { width:14px; height:14px; }
   @media (max-width: 860px) { .demochip { padding:0 8px; font-size:11px; } }
+  /* ---------- Services tab (ServiceHub.html and the Svc* screens) ---------- */
+  .sv-tabs { position:sticky; top:0; z-index:5; background:var(--bg); padding:8px 0; margin:-8px 0 8px; overflow-x:auto; flex-wrap:nowrap; scrollbar-width:none; }
+  .sv-tabs::-webkit-scrollbar { display:none; }
+  .sv-tabs .chip { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; min-height:var(--touch); padding:6px 16px; font-weight:500; }
+  .sv-tabs .chip svg { width:16px; height:16px; }
+  .sv-intro { margin:6px 0 14px; } .sv-intro h2 { font-size:19px; font-weight:600; letter-spacing:-.01em; } .sv-intro p { margin-top:2px; }
+  .sv-step .cardhead h2 { display:flex; align-items:center; gap:10px; }
+  .sv-n { width:24px; height:24px; border-radius:50%; background:var(--brand); color:#fff; font-size:12.5px; font-weight:600; display:inline-grid; place-items:center; flex:none; }
+  .sv-chosen { display:flex; align-items:center; gap:12px; padding:10px 0 2px; } .sv-chosen .t { flex:1; min-width:0; }
+  .sv-chosen .t b { display:block; font-weight:600; } .sv-chosen .t small { color:var(--muted); }
+  .sv-open { margin-top:4px; }
+  .sv-land { border:1px solid var(--line); border-radius:var(--radius-sm); margin-top:10px; background:#fff; transition:border-color .12s, box-shadow .12s; }
+  .sv-land.on { border-color:var(--brand); box-shadow:0 0 0 1px var(--brand) inset; }
+  .sv-land-head { display:flex; align-items:center; gap:12px; padding:12px 14px; cursor:pointer; min-height:var(--touch); }
+  .sv-land-head input { width:20px; height:20px; accent-color:var(--brand); flex:none; }
+  .sv-land-head .t { flex:1; min-width:0; } .sv-land-head .t b { display:block; font-weight:600; } .sv-land-head .t small { color:var(--muted); }
+  .sv-land-body { padding:0 14px 14px; border-top:1px solid var(--line); }
+  .sv-done { text-align:center; } .sv-done .ico { margin:0 auto 10px; } .sv-done h2 { font-size:18px; font-weight:600; } .sv-donelist { text-align:left; margin-top:14px; }
+  .sv-row.late { border-left:3px solid var(--red); }
+  .sv-row .ftags { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .sv-amt { font-weight:600; white-space:nowrap; }
+  .pill.sv-Requested { background:var(--sun-50); color:var(--sun); } .pill.sv-Scheduled { background:var(--sky-50); color:var(--sky); }
+  .pill.sv-Completed { background:var(--ok-50); color:var(--ok); } .pill.sv-Cancelled { background:var(--slate-50); color:var(--slate); }
+  .dotc { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px; }
+  .sv-filters .sv-frow { margin-top:10px; } .sv-filters .sv-frow:first-child { margin-top:0; } .sv-flabel { margin:12px 0 2px; font-size:11.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.07em; font-weight:600; }
+  .sv-mapcard { margin-bottom:12px; } .sv-map { height:440px; background:#e9eef2; position:relative; } .sv-map .loading { position:absolute; inset:0; display:grid; place-items:center; }
+  .sv-legend { display:flex; flex-wrap:wrap; gap:6px 18px; padding:9px 14px; border-top:1px solid var(--line); font-size:12px; color:var(--muted); background:#fff; }
+  .sv-legend .lg { display:inline-flex; align-items:center; gap:7px; } .sv-legend .lg i { width:11px; height:11px; border-radius:50%; display:inline-block; }
+  .sv-legend .lg i.ring { background:#fff; border:2px solid var(--red); } .sv-legend .ramp b { width:70px; height:9px; border-radius:5px; display:inline-block; }
+  .sv-listhead { display:flex; align-items:baseline; justify-content:space-between; margin:14px 0 8px; } .sv-listhead h3 { font-size:15px; font-weight:600; border:0; padding:0; margin:0; text-transform:none; letter-spacing:0; color:var(--ink); }
+  .sv-hrow { margin-bottom:10px; } .sv-hrow .pickrow { margin-bottom:0; border-bottom-left-radius:0; border-bottom-right-radius:0; }
+  .sv-hroad { background:#fff; border:1px solid var(--line); border-top:0; border-radius:0 0 10px 10px; padding:8px 14px 10px; box-shadow:var(--shadow-sm); }
+  .sv-took { margin-top:4px; font-size:12px; color:var(--muted); }
+  .sv-mini { display:flex; align-items:flex-start; gap:0; } .sv-mini .mr { flex:1; position:relative; text-align:center; font-size:11px; color:var(--faint); padding-top:14px; min-width:0; }
+  .sv-mini .mr i { position:absolute; top:0; left:50%; width:10px; height:10px; margin-left:-5px; border-radius:50%; background:#fff; border:2px solid var(--line-strong); z-index:1; }
+  .sv-mini .mr::before { content:""; position:absolute; top:4px; left:-50%; right:50%; height:2px; background:var(--line); } .sv-mini .mr:first-child::before { display:none; }
+  .sv-mini .mr.on { color:var(--ink); } .sv-mini .mr.on i { background:var(--brand); border-color:var(--brand); } .sv-mini .mr.on::before { background:var(--brand); }
+  .sv-mini .mr.half i { background:var(--sun); border-color:var(--sun); } .sv-mini .mr.half { color:var(--sun); }
+  .sv-mini .mr em { font-style:normal; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .modal.sv-modal { max-width:640px; width:100%; max-height:92vh; overflow:auto; padding:0; text-align:left; }
+  .sv-modal > :not(.sv-mhead) { margin-left:22px; margin-right:22px; } .sv-modal > :last-child { margin-bottom:22px; }
+  .sv-mhead { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:16px 22px 12px; position:sticky; top:0; background:#fff; z-index:2; border-bottom:1px solid var(--line); margin-bottom:14px; }
+  .sv-mhead h2 { font-size:16.5px; font-weight:600; margin:0; }
+  .sv-head { display:flex; align-items:flex-start; gap:12px; margin-bottom:16px; } .sv-head b { font-weight:600; font-size:15px; }
+  .sv-road { display:flex; gap:0; margin:8px 0 12px; }
+  .sv-node { flex:1; position:relative; text-align:center; padding-top:34px; min-width:0; }
+  .sv-node::before { content:""; position:absolute; top:13px; left:-50%; right:50%; height:3px; background:var(--line); border-radius:2px; } .sv-node:first-child::before { display:none; }
+  .sv-node .dot { position:absolute; top:0; left:50%; width:28px; height:28px; margin-left:-14px; border-radius:50%; background:#fff; border:2px solid var(--line-strong); display:grid; place-items:center; z-index:1; color:#fff; }
+  .sv-node .dot svg { width:15px; height:15px; stroke-width:2.4; }
+  .sv-node.done .dot { background:var(--brand); border-color:var(--brand); } .sv-node.done::before { background:var(--brand); }
+  .sv-node.partial .dot { background:var(--sun); border-color:var(--sun); } .sv-node.partial::before { background:var(--sun); }
+  .sv-node.cancelled .dot { background:var(--slate); border-color:var(--slate); }
+  .sv-node.next .dot { border-color:var(--sky); box-shadow:0 0 0 4px var(--sky-50); } .sv-node.next .nb b { color:var(--sky); }
+  .sv-node.hidden, .sv-node.todo { opacity:.7; }
+  .sv-node.late .dot { box-shadow:0 0 0 4px var(--red-50); border-color:var(--red); }
+  .sv-node.click { cursor:pointer; } .sv-node.click .dot { border-color:var(--sky); box-shadow:0 0 0 4px var(--sky-50); } .sv-node.click:hover .dot { background:var(--sky-50); }
+  .sv-node .nb { padding:0 4px; } .sv-node .nb b { font-size:13px; font-weight:600; display:block; } .sv-node .nd { font-size:12.5px; color:var(--muted); margin-top:2px; }
+  .sv-node .nn { font-size:11.5px; color:var(--faint); margin-top:2px; } .sv-node .nn.warn { color:var(--red); }
+  @media (max-width:520px) {
+    .sv-road { flex-direction:column; gap:0; } .sv-node { text-align:left; padding:0 0 18px 42px; min-height:44px; }
+    .sv-node::before { top:-14px; bottom:auto; left:13px; right:auto; width:3px; height:calc(100% - 0px); } .sv-node:first-child::before { display:none; }
+    .sv-node .dot { left:14px; top:0; } .sv-node .nb { padding:0; }
+    .sv-map { height:320px; } .sv-modal > :not(.sv-mhead) { margin-left:16px; margin-right:16px; } .sv-mhead { padding:14px 16px 10px; }
+    .sv-tabs .chip { padding:6px 14px; }
+  }
+  .sv-days { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12.5px; margin:4px 0 12px; } .sv-days svg { width:15px; height:15px; color:var(--faint); }
+  .sv-act { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 14px; }
+  .sv-panel { border:1px solid var(--line); background:var(--soft); border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:12px; } .sv-panel h3 { margin:0 0 6px; padding:0; border:0; text-transform:none; letter-spacing:0; font-size:14px; color:var(--ink); }
+  .sv-sum { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:14px; padding:12px; background:var(--soft); border:1px solid var(--line); border-radius:var(--radius-sm); }
+  .sv-sum small { display:block; color:var(--muted); font-size:11.5px; } .sv-sum b { font-size:14px; font-weight:600; } .sv-sum .bad b { color:var(--red); }
+  @media (max-width:520px) { .sv-sum { grid-template-columns:repeat(2,1fr); } }
+  .sv-modal .fold .ico, .sv-modal .foldbody .ico { margin:0; width:32px; height:32px; border-radius:10px; } .sv-modal .fold .ico svg { width:16px; height:16px; }
+  .sv-modal .fold summary { text-align:left; }
+  .sv-err { color:var(--red); margin:10px 0 0; } .sv-check { display:flex; align-items:center; gap:8px; margin:10px 0; cursor:pointer; min-height:36px; } .sv-check input { width:18px; height:18px; accent-color:var(--brand); }
+  .sv-modal .lform h3 { margin:2px 0 8px; padding:0; border:0; text-transform:none; letter-spacing:0; font-size:14px; color:var(--ink); }
 </style>
 
   <style>
@@ -2006,7 +2081,7 @@ var Sync = (function () {
   var DEPS = {
     listRecentServices: ['services', 'farmers'], listServices: ['services', 'farmers'], getServiceReport: ['services', 'farmers', 'form'],
     getEarthData: ['farmers', 'services', 'places', 'form'], getFarmerLogbook: ['services', 'messages', 'outreach', 'farmers'],
-    getLand: ['farmers'], getFarmerLands: ['farmers'], findLands: ['farmers'],
+    getLand: ['farmers'], getFarmerLands: ['farmers'], findLands: ['farmers'], getServiceFlowOptions: ['lists', 'users', 'services', 'farmers'], listServiceFlow: ['services', 'farmers'], getServiceMap: ['services', 'farmers'], getServiceRoad: ['services', 'farmers'],
     getFarmerView: ['farmers', 'form'], getFarmerServices: ['services', 'farmers'], getFarmer: ['farmers'], getService: ['services', 'farmers'],
     getOriginMap: ['farmers', 'form'], getFarmerOrigin: ['farmers', 'form'], listMessages: ['messages'], listUsers: ['users'], listSegments: ['segments'],
     getExportInfo: KINDS, getAreaOptions: ['form', 'farmers', 'segments', 'lists'], getFinderOptions: ['lists', 'farmers', 'segments'],
@@ -2521,7 +2596,7 @@ var Sync = (function () {
     var worker = null, seq = 0, waits = {}, status = { started: false, ready: false, done: 0, total: 0 };
     var READS = ['getRegistrationData', 'getFormDefinition', 'getFarmer', 'getFarmerView', 'findFarmers', 'getOriginMap', 'getFarmerOrigin', 'getDashboard', 'getFinderOptions', 'runFinder',
       'listSegments', 'getServiceOptions', 'findFarmersForService', 'getFarmerServices', 'getService', 'listRecentServices', 'listServices', 'getAreaOptions', 'getServiceReport', 'previewAudience',
-      'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows', 'getLand', 'getFarmerLands', 'findLands'];
+      'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows', 'getLand', 'getFarmerLands', 'findLands', 'getServiceFlowOptions', 'listServiceFlow', 'getServiceMap', 'getServiceRoad'];
     var WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer'];
     var DATA_ENTRY = ['getRegistrationData', 'getFormDefinition', 'saveFarmer'];
     function available() { return typeof Worker !== 'undefined' && typeof API_URL !== 'undefined' && !!API_URL && !(typeof google !== 'undefined' && google.script && google.script.run); }
@@ -6318,7 +6393,7 @@ var Register = (function () {
           softShow(el, function () {
             el.appendChild(h('div', { class: 'card svcdone' }, h('div', { class: 'tick' }, icon('check')), h('h2', { text: 'Registered' }), h('p', { class: 'hint', text: core.full_name + ' · ' + (r.queued ? 'waiting to upload' : r.farmer_id) }),
               h('div', { class: 'row' },
-                h('button', { class: 'b big', type: 'button', onclick: function () { Nav.open('Record service', { farmer_id: r.farmer_id }); } }, icon('drone'), 'Service'),
+                h('button', { class: 'b big', type: 'button', onclick: function () { Nav.open('Services', { tab: 'request', farmer_id: r.farmer_id }); } }, icon('drone'), 'Service'),
                 h('button', { class: 'b ghost big', type: 'button', onclick: function () { mount(el); } }, icon('plus'), 'Another'))));
           }, { fade: true });
         } else { mount(el, r.farmer_id).then(function () { showMsg('Saved', false); }); }
@@ -6335,7 +6410,7 @@ var Register = (function () {
     if (existing) {
       el.appendChild(h('div', { class: 'card' }, h('div', { class: 'profilehead' }, h('span', { class: 'avatar md', text: initials(core.full_name) }),
         h('div', { style: 'flex:1;min-width:160px' }, h('h2', { text: core.full_name || farmerId }), h('div', { class: 'meta', text: farmerId })),
-        h('button', { class: 's', type: 'button', onclick: function () { Nav.open('Record service', { farmer_id: farmerId }); } }, icon('drone'), h('span', { class: 'hidesm', text: 'Service' })),
+        h('button', { class: 's', type: 'button', onclick: function () { Nav.open('Services', { tab: 'request', farmer_id: farmerId }); } }, icon('drone'), h('span', { class: 'hidesm', text: 'Service' })),
         role === 'Admin' ? h('button', { class: 's', type: 'button', onclick: function () { Nav.open('View farmer', farmerId); } }, icon('user'), h('span', { class: 'hidesm', text: 'Profile' })) : null,
         h('button', { class: 's', type: 'button', style: 'color:var(--red)', onclick: function () {
           askConfirm('Remove ' + (core.full_name || farmerId) + '?', 'They will disappear from lists. An admin can bring them back.', 'Remove').then(function (ok) {
@@ -6393,7 +6468,7 @@ var Find = (function () {
       if (!isPilot && !gone) acts.appendChild(small('globe', 'Show on the map', function () { Nav.open('Earth', { farmer_id: r.farmer_id }); }, null, 'Map'));
       var place = [r.village, r.ds_division || r.district].filter(Boolean).join(', ');
       var open = function () {
-        if (isPilot) Nav.open('Record service', { farmer_id: r.farmer_id }); else Nav.openFarmer(r.farmer_id);
+        if (isPilot) Nav.open('Services', { tab: 'request', farmer_id: r.farmer_id }); else Nav.openFarmer(r.farmer_id);
       };
       var tags = [];
       if (gone) tags.push(h('span', { class: 'pill red' }, 'Removed'));
@@ -6761,6 +6836,30 @@ var LandView = (function () {
     card.appendChild(tl);
     el.appendChild(card);
 
+    // the services done on this land, under the owner who had it at the time
+    if (Svc.can('service.view')) {
+      var svBody = h('div', {}, loadingBox());
+      el.appendChild(h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', {}, ico('drone', 'sky', 'sm'), 'Services on this land'),
+        Svc.can('service.request') && l.active === 'Yes' && owner ? h('button', { class: 's', type: 'button', onclick: function () { Nav.open('Services', { tab: 'request', farmer_id: owner.farmer_id }); } }, icon('plus'), 'New request') : null), svBody));
+      Sync.fast('listServiceFlow', [{ land_id: l.land_id, limit: 200 }]).then(function (s) {
+        clear(svBody);
+        if (!s.rows.length) { svBody.appendChild(emptyBox('drone', 'No service on this land yet')); return; }
+        var owners = d.owners.slice();
+        function ownerOn(c) {
+          var day = c.service_date || c.scheduled_date || c.requested_date;
+          for (var i = owners.length - 1; i >= 0; i--) { var o = owners[i]; if ((!o.start_date || o.start_date <= day) && (!o.end_date || day < o.end_date)) return o; }
+          return owners[owners.length - 1];
+        }
+        var groups = {}, order = [];
+        s.rows.forEach(function (c) { var o = ownerOn(c); if (!groups[o.ownership_id]) { groups[o.ownership_id] = { o: o, rows: [] }; order.push(o.ownership_id); } groups[o.ownership_id].rows.push(c); });
+        owners.slice().reverse().forEach(function (o) {
+          var g = groups[o.ownership_id]; if (!g) return;
+          svBody.appendChild(h('h3', { text: (o.farmer_name || o.farmer_id) + ' · ' + LandUI.when(o) + ' · ' + g.rows.length + (g.rows.length === 1 ? ' service' : ' services') }));
+          g.rows.forEach(function (c) { svBody.appendChild(Svc.row(c)); });
+        });
+      }).catch(function (e) { clear(svBody); svBody.appendChild(h('p', { class: 'hint', text: e.message })); });
+    }
+
     el.appendChild(h('details', { class: 'fold', open: '' }, h('summary', {}, ico('wheat', 'sun', 'sm'), 'Details'),
       h('div', { class: 'foldbody' }, kv([['Crop usually grown', l.crop], ['Season', l.season], ['Tank / scheme', l.tank], ['Irrigation', l.irrigation], ['Geology / soil', l.geology],
         ['District', l.district], ['DS division', l.ds_division], ['Village', l.village], ['On our records since', l.registered_date ? LandUI.day(l.registered_date) : ''],
@@ -6898,7 +6997,7 @@ var ViewFarmer = (function () {
             h('div', { class: 'body' }, h('div', { style: 'display:flex;gap:10px;align-items:flex-start' },
               h('div', { style: 'flex:1;min-width:0' }, what(e)),
               h('div', { style: 'text-align:right' }, h('div', { class: 'when', text: ServiceLog.fmtShort(e.date) }),
-                e.kind === 'service' ? h('button', { class: 's', type: 'button', title: 'Edit', style: 'margin-top:4px;min-height:34px;padding:4px 10px', onclick: function () { Nav.open('Record service', { service_id: e.id }); } }, icon('edit')) : null))));
+                e.kind === 'service' ? h('button', { class: 's', type: 'button', title: 'Edit', style: 'margin-top:4px;min-height:34px;padding:4px 10px', onclick: function () { Svc.openRoad(e.id); } }, icon('edit')) : null))));
         })));
         if (data.total > data.entries.length) list.appendChild(h('p', { class: 'hint', text: 'Latest ' + data.entries.length + ' of ' + data.total }));
       }
@@ -6949,7 +7048,7 @@ var ViewFarmer = (function () {
         h('div', { class: 'acts' },
           f.phone_primary ? h('a', { class: 'callbtn', href: 'tel:' + String(f.phone_primary).replace(/[^\d+]/g, '') }, icon('phone'), f.phone_primary) : null,
           phoneDigits ? h('a', { class: 'callbtn chat', href: 'https://wa.me/' + phoneDigits, target: '_blank', rel: 'noopener noreferrer' }, icon('chat'), 'WhatsApp') : null,
-          h('button', { class: 'b', type: 'button', onclick: function () { Nav.open('Record service', { farmer_id: f.farmer_id }); } }, icon('drone'), 'Service'),
+          h('button', { class: 'b', type: 'button', onclick: function () { Nav.open('Services', { tab: 'request', farmer_id: f.farmer_id }); } }, icon('drone'), 'Service'),
           isAdmin ? h('button', { class: 'b ghost', type: 'button', onclick: function () { Nav.open('Register farmer', f.farmer_id); } }, icon('edit'), 'Edit') : null,
           isAdmin && !removed ? h('button', { class: 'b ghost', type: 'button', onclick: function () {
             askConfirm('Remove ' + f.full_name + '?', 'They will disappear from lists. You can restore them here.', 'Remove').then(function (ok) {
@@ -6984,7 +7083,7 @@ var ViewFarmer = (function () {
         softShow(svcBody, function () {
           if (!s.rows.length) { svcBody.appendChild(emptyBox('drone', 'No services')); return; }
           if (s.summary.by_type.length) svcBody.appendChild(h('div', { class: 'chips', style: 'margin:0 0 8px' }, s.summary.by_type.map(function (t) { return h('span', { class: 'chip static', text: t.name + ' × ' + t.services }); })));
-          svcBody.appendChild(ServiceLog.cards(s.rows, { onEdit: function (r) { Nav.open('Record service', { service_id: r.service_id }); } }));
+          svcBody.appendChild(ServiceLog.cards(s.rows, { onEdit: function (r) { Svc.openRoad(r.service_id); } }));
           if (s.total > s.rows.length) svcBody.appendChild(h('p', { class: 'hint', text: 'Latest ' + s.rows.length + ' of ' + s.total }));
         });
       }).catch(function (e) { softShow(svcBody, function () { svcBody.appendChild(h('p', { class: 'hint', text: e.message })); }); });
@@ -7562,15 +7661,14 @@ var Home = (function () {
     numsBox.appendChild(skeletonRow(4, 109));
     var quickHead = h('div', { class: 'secthead', style: 'margin-top:4px' }, 'Quick actions');
     el.appendChild(quickHead);
-    var serviceTile = tile('Record service', 'drone', 'sky', 'Record service');
+    var serviceTile = tile('Services', 'drone', 'sky', 'Services');
     if (role === 'Pilot') serviceTile.classList.add('primary');       // what a pilot does all day stands out
     var launch;
     if (role === 'Pilot') launch = h('div', { class: 'launch three' }, serviceTile, tile('Find farmer', 'search', 'green', 'Find farmer'), tile('New farmer', 'userplus', 'green', 'Register farmer'));
     else launch = h('div', { class: 'launch' },
       tile('Find farmer', 'search', 'green', 'Find farmer'), serviceTile, tile('Reports', 'chart', 'sun', 'Service report'),
       tile('Map', 'globe', 'aqua', 'Earth'), tile('Message', 'megaphone', 'violet', 'Messages'),
-      role === 'Admin' ? tile('New farmer', 'userplus', 'green', 'Register farmer') : null,
-      tile('Service log', 'list', 'sky', 'Service log'));
+      role === 'Admin' ? tile('New farmer', 'userplus', 'green', 'Register farmer') : null);
     el.appendChild(launch);
     // a pilot starts with the things to do; the figures come after
     if (role === 'Pilot') { var rb = el.querySelector('.rangebar'); el.insertBefore(quickHead, rb); el.insertBefore(launch, rb); }
@@ -7636,7 +7734,7 @@ var Home = (function () {
       softFetch(recent, Sync.fast('listRecentServices'), function (rows) {
         if (!rows || !rows.length) return;
         recent.appendChild(h('div', { class: 'secthead' }, 'Latest services'));
-        recent.appendChild(ServiceLog.cards(rows.slice(0, 5), { showFarmer: true, onEdit: function (r) { Nav.open('Record service', { service_id: r.service_id }); } }));
+        recent.appendChild(ServiceLog.cards(rows.slice(0, 5), { showFarmer: true, onEdit: function (r) { Svc.openRoad(r.service_id); } }));
       }, function () { /* the list is optional */ });
     }
 
@@ -7887,315 +7985,844 @@ var ServiceLog = (function () {
     cards: cards, table: table, download: download, isoDaysAgo: isoDaysAgo, today: today };
 })();
 
-// The "Service log" screen: the recorded jobs that match the filters, newest first, as picture cards.
-var ServiceList = (function () {
-  function mount(el) {
-    clear(el);
-    var canSeeAll = Session.user.role !== 'Pilot';
-    var from = h('input', { type: 'date', value: ServiceLog.isoDaysAgo(30) });
-    var to = h('input', { type: 'date' });
-    var status = h('select', {}, h('option', { value: '', text: 'Any status' }));
-    var type = h('select', {}, h('option', { value: '', text: 'Any service' }));
-    var pilot = h('select', {}, h('option', { value: '', text: 'Any pilot' }));
-    var results = h('div');
-    var csvBox = h('div');
-    var chipBar = h('div', { class: 'chipbar seg' });
-    var active = 30;
+</script>
 
-    function filter() {
-      return { from: from.value, to: to.value, status: status.value, service_types: type.value ? [type.value] : [], service_type: type.value, pilot_email: pilot.value, pilots: pilot.value ? [pilot.value] : [] };
-    }
-    function pick(days) { active = days; from.value = days === null ? '' : ServiceLog.isoDaysAgo(days); to.value = days === 0 ? ServiceLog.today() : ''; drawChips(); run(); }
-    // the quick-period buttons are made once; choosing one only changes which is lit
-    var chipButtons = [];
-    var PERIODS = [['Today', 0], ['Week', 6], ['Month', 30], ['All', null]];
-    PERIODS.forEach(function (c) {
-      var b = h('button', { class: 'chip', type: 'button', text: c[0], onclick: function () { pick(c[1]); } });
-      chipButtons.push(b);
-      chipBar.appendChild(b);
+  <script>
+// The Services tab: one place for the four steps of a service (SERVICE_FLOW.md).
+//   Request entry -> Service map -> Operation report -> Payments -> History
+// Svc holds what the sub-screens share: the stages, the list cards, the pop-up with the ROAD of one service (requested, scheduled, completed, paid)
+// and the pop-up box itself. What a person sees depends on their powers (Session.user.powers, see Powers.gs); the server checks the same powers.
+var Svc = (function () {
+  var STAGE = {
+    Requested: { icon: 'clock', color: 'sun', label: 'Requested' }, Scheduled: { icon: 'calendar', color: 'sky', label: 'Scheduled' },
+    Completed: { icon: 'check', color: 'green', label: 'Completed' }, Cancelled: { icon: 'x', color: 'slate', label: 'Cancelled' }
+  };
+  var PAY = { Paid: ['green', 'Paid in full'], 'Partly paid': ['amber', 'Advance paid'], Unpaid: ['red', 'Not paid'], Free: ['slate', 'No charge'] };
+  var optionsPromise = null, optionsAt = 0;
+
+  function can(power) { var p = Session.user && Session.user.powers; return !!(p && p[power]); }
+  function scope(power) { var p = Session.user && Session.user.powers; return (p && p[power]) || ''; }
+  function me() { return String((Session.user && Session.user.email) || '').toLowerCase(); }
+  function day(iso) { return iso ? LandUI.day(iso) : '—'; }
+  function short(iso) { return iso ? ServiceLog.fmtShort(iso) : '—'; }
+  function money(v) { return v === '' || v === null || v === undefined ? '—' : 'Rs ' + Number(v).toLocaleString(); }
+  function options() {
+    if (optionsPromise && Date.now() - optionsAt < 60000) return optionsPromise;
+    optionsAt = Date.now();
+    optionsPromise = Sync.fast('getServiceFlowOptions', [], { strict: true }).catch(function (e) { optionsPromise = null; throw e; });
+    return optionsPromise;
+  }
+  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+  function inDays(n) { return n === null || n === undefined ? '' : (n === 0 ? 'the same day' : plural(n, 'day', 'days')); }
+
+  function stagePill(status) { var s = STAGE[status] || STAGE.Requested; return h('span', { class: 'pill sv-' + status }, icon(s.icon), s.label); }
+  function payPill(c) {
+    if (c.money_hidden || c.status === 'Requested' || c.status === 'Cancelled') return null;
+    var p = PAY[c.payment_status];
+    if (!p) return c.status === 'Completed' ? h('span', { class: 'pill amber' }, icon('cash'), 'Payment not entered') : null;
+    return h('span', { class: 'pill ' + p[0] }, icon('cash'), c.payment_status === 'Partly paid' && c.advance_paid !== 'Yes' ? 'Part paid' : p[1]);
+  }
+  // the promise in words: "Before 5 Dec 2026", "On 1 Dec 2026", "2 Dec 2026 to 5 Dec 2026"
+  function windowText(c) {
+    if (!c.window_to) return '';
+    if (c.exact_day) return 'On ' + day(c.window_to);
+    return c.window_from && c.window_from !== c.window_to ? day(c.window_from) + ' to ' + day(c.window_to) : 'Before ' + day(c.window_to);
+  }
+  // what a card says about time: the promise for a request, the day for a scheduled job, the day it was done
+  function whenText(c) {
+    if (c.status === 'Requested') return (windowText(c) || 'No window') + (c.overdue ? ' · late' : '');
+    if (c.status === 'Scheduled') return 'On ' + day(c.scheduled_date) + (c.overdue ? ' · after the promise' : '');
+    if (c.status === 'Completed') return 'Done ' + day(c.service_date);
+    return 'Recorded ' + day(c.requested_date);
+  }
+  function place(c) { return [c.village, c.ds_division, c.district].filter(function (v, i, a) { return v && a.indexOf(v) === i; }).join(', '); }
+
+  // One service as a list row. opts: { onclick, extra (node placed at the end) }
+  function row(c, opts) {
+    opts = opts || {};
+    var k = ServiceLog.kindOf(c.service_type);
+    return h('div', { class: 'pickrow sv-row' + (c.status === 'Cancelled' ? ' off' : '') + (c.overdue ? ' late' : ''), onclick: opts.onclick || function () { openRoad(c.service_id); } },
+      ico(k.icon, k.color),
+      h('div', { class: 't' }, h('b', { text: c.farmer_name }),
+        h('small', {}, h('span', {}, icon('wheat'), c.land_label), h('span', {}, icon('drone'), (c.service_type || 'Service') + (c.acres ? ' · ' + c.acres + ' ac' : '')),
+          h('span', {}, icon('calendar'), whenText(c)), place(c) ? h('span', {}, icon('pin'), place(c)) : null),
+        h('div', { class: 'ftags' }, stagePill(c.status), payPill(c))),
+      opts.extra || null, h('span', { class: 'fid', text: c.service_id }), h('span', { class: 'go', style: 'color:var(--faint)' }, icon('chevron')));
+  }
+
+  // ---------- a pop-up box ----------
+  function modal(title, body, o) {
+    o = o || {};
+    var bg = h('div', { class: 'modalbg' }), tok = null;
+    function close() { document.removeEventListener('keydown', onKey); if (tok) { var t = tok; tok = null; Back.release(t); } if (bg.parentNode) bg.parentNode.removeChild(bg); if (o.onclose) o.onclose(); }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    var box = h('div', { class: 'modal form sv-modal', role: 'dialog', 'aria-label': title },
+      h('div', { class: 'sv-mhead' }, h('h2', { text: title }), h('button', { class: 'round', type: 'button', title: 'Close', 'aria-label': 'Close', onclick: close }, icon('x'))), body);
+    bg.appendChild(box);
+    bg.addEventListener('click', function (e) { if (e.target === bg) close(); });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(bg);
+    tok = Back.push(function () { tok = null; close(); });
+    return { close: close, box: box };
+  }
+  function lab(text, el, hint) { return h('div', { class: 'lf' }, h('label', { text: text }), el, hint ? h('div', { class: 'hint', text: hint }) : null); }
+  function select(values, current, blank) {
+    return h('select', {}, blank !== undefined ? h('option', { value: '', text: blank }) : null, values.map(function (v) { return h('option', { value: v, text: v, selected: v === current }); }));
+  }
+  function errBox() { return h('p', { class: 'hint sv-err', style: 'display:none' }); }
+  // Runs a save from a pop-up: the button is busy, a message from the server shows inside the box, success runs done().
+  function submit(btn, err, promise, done) {
+    err.style.display = 'none'; setBusy(btn, true);
+    promise().then(function (r) { setBusy(btn, false); done(r); }, function (e) { setBusy(btn, false); err.textContent = e && e.message ? e.message : String(e); err.style.display = 'block'; });
+  }
+  // The server answered a change: wait until the copy on this device has it, then redraw.
+  function changed(p) { return p.then(function (r) { return Sync.settled(8000).then(function () { return r; }); }); }
+
+  // ---------- the road ----------
+  function node(n, last) {
+    var cls = 'sv-node ' + n.state + (n.late ? ' late' : '');
+    var dot = h('span', { class: 'dot' }, n.state === 'done' ? icon('check') : n.state === 'cancelled' ? icon('x') : n.state === 'partial' ? icon('cash') : null);
+    return h('div', { class: cls + (last ? ' last' : '') }, dot,
+      h('div', { class: 'nb' }, h('b', { text: n.label }), h('div', { class: 'nd', text: n.state === 'hidden' ? 'Not shown' : (n.date ? day(n.date) : (n.state === 'next' ? 'Next step' : '—')) }),
+        n.note ? h('div', { class: 'nn', text: n.note }) : null, n.late ? h('div', { class: 'nn warn', text: 'After the promised day' }) : null));
+  }
+  function road(nodes, onNode) {
+    var el = h('div', { class: 'sv-road' });
+    nodes.forEach(function (n, i) {
+      var x = node(n, i === nodes.length - 1);
+      if (onNode && onNode(n)) { x.classList.add('click'); x.setAttribute('role', 'button'); x.setAttribute('tabindex', '0'); x.addEventListener('click', function () { onNode(n, true); }); }
+      el.appendChild(x);
     });
-    function drawChips() { chipButtons.forEach(function (b, i) { b.className = 'chip' + (active === PERIODS[i][1] ? ' on' : ''); }); }
-    function run() {
-      hideMsg();
-      softFetch(results, Sync.fast('listServices', [filter()]), function (d) {
-        if (!d.rows.length) { results.appendChild(emptyBox('list', 'No services')); return; }
-        results.appendChild(ServiceLog.summary(d.summary));
-        var ov = ServiceLog.overview(d);
-        if (ov) results.appendChild(ov);
-        results.appendChild(ServiceLog.cards(d.rows, {
-          showFarmer: true,
-          onEdit: function (r) { Nav.open('Record service', { service_id: r.service_id }); },
-          onOpenFarmer: canSeeAll ? function (r) { Nav.open('View farmer', r.farmer_id); } : null
-        }));
-        if (d.truncated) results.appendChild(h('p', { class: 'hint', text: 'Newest ' + d.rows.length + ' of ' + d.total }));
+    return el;
+  }
+  // The small road used on the history cards: four dots with their days.
+  function miniRoad(c) {
+    function dot(on, label, date, half) { return h('span', { class: 'mr' + (on ? ' on' : '') + (half ? ' half' : '') }, h('i'), h('em', { text: label + (date ? ' ' + short(date) : '') })); }
+    if (c.status === 'Cancelled') return h('div', { class: 'sv-mini' }, dot(true, 'Requested', c.requested_date), dot(false, 'Cancelled', ''));
+    var paid = c.payment_status === 'Paid' || c.payment_status === 'Free';
+    return h('div', { class: 'sv-mini' }, dot(true, 'Requested', c.requested_date), dot(c.status === 'Scheduled' || c.status === 'Completed', 'Scheduled', c.scheduled_date),
+      dot(c.status === 'Completed', 'Done', c.service_date), c.money_hidden ? null : dot(paid, c.payment_status === 'Partly paid' ? 'Advance' : 'Paid', c.paid_on, c.payment_status === 'Partly paid'));
+  }
+  // "Done the same day" / "Done 5 days after the request"
+  function after(what, n, ref) { return what + ' ' + (n === 0 ? 'the same day' : plural(n, 'day', 'days') + ' after ' + ref); }
+  function daysLine(rd) {
+    var d = rd.days, bits = [];
+    if (d.request_to_schedule !== null && d.request_to_schedule !== undefined && rd.card.status !== 'Requested') bits.push(after('Scheduled', d.request_to_schedule, 'the request'));
+    if (d.request_to_done !== null) bits.push(after('Done', d.request_to_done, 'the request'));
+    if (d.done_to_paid !== null) bits.push(after('Paid', d.done_to_paid, 'the job'));
+    if (d.total !== null && d.done_to_paid !== null) bits.push('Whole road: ' + (d.total === 0 ? 'one day' : plural(d.total, 'day', 'days')));
+    if (d.open !== null && d.open !== undefined) bits.push(d.open === 0 ? 'Requested today' : 'Open for ' + plural(d.open, 'day', 'days'));
+    if (d.late_by) bits.push('Done ' + plural(d.late_by, 'day', 'days') + ' after the promised day');
+    return bits.length ? h('div', { class: 'sv-days' }, icon('clock'), bits.join(' · ')) : null;
+  }
+  function kv(pairs) {
+    return h('div', { class: 'kv' }, pairs.filter(function (p) { return p[1] !== undefined && p[1] !== null && p[1] !== ''; }).map(function (p) {
+      return h('div', {}, h('div', { class: 'k', text: p[0] }), h('div', { class: 'v', text: String(p[1]) }));
+    }));
+  }
+
+  // The pop-up of one service: its road, the people and land, the facts of every step done so far, and (with the power) the buttons that change it.
+  // On the map the road only lets a request be scheduled or a day be moved; completion and payment have their own screens.
+  function openRoad(serviceId, onChange) {
+    var body = h('div', {}, loadingBox());
+    var m = modal('Service', body);
+    function changedNow() { if (onChange) onChange(); }
+    Sync.fast('getServiceRoad', [serviceId], { strict: true }).then(function (rd) { clear(body); draw(rd); }).catch(function (e) { clear(body); body.appendChild(h('p', { class: 'hint', text: e.message })); });
+    function draw(rd) {
+      var c = rd.card, d = rd.detail, can = rd.can;
+      var k = ServiceLog.kindOf(c.service_type);
+      body.appendChild(h('div', { class: 'sv-head' }, ico(k.icon, k.color),
+        h('div', { style: 'flex:1;min-width:0' }, h('b', { text: c.farmer_name }), h('div', { class: 'hint', text: (c.service_type || 'Service') + (c.crop ? ' · ' + c.crop : '') + (c.acres ? ' · ' + c.acres + ' ac' : '') }),
+          h('div', { class: 'hint' }, c.land_id ? h('a', { href: '#', onclick: function (e) { e.preventDefault(); m.close(); Nav.open('View land', c.land_id); } }, c.land_label) : c.land_label, place(c) ? ' · ' + place(c) : '')),
+        stagePill(c.status)));
+      var panel = h('div', { class: 'sv-panel', style: 'display:none' });
+      rd.nodes[0].note = windowText(c);
+      var clickable = function (n) { return can.schedule && n.key === 'scheduled'; };
+      body.appendChild(road(rd.nodes, function (n, clicked) { if (!clickable(n)) return false; if (clicked) openSchedule(); return true; }));
+      var dl = daysLine(rd); if (dl) body.appendChild(dl);
+      body.appendChild(panel);
+
+      function openSchedule() {
+        clear(panel); panel.style.display = 'block';
+        var sb = body.querySelector('.sv-act .b'); if (sb && /Choose the day/.test(sb.textContent)) sb.style.display = 'none';
+        var moving = c.status === 'Scheduled';
+        Svc.options().then(function (o) {
+          var date = h('input', { type: 'date', min: o.today, value: moving ? c.scheduled_date : '' });
+          var pilot = select(o.pilots.map(function (p) { return p.email; }), c.pilot_email, 'Not chosen yet');
+          Array.prototype.forEach.call(pilot.options, function (op) { var p = o.pilots.filter(function (x) { return x.email === op.value; })[0]; if (p) op.textContent = p.name; });
+          var base = o.base_stations.length ? select(o.base_stations, c.base_station, 'Not chosen yet') : null;
+          var why = h('input', { type: 'text', maxlength: 120, placeholder: 'For example: rain, farmer not ready' });
+          var err = errBox();
+          var go = h('button', { class: 'b', type: 'button', onclick: function () {
+            submit(go, err, function () { return changed(call('scheduleService', serviceId, date.value, { pilot_email: pilot.value, base_station: base ? base.value : '', note: moving ? why.value : '' })); }, function (r) {
+              showMsg(r.late ? 'Scheduled, after the promised day' : (moving ? 'Day changed' : 'Scheduled'), false); changedNow(); m.close(); openRoad(serviceId, onChange);
+            });
+          } }, icon('calendar'), moving ? 'Move to this day' : 'Schedule');
+          panel.appendChild(h('div', { class: 'lform' }, h('h3', { text: moving ? 'Move to another day' : 'Choose the day' }),
+            h('div', { class: 'two' }, lab(moving ? 'New day' : 'Day', date, windowText(c) ? 'Promised: ' + windowText(c) : ''), lab('Pilot (optional)', pilot)), base ? lab('Base station (optional)', base) : null,
+            moving ? lab('Why is it moved?', why) : null, err, h('div', { class: 'row', style: 'margin-top:12px' }, go)));
+          try { date.focus(); } catch (e) { /* no focus */ }
+        }).catch(function (e) { panel.appendChild(h('p', { class: 'hint', text: e.message })); });
+      }
+      if (can.schedule && c.status === 'Requested') {
+        body.appendChild(h('div', { class: 'sv-act' }, h('button', { class: 'b', type: 'button', onclick: openSchedule }, icon('calendar'), 'Choose the day')));
+      }
+      var acts = h('div', { class: 'sv-act' });
+      if (can.schedule && c.status === 'Scheduled') acts.appendChild(h('button', { class: 'b ghost', type: 'button', onclick: openSchedule }, icon('calendar'), 'Move to another day'));
+      if (can.complete && c.status === 'Scheduled') acts.appendChild(h('button', { class: 'b ghost', type: 'button', onclick: function () { m.close(); Nav.open('Services', { tab: 'ops', service_id: serviceId }); } }, icon('note'), 'Enter completion'));
+      if (can.payment && c.status !== 'Requested' && c.status !== 'Cancelled') acts.appendChild(h('button', { class: 'b ghost', type: 'button', onclick: function () { m.close(); Nav.open('Services', { tab: 'pay', service_id: serviceId }); } }, icon('cash'), 'Enter payment'));
+      if (can.edit_request) acts.appendChild(h('button', { class: 'b ghost', type: 'button', onclick: function () { openEdit(rd); } }, icon('edit'), 'Change the request'));
+      if (can.cancel) acts.appendChild(h('button', { class: 'b ghost', type: 'button', style: 'color:var(--red)', onclick: function () { openCancel(rd); } }, icon('x'), 'Cancel'));
+      if (acts.firstChild) body.appendChild(acts);
+      if (c.status === 'Completed' && !can.complete) body.appendChild(h('p', { class: 'hint', text: 'Completion facts are entered in the Operation report.' }));
+
+      // the facts of each step
+      body.appendChild(h('details', { class: 'fold', open: '' }, h('summary', {}, ico('list', 'slate', 'sm'), 'Details'), h('div', { class: 'foldbody' },
+        kv([['Recorded by', d.requested_by], ['Recorded on', day(d.requested_date)], ['Order came from', d.request_source], ['Promised', windowText(c)], ['Note', d.request_notes], ['Farmer', c.farmer_name + (c.farmer_phone ? ' · ' + c.farmer_phone : '')]]),
+        h('div', { style: 'height:12px' }),
+        c.status === 'Scheduled' || c.status === 'Completed' ? kv([['Scheduled for', day(c.scheduled_date)], ['Scheduled by', d.scheduled_by], ['Pilot', d.pilot_name], ['Base station', d.base_station], ['Why moved', d.schedule_notes]]) : null,
+        c.status === 'Completed' ? h('div', {}, h('div', { style: 'height:12px' }), kv([['Done on', day(d.service_date)], ['Time', d.start_time && d.end_time ? d.start_time + ' to ' + d.end_time : ''], ['Acres sprayed', d.acres_covered], ['Drone', d.drone], ['Tanks', d.tanks],
+          ['Product', d.product_used], ['Quantity (L)', d.quantity_l], ['Weather', d.weather], ['Entered by', d.completed_by], ['Notes', d.notes]])) : null,
+        !c.money_hidden && c.status !== 'Requested' && c.status !== 'Cancelled' ? h('div', {}, h('div', { style: 'height:12px' }), kv([['Total', d.amount_charged !== '' ? money(d.amount_charged) : ''], ['Payment', c.payment_status ? (PAY[c.payment_status] || ['', c.payment_status])[1] : ''],
+          ['Advance', d.advance_paid === 'Yes' ? money(d.advance_amount) + ' on ' + day(d.advance_date) : (d.advance_paid === 'No' ? 'No advance' : '')], ['Paid after', d.final_amount !== '' ? money(d.final_amount) + ' on ' + day(d.final_date) : ''], ['Method', d.payment_method], ['Reference', d.payment_ref]])) : null)));
+    }
+    function openCancel(rd) {
+      var why = h('input', { type: 'text', maxlength: 200, placeholder: 'Why is it cancelled?' }), err = errBox();
+      var go = h('button', { class: 'b danger', type: 'button', onclick: function () {
+        submit(go, err, function () { return changed(call('cancelService', serviceId, why.value)); }, function () { showMsg('Cancelled', false); changedNow(); m.close(); });
+      } }, icon('x'), 'Cancel this service');
+      var sub = modal('Cancel this service', h('div', { class: 'lform' }, h('p', { class: 'hint', text: rd.card.farmer_name + ' · ' + rd.card.land_label }), lab('Reason', why), err, h('div', { class: 'row', style: 'margin-top:14px' }, go)));
+    }
+    function openEdit(rd) {
+      Svc.options().then(function (o) {
+        var c = rd.card, d = rd.detail;
+        var crop = select(o.crops, c.crop, ''), type = select(o.types, c.service_type, ''), acres = h('input', { type: 'number', step: 'any', min: '0', inputmode: 'decimal', value: c.acres });
+        var to = h('input', { type: 'date', min: o.today, value: c.window_to }), exact = h('input', { type: 'checkbox', checked: c.exact_day }), note = h('input', { type: 'text', maxlength: 300, value: d.request_notes || '' }), err = errBox();
+        var go = h('button', { class: 'b', type: 'button', onclick: function () {
+          var patch = { crop: crop.value, service_type: type.value, acres: acres.value, notes: note.value };
+          if (exact.checked) { patch.exact_day = to.value; patch.window_to = ''; patch.window_from = ''; } else { patch.window_to = to.value; patch.exact_day = ''; }
+          submit(go, err, function () { return changed(call('updateServiceRequest', serviceId, patch)); }, function () { showMsg('Saved', false); changedNow(); sub.close(); m.close(); openRoad(serviceId, onChange); });
+        } }, icon('check'), 'Save');
+        var sub = modal('Change the request', h('div', { class: 'lform' }, h('div', { class: 'two' }, lab('Crop', crop), lab('Service', type)), h('div', { class: 'two' }, lab('Acres', acres), lab(exact.checked ? 'Exact day' : 'Before this day', to)),
+          h('label', { class: 'sv-check' }, exact, ' This is an exact day, not "before"'), lab('Note', note), err, h('div', { class: 'row', style: 'margin-top:14px' }, go)));
       });
     }
-    function exportCsv(btn) {
-      setBusy(btn, true);
-      call('exportServices', filter()).then(function (r) {
-        setBusy(btn, false);
-        ServiceLog.download('services.csv', r.csv);
-        showMsg(r.count + ' rows', false);
-        softShow(csvBox, function () { csvBox.appendChild(h('details', {}, h('summary', { text: 'Show the text to copy' }), h('textarea', { class: 'csvtext', readonly: true, value: r.csv }))); });
-      }).catch(function (e) { setBusy(btn, false); showMsg(e.message, true); });
+    return m;
+  }
+
+  return { STAGE: STAGE, PAY: PAY, can: can, scope: scope, me: me, day: day, short: short, money: money, options: options, plural: plural, inDays: inDays, stagePill: stagePill, payPill: payPill, whenText: whenText, windowText: windowText, place: place,
+    row: row, modal: modal, lab: lab, select: select, errBox: errBox, submit: submit, changed: changed, road: road, miniRoad: miniRoad, daysLine: daysLine, kv: kv, openRoad: openRoad };
+})();
+
+// ---------- the Services tab: five sub-tabs ----------
+var ServiceHub = (function () {
+  var TABS = [
+    { key: 'request', label: 'Request entry', icon: 'plus', power: 'service.request', mod: function () { return SvcRequest; } },
+    { key: 'map', label: 'Service map', icon: 'globe', power: 'service.view', mod: function () { return SvcMap; } },
+    { key: 'ops', label: 'Operation report', icon: 'note', power: 'service.complete', mod: function () { return SvcOps; } },
+    { key: 'pay', label: 'Payments', icon: 'cash', power: 'service.payment', mod: function () { return SvcPay; } },
+    { key: 'history', label: 'History', icon: 'clock', power: 'service.view', mod: function () { return SvcHistory; } }
+  ];
+  var last = '';
+  var current = null;
+  function mount(el, arg) {
+    clear(el);
+    el.classList.add('sv-hub');
+    var mine = TABS.filter(function (t) { return Svc.can(t.power); });
+    if (!mine.length) { el.appendChild(h('div', { class: 'card' }, emptyBox('drone', 'Nothing to show', 'Your account has no powers for the service screens.'))); return; }
+    var want = (arg && arg.tab) || last || mine[0].key;
+    if (!mine.some(function (t) { return t.key === want; })) want = mine[0].key;
+    var bar = h('div', { class: 'chipbar seg sv-tabs', role: 'tablist' });
+    var body = h('div', { class: 'sv-body' });
+    var btns = {};
+    function show(key, a) {
+      last = key;
+      if (current && current.destroy) { try { current.destroy(); } catch (e) { /* the old screen is gone */ } }
+      current = null;
+      Object.keys(btns).forEach(function (k) { btns[k].className = 'chip' + (k === key ? ' on' : ''); btns[k].setAttribute('aria-selected', k === key ? 'true' : 'false'); });
+      clear(body);
+      var t = mine.filter(function (x) { return x.key === key; })[0];
+      current = t.mod().mount(body, a || {}) || null;
     }
-    function field(label, control) { return h('div', { class: 'fld' }, h('label', { class: 'f', text: label }), control); }
-
-    var csvBtn = canSeeAll ? h('button', { class: 's', type: 'button', onclick: function () { exportCsv(csvBtn); } }, icon('download'), 'CSV') : null;
-    el.appendChild(h('div', { style: 'display:flex;gap:10px;align-items:center;flex-wrap:wrap' }, chipBar, csvBtn));
-    el.appendChild(h('details', { class: 'fold' }, h('summary', {}, ico('filter', 'slate', 'sm'), 'Filters'),
-      h('div', { class: 'foldbody' }, h('div', { class: 'filterbar' }, field('From', from), field('To', to), field('Status', status), field('Service', type), canSeeAll ? field('Pilot', pilot) : null,
-        h('div', { class: 'fld', style: 'align-self:end' }, h('button', { class: 'b', type: 'button', onclick: function () { active = -1; drawChips(); run(); } }, icon('check'), 'Show'))))));
-    el.appendChild(csvBox);
-    el.appendChild(results);
-    drawChips();
-    softLoad(results);          // the list area shows its spinner from the start (after a short delay), not a blank gap
-
-    Sync.fast('getServiceOptions', [], { strict: true }).then(function (o) {
-      o.statuses.forEach(function (s) { status.appendChild(h('option', { value: s, text: s })); });
-      o.service_types.forEach(function (s) { type.appendChild(h('option', { value: s, text: s })); });
-      o.pilots.forEach(function (p) { pilot.appendChild(h('option', { value: p.email, text: p.name })); });
-      run();
-    }).catch(function (e) { softCancel(results); showMsg(e.message, true); });
+    mine.forEach(function (t) { btns[t.key] = h('button', { class: 'chip', type: 'button', role: 'tab', onclick: function () { if (last !== t.key) show(t.key); } }, icon(t.icon), h('span', { text: t.label })); bar.appendChild(btns[t.key]); });
+    el.appendChild(bar);
+    el.appendChild(body);
+    show(want, arg);
   }
   return { mount: mount };
 })();
 </script>
 
   <script>
-// "Record service": the page a drone pilot uses after each job. Pick the farmer, tap what was done, how many acres, when, how it went, save.
-// Selectable cards instead of long lists. Managers and admins use it too (they also choose the pilot).
-// Opened with { farmer_id } to start from a farmer, or { service_id } to correct a record.
-var ServiceEntry = (function () {
-  var LAST_KEY = 'caft_last_service';
-  function loadLast() { try { return JSON.parse(window.localStorage.getItem(LAST_KEY) || '{}') || {}; } catch (e) { return {}; } }
-  function saveLast(o) { try { window.localStorage.setItem(LAST_KEY, JSON.stringify(o)); } catch (e) { /* remembering is optional */ } }
-
-  function section(iconName, color, title, body, extra) {
-    return h('div', { class: 'card', style: extra || null }, h('div', { class: 'cardhead' }, h('h2', {}, ico(iconName, color, 'sm'), title)), body);
-  }
-  function field(label, control) { return h('div', { class: 'fld' }, h('label', { class: 'f', text: label }), control); }
-  function select(values, placeholder, current) {
-    var s = h('select', {}, placeholder ? h('option', { value: '', text: placeholder }) : null);
-    values.forEach(function (v) {
-      var val = typeof v === 'string' ? v : v.value, lab = typeof v === 'string' ? v : v.label;
-      s.appendChild(h('option', { value: val, text: lab }));
-    });
-    if (current !== undefined && current !== null) s.value = current;
-    return s;
-  }
-  function minutesOf(t) { return Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)); }
-  function hhmm(d) { return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); }
+// Step 1 of a service: the REQUEST. Find the farmer, tick the lands that need a service, say which service and what the crop is, and give the day
+// CAFT promises (before a day, or an exact day). One request can name several lands: each becomes its own service.
+var SvcRequest = (function () {
+  function plus(n) { var d = new Date(Date.now() + 330 * 60000 + n * 86400000); return d.toISOString().slice(0, 10); }
 
   function mount(el, arg) {
-    clear(el);
-    el.classList.add('narrow');
-    arg = arg || {};
-    var opts = null;
-    var stamp = 0;                       // a screen that finishes loading late must not draw over a newer one
-    var body = h('div');
-    el.appendChild(body);
-    body.appendChild(loadingBox());
+    var S = { o: null, farmer: null, lands: [], picks: {} };
+    var farmerBox = h('div'), landsBox = h('div'), sendBox = h('div'), doneBox = h('div');
+    el.appendChild(h('div', { class: 'sv-intro' }, h('h2', { text: 'Record a service request' }), h('p', { class: 'hint', text: 'Find the farmer, choose the land and the service, and give the day CAFT promises.' })));
+    el.appendChild(farmerBox); el.appendChild(landsBox); el.appendChild(sendBox); el.appendChild(doneBox);
 
-    Sync.fast('getServiceOptions', [], { strict: true }).then(function (o) {
-      opts = o;
-      if (arg.service_id) return Sync.fast('getService', [arg.service_id], { strict: true }).then(function (r) { return Sync.fast('getFarmerServices', [r.farmer.farmer_id], { strict: true }).then(function (h2) { showForm(h2, r.service); }); });
-      if (arg.farmer_id) return openFarmer(arg.farmer_id);
-      showSearch();
-    }).catch(function (e) { softCancel(body); showMsg(e.message, true); });
+    Svc.options().then(function (o) { S.o = o; drawFarmer(); if (arg && arg.farmer_id) preselect(arg.farmer_id); }).catch(function (e) { farmerBox.appendChild(h('p', { class: 'hint', text: e.message })); });
 
-    function openFarmer(id) {
-      var my = ++stamp;
-      softLoad(body);
-      return Sync.fast('getFarmerServices', [id], { strict: true }).then(function (d) { if (my === stamp) showForm(d, null); }).catch(function (e) { if (my === stamp) { showSearch(); showMsg(e.message, true); } });
+    function preselect(id) { Sync.find(id, { limit: 5, activeOnly: true, server: 'findFarmersForService' }).then(function (rows) { var f = rows.filter(function (r) { return r.farmer_id === id; })[0]; if (f) choose(f); }).catch(function () {}); }
+
+    // ----- 1. the farmer -----
+    function drawFarmer() {
+      clear(farmerBox);
+      var card = h('div', { class: 'card sv-step' }, h('div', { class: 'cardhead' }, h('h2', {}, h('span', { class: 'sv-n', text: '1' }), 'Farmer')));
+      if (S.farmer) {
+        var f = S.farmer;
+        card.appendChild(h('div', { class: 'sv-chosen' }, h('span', { class: 'avatar md', text: initials(f.full_name) }),
+          h('div', { class: 't' }, h('b', { text: f.full_name }), h('small', { text: [f.farmer_id, f.phone_primary, [f.village, f.ds_division].filter(Boolean).join(', ')].filter(Boolean).join(' · ') })),
+          h('button', { class: 'b ghost', type: 'button', onclick: function () { S.farmer = null; S.lands = []; S.picks = {}; clear(landsBox); clear(sendBox); clear(doneBox); drawFarmer(); } }, icon('undo'), 'Change')));
+        card.appendChild(openOnes);
+      } else {
+        var input = h('input', { type: 'text', placeholder: 'Name, phone number, farmer ID or village', maxlength: 60, autocomplete: 'off' });
+        var list = h('div', { style: 'margin-top:8px' });
+        var timer = null;
+        input.addEventListener('input', function () {
+          clearTimeout(timer);
+          timer = setTimeout(function () {
+            var q = input.value.trim(); clear(list);
+            if (q.length < 2) return;
+            Sync.find(q, { limit: 8, activeOnly: true, server: 'findFarmersForService' }).then(function (rows) {
+              clear(list);
+              if (!rows.length) { list.appendChild(h('p', { class: 'hint', text: 'No farmer found. Check the spelling or try the phone number.' })); return; }
+              rows.forEach(function (r) {
+                list.appendChild(h('div', { class: 'pickrow', onclick: function () { choose(r); } }, h('span', { class: 'avatar md', text: initials(r.full_name) }),
+                  h('div', { class: 't' }, h('b', { text: r.full_name }), h('small', {}, h('span', { text: r.farmer_id }), r.phone_primary ? h('span', {}, icon('phone'), r.phone_primary) : null,
+                    (r.village || r.ds_division) ? h('span', {}, icon('pin'), [r.village, r.ds_division].filter(Boolean).join(', ')) : null)),
+                  h('span', { class: 'go', style: 'color:var(--faint)' }, icon('chevron'))));
+              });
+            }).catch(function (e) { list.appendChild(h('p', { class: 'hint', text: e.message })); });
+          }, 160);
+        });
+        card.appendChild(h('div', { class: 'searchbox' }, icon('search'), input)); card.appendChild(list);
+        setTimeout(function () { try { input.focus({ preventScroll: true }); } catch (e) { input.focus(); } }, 50);
+      }
+      farmerBox.appendChild(card);
+    }
+    var openOnes = h('div', { class: 'sv-open' });
+
+    function choose(f) {
+      S.farmer = f; S.picks = {}; clear(doneBox); clear(openOnes);
+      drawFarmer();
+      // requests that are already open for this farmer, so the same service is not recorded twice
+      call('listServiceFlow', { farmer_id: f.farmer_id, stage: 'Active', limit: 8 }).then(function (d) {
+        if (S.farmer !== f || !d.rows.length) return;
+        openOnes.appendChild(h('div', { class: 'hint', style: 'margin:12px 0 6px', text: 'Open for this farmer (' + d.total + ')' }));
+        d.rows.forEach(function (c) { openOnes.appendChild(Svc.row(c)); });
+      }).catch(function () {});
+      clear(landsBox);
+      landsBox.appendChild(h('div', { class: 'card' }, loadingBox()));
+      Sync.fast('getFarmerLands', [f.farmer_id]).then(function (d) { if (S.farmer !== f) return; S.lands = d.current; drawLands(); }).catch(function (e) { clear(landsBox); landsBox.appendChild(h('div', { class: 'card' }, h('p', { class: 'hint', text: e.message }))); });
     }
 
-    // ---------- step 1: pick the farmer ----------
-    function showSearch() { stamp++; softShow(body, buildSearch, { fade: true }); }
-    function buildSearch() {
-      var results = h('div', {}, emptyBox('search', 'Who was it for?'));
-      var input = h('input', { type: 'text', placeholder: 'Name, phone, village or ID', maxlength: 60, autocomplete: 'off', onkeydown: function (e) { if (e.key === 'Enter') go(); } });
-      var btn = h('button', { class: 'b big', type: 'button', onclick: go }, icon('search'), h('span', { class: 'hidesm', text: 'Search' }));
-      function go() {
-        hideMsg(); setBusy(btn, true);
-        softFetch(results, Sync.find(input.value, { limit: 30, activeOnly: true, server: 'findFarmersForService' }), function (rows) {
-          setBusy(btn, false);
-          if (!rows.length) { results.appendChild(emptyBox('search', 'No farmers found')); return; }
-          rows.forEach(function (r) {
-            results.appendChild(h('div', { class: 'pickrow', onclick: function () { openFarmer(r.farmer_id); } },
-              h('span', { class: 'avatar md', text: initials(r.full_name) }),
-              h('div', { class: 't' }, h('b', { text: r.full_name }),
-                h('small', {}, h('span', {}, icon('pin'), [r.village, r.ds_division].filter(Boolean).join(', ') || r.district), r.phone_primary ? h('span', {}, icon('phone'), r.phone_primary) : null)),
-              h('span', { style: 'color:var(--faint)' }, icon('chevron'))));
+    // ----- 2. the lands -----
+    function drawLands() {
+      clear(landsBox); clear(sendBox);
+      var card = h('div', { class: 'card sv-step' }, h('div', { class: 'cardhead' }, h('h2', {}, h('span', { class: 'sv-n', text: '2' }), 'Land and service')));
+      if (!S.lands.length) {
+        card.appendChild(emptyBox('wheat', 'This farmer has no land yet', 'A service is tied to a land. Add the land on the farmer\'s profile first.'));
+        card.appendChild(h('div', { style: 'text-align:center' }, h('button', { class: 'b', type: 'button', onclick: function () { Nav.openFarmer(S.farmer.farmer_id); } }, icon('user'), 'Open the farmer')));
+        landsBox.appendChild(card); return;
+      }
+      card.appendChild(h('p', { class: 'hint', text: S.lands.length === 1 ? 'This farmer has one land.' : 'Tick every land that needs a service.' }));
+      S.lands.forEach(function (l) { card.appendChild(landBlock(l)); });
+      landsBox.appendChild(card);
+      drawSend();
+    }
+
+    function landBlock(l) {
+      var o = S.o;
+      var on = S.lands.length === 1;
+      var chk = h('input', { type: 'checkbox', checked: on, 'aria-label': 'Choose this land' });
+      var body = h('div', { class: 'sv-land-body', style: on ? '' : 'display:none' });
+      var title = (l.land_name || l.tank || l.village || l.land_id) + ' · ' + l.acres + ' ac';
+      var head = h('label', { class: 'sv-land-head' }, chk, ico('wheat', 'green', 'sm'), h('div', { class: 't' }, h('b', { text: title }), h('small', { text: [l.land_id, l.crop, l.village, l.tank].filter(Boolean).join(' · ') })));
+      var crop = Svc.select(o.crops, o.crops.indexOf(l.crop) !== -1 ? l.crop : '', 'Choose the crop');
+      var type = Svc.select(o.types, '', 'Choose the service');
+      var acres = h('input', { type: 'number', step: 'any', min: '0', inputmode: 'decimal', value: l.acres });
+      var mode = 'before';
+      var when = h('input', { type: 'date', min: o.today });
+      var from = h('input', { type: 'date', min: o.today });
+      var whenLab = h('label', { text: 'Before this day' });
+      var fromRow = h('div', { class: 'lf' }, h('label', { text: 'From (optional)' }), from);
+      var segBtns = {};
+      function setMode(m) { mode = m; segBtns.before.className = 'chip' + (m === 'before' ? ' on' : ''); segBtns.exact.className = 'chip' + (m === 'exact' ? ' on' : ''); whenLab.textContent = m === 'exact' ? 'Exact day' : 'CAFT promises to do it before'; fromRow.style.display = m === 'exact' ? 'none' : ''; }
+      segBtns.before = h('button', { class: 'chip', type: 'button', text: 'Before a day', onclick: function () { setMode('before'); } });
+      segBtns.exact = h('button', { class: 'chip', type: 'button', text: 'Exact day', onclick: function () { setMode('exact'); } });
+      var quick = h('div', { class: 'chips', style: 'margin-top:6px' }, [['In 1 week', 7], ['In 2 weeks', 14], ['In 1 month', 30]].map(function (q) { return h('button', { class: 'chip', type: 'button', text: q[0], onclick: function () { when.value = plus(q[1]); } }); }));
+      body.appendChild(h('div', { class: 'lform' }, h('div', { class: 'two' }, Svc.lab('Crop on this land', crop), Svc.lab('Service wanted', type)),
+        h('div', { class: 'two' }, Svc.lab('Acres to do', acres), h('div', { class: 'lf' }, h('label', { text: 'The promise' }), h('div', { class: 'chipbar seg' }, segBtns.before, segBtns.exact))),
+        h('div', { class: 'lf' }, whenLab, when, quick), fromRow));
+      setMode('before');
+      chk.addEventListener('change', function () { body.style.display = chk.checked ? '' : 'none'; head.parentNode.classList.toggle('on', chk.checked); updateCount(); });
+      var wrap = h('div', { class: 'sv-land' + (on ? ' on' : '') }, head, body);
+      S.picks[l.land_id] = { on: function () { return chk.checked; }, title: title, get: function () {
+        var it = { land_id: l.land_id, crop: crop.value, service_type: type.value, acres: acres.value };
+        if (mode === 'exact') it.exact_day = when.value; else { it.window_to = when.value; it.window_from = from.value; }
+        return it;
+      } };
+      return wrap;
+    }
+
+    // ----- 3. details and send -----
+    var sendBtn = null, count = h('span');
+    function updateCount() { var n = Object.keys(S.picks).filter(function (k) { return S.picks[k].on(); }).length; if (sendBtn) { sendBtn.disabled = n === 0; count.textContent = n ? (n === 1 ? 'Record 1 request' : 'Record ' + n + ' requests') : 'Choose a land'; } }
+    function drawSend() {
+      var o = S.o;
+      var source = Svc.select(o.sources, 'Field officer'), note = h('textarea', { maxlength: 300, style: 'min-height:64px', placeholder: 'Anything the planner should know (optional)' }), err = Svc.errBox();
+      sendBtn = h('button', { class: 'b big', type: 'button', onclick: function () {
+        var items = Object.keys(S.picks).filter(function (k) { return S.picks[k].on(); }).map(function (k) { return S.picks[k].get(); });
+        Svc.submit(sendBtn, err, function () { return Svc.changed(call('createServiceRequest', { farmer_id: S.farmer.farmer_id, source: source.value, notes: note.value, items: items })); }, success);
+      } }, icon('check'), count);
+      sendBox.appendChild(h('div', { class: 'card sv-step' }, h('div', { class: 'cardhead' }, h('h2', {}, h('span', { class: 'sv-n', text: '3' }), 'Order details')),
+        h('div', { class: 'lform' }, h('div', { class: 'two' }, Svc.lab('Where did the order come from?', source), Svc.lab('Recorded by', h('input', { type: 'text', value: o.me.name + ' · ' + Svc.day(o.today), disabled: true }))),
+          Svc.lab('Note', note), err, h('div', { class: 'row', style: 'margin-top:14px;justify-content:flex-end' }, sendBtn))));
+      updateCount();
+    }
+
+    function success(r) {
+      var f = S.farmer;
+      clear(landsBox); clear(sendBox); clear(farmerBox); clear(doneBox);
+      var box = h('div', { class: 'card sv-done' }, ico('check', 'green'), h('h2', { text: r.service_ids.length === 1 ? 'Request recorded' : r.service_ids.length + ' requests recorded' }),
+        h('p', { class: 'hint', text: f.full_name + ' · ' + r.request_group }), h('div', { class: 'sv-donelist' }));
+      doneBox.appendChild(box);
+      call('listServiceFlow', { farmer_id: f.farmer_id, stage: 'Requested', limit: 30 }).then(function (d) {
+        d.rows.filter(function (c) { return r.service_ids.indexOf(c.service_id) !== -1; }).forEach(function (c) { box.querySelector('.sv-donelist').appendChild(Svc.row(c)); });
+      }).catch(function () {});
+      box.appendChild(h('div', { class: 'row', style: 'margin-top:16px;justify-content:center;gap:10px;flex-wrap:wrap' },
+        h('button', { class: 'b', type: 'button', onclick: function () { Nav.open('Services', { tab: 'request' }); } }, icon('plus'), 'Record another'),
+        Svc.can('service.view') ? h('button', { class: 'b ghost', type: 'button', onclick: function () { Nav.open('Services', { tab: 'map' }); } }, icon('globe'), 'See the requests on the map') : null,
+        h('button', { class: 'b ghost', type: 'button', onclick: function () { Nav.openFarmer(f.farmer_id); } }, icon('user'), 'Open the farmer')));
+    }
+  }
+  return { mount: mount };
+})();
+</script>
+
+  <script>
+// The Service map: Sri Lanka with the services of one stage (Requested / Scheduled / Completed) for a time period, a district and a kind of service.
+// Districts are shaded by how many services they hold and every service with a known place is a pin; below the map is the list of exactly what the
+// map shows. A row or a pin opens the road of that service. Nothing is completed or paid here: that is done in the Operation report and Payments.
+var SvcMap = (function () {
+  var LIB_JS = 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js';
+  var LIB_CSS = 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css';
+  var LIGHT = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+  var RAMP = ['#d9efe3', '#a9dcc3', '#63bc98', '#26926f', '#0a5c44'];
+  var COLOR = { Requested: '#f59e0b', Scheduled: '#0ea5e9', Completed: '#16a34a' };
+  var libPromise = null, memo = { stage: 'Requested', period: 'all', from: '', to: '', district: '', type: '' };
+
+  function loadLib() {
+    if (window.maplibregl) return Promise.resolve();
+    if (libPromise) return libPromise;
+    libPromise = new Promise(function (resolve, reject) {
+      var css = document.createElement('link'); css.rel = 'stylesheet'; css.href = LIB_CSS; document.head.appendChild(css);
+      var s = document.createElement('script'); s.src = LIB_JS; s.onload = resolve;
+      s.onerror = function () { libPromise = null; reject(new Error('The map could not be loaded. Check the internet connection.')); };
+      document.head.appendChild(s);
+    });
+    return libPromise;
+  }
+  function hasWebGL() { try { var c = document.createElement('canvas'); return !!(window.WebGLRenderingContext && (c.getContext('webgl') || c.getContext('experimental-webgl'))); } catch (e) { return false; } }
+  function key(s) { return String(s || '').toLowerCase().replace(/[^a-z]/g, ''); }
+  function iso(d) { return d.toISOString().slice(0, 10); }
+  function now() { return new Date(Date.now() + 330 * 60000); }
+  function addDays(n) { return iso(new Date(now().getTime() + n * 86400000)); }
+
+  // the days a period means for a stage: requests and scheduled jobs "within N days" (late ones included), completed jobs "in the last N days"
+  function periodRange(stage, p) {
+    var t = now();
+    if (p === 'all') return { from: '', to: '' };
+    if (p === 'month') { var a = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 1)), b = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)); return { from: iso(a), to: iso(b) }; }
+    var n = Number(p);
+    return stage === 'Completed' ? { from: addDays(-n), to: addDays(0) } : { from: '', to: addDays(n) };
+  }
+
+  function mount(el, arg) {
+    var S = { map: null, geo: null, ready: false, gen: 0, dead: false, data: null, counts: {} };
+    var f = memo;
+    var filters = h('div', { class: 'card sv-filters lform' }), mapCard = h('div', { class: 'card flush sv-mapcard' }), mapBox = h('div', { class: 'sv-map' }), nums = h('div'), listBox = h('div');
+    mapCard.appendChild(mapBox);
+    el.appendChild(filters); el.appendChild(mapCard); el.appendChild(nums); el.appendChild(listBox);
+
+    var distSel = h('select'), typeSel = h('select'), fromIn = h('input', { type: 'date' }), toIn = h('input', { type: 'date' }), custom = h('div', { class: 'sv-custom', style: 'display:none' });
+    var stageBtns = {}, periodBtns = {};
+    function paint() {
+      Object.keys(stageBtns).forEach(function (k) { stageBtns[k].className = 'chip' + (f.stage === k ? ' on' : ''); });
+      Object.keys(periodBtns).forEach(function (k) { periodBtns[k].className = 'chip' + (f.period === k ? ' on' : ''); });
+      custom.style.display = f.period === 'custom' ? '' : 'none';
+    }
+    function range() { return f.period === 'custom' ? { from: f.from, to: f.to } : periodRange(f.stage, f.period); }
+    function go() { paint(); load(); }
+    [['Requested', 'Requests'], ['Scheduled', 'Scheduled'], ['Completed', 'Completed']].forEach(function (s) {
+      stageBtns[s[0]] = h('button', { class: 'chip', type: 'button', onclick: function () { f.stage = s[0]; go(); } }, h('i', { class: 'dotc', style: 'background:' + COLOR[s[0]] }), s[1]);
+    });
+    [['all', 'All time'], ['7', f.stage === 'Completed' ? 'Last 7 days' : 'Within 7 days'], ['30', f.stage === 'Completed' ? 'Last 30 days' : 'Within 30 days'], ['month', 'This month'], ['custom', 'Choose days']].forEach(function (p) {
+      periodBtns[p[0]] = h('button', { class: 'chip', type: 'button', text: p[1], onclick: function () { f.period = p[0]; relabel(); go(); } });
+    });
+    function relabel() { periodBtns['7'].textContent = f.stage === 'Completed' ? 'Last 7 days' : 'Within 7 days'; periodBtns['30'].textContent = f.stage === 'Completed' ? 'Last 30 days' : 'Within 30 days'; }
+    Object.keys(stageBtns).forEach(function (k) { stageBtns[k].addEventListener('click', relabel); });
+    distSel.addEventListener('change', function () { f.district = distSel.value; go(); });
+    typeSel.addEventListener('change', function () { f.type = typeSel.value; go(); });
+    fromIn.addEventListener('change', function () { f.from = fromIn.value; if (f.to || !f.from) go(); }); toIn.addEventListener('change', function () { f.to = toIn.value; go(); });
+    custom.appendChild(h('div', { class: 'two' }, Svc.lab('From', fromIn), Svc.lab('To', toIn)));
+    filters.appendChild(h('div', { class: 'sv-frow' }, h('div', { class: 'chipbar seg' }, Object.keys(stageBtns).map(function (k) { return stageBtns[k]; }))));
+    filters.appendChild(h('div', { class: 'sv-frow' }, h('div', { class: 'chipbar' }, Object.keys(periodBtns).map(function (k) { return periodBtns[k]; })), custom));
+    filters.appendChild(h('div', { class: 'two sv-frow' }, Svc.lab('District', distSel), Svc.lab('Kind of service', typeSel)));
+    fromIn.value = f.from; toIn.value = f.to; relabel(); paint();
+
+    Svc.options().then(function (o) {
+      clear(typeSel); typeSel.appendChild(h('option', { value: '', text: 'All kinds' })); o.types.forEach(function (t) { typeSel.appendChild(h('option', { value: t, text: t, selected: t === f.type })); });
+    });
+
+    // ----- the map -----
+    function startMap() {
+      if (!hasWebGL()) { mapBox.appendChild(emptyBox('globe', 'This device cannot show the map', 'The list below still works.')); return Promise.resolve(); }
+      mapBox.appendChild(loadingBox('Loading the map…'));
+      return Promise.all([loadLib(), Sync.fast('getEarthGeo', [], { strict: true })]).then(function (r) {
+        if (S.dead) return;
+        S.geo = JSON.parse(r[1].districts);
+        clear(mapBox);
+        var map = new maplibregl.Map({ container: mapBox, bounds: [[79.55, 5.8], [82.05, 10.0]], fitBoundsOptions: { padding: 8 }, minZoom: 5, maxZoom: 14, attributionControl: false,
+          style: { version: 8, sources: { light: { type: 'raster', tiles: [LIGHT], tileSize: 256, maxzoom: 16 } }, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#e9eef2' } }, { id: 'light', type: 'raster', source: 'light' }] } });
+        S.map = map;
+        map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+        map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: ['Basemap © Esri', 'Boundaries: Survey Department of Sri Lanka via geoBoundaries'] }));
+        map.on('load', function () {
+          S.geo.features.forEach(function (ft) { ft.properties.v = 0; });
+          map.addSource('dist', { type: 'geojson', data: S.geo });
+          map.addSource('pts', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+          map.addLayer({ id: 'dist-fill', type: 'fill', source: 'dist', paint: { 'fill-color': '#cfd8d3', 'fill-opacity': 0.35 } });
+          map.addLayer({ id: 'dist-line', type: 'line', source: 'dist', paint: { 'line-color': '#ffffff', 'line-width': 1.1, 'line-opacity': 0.9 } });
+          map.addLayer({ id: 'dist-sel', type: 'line', source: 'dist', filter: ['==', ['get', 'n'], ''], paint: { 'line-color': '#f5b83d', 'line-width': 3 } });
+          map.addLayer({ id: 'pts', type: 'circle', source: 'pts', paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 3.5, 9, 7, 12, 10], 'circle-color': ['match', ['get', 'status'], 'Requested', COLOR.Requested, 'Scheduled', COLOR.Scheduled, 'Completed', COLOR.Completed, '#94a3b8'],
+            'circle-stroke-width': 1.6, 'circle-stroke-color': ['case', ['get', 'overdue'], '#dc2626', '#ffffff'], 'circle-opacity': 0.92 } });
+          S.ready = true;
+          map.on('mouseenter', 'pts', function () { map.getCanvas().style.cursor = 'pointer'; }); map.on('mouseleave', 'pts', function () { map.getCanvas().style.cursor = ''; });
+          map.on('click', function (e) {
+            var hit = map.queryRenderedFeatures(e.point, { layers: ['pts'] });
+            if (hit.length) { Svc.openRoad(hit[0].properties.id, load); return; }
+            var d = map.queryRenderedFeatures(e.point, { layers: ['dist-fill'] });
+            if (d.length) { var n = d[0].properties.n; f.district = f.district === n ? '' : n; distSel.value = f.district; go(); }
           });
-        }, function (e) { setBusy(btn, false); showMsg(e.message, true); });
-      }
-      body.appendChild(h('div', { class: 'searchrow' }, h('div', { class: 'searchbox' }, icon('search'), input), btn));
-      body.appendChild(results);
-      var recent = h('div');
-      body.appendChild(recent);
-      softFetch(recent, Sync.fast('listRecentServices'), function (rows) {
-        if (!rows.length) return;
-        recent.appendChild(h('div', { class: 'secthead' }, ico('clock', 'sky', 'sm'), 'Latest'));
-        recent.appendChild(ServiceLog.cards(rows, { showFarmer: true, onEdit: function (r) { Nav.open('Record service', { service_id: r.service_id }); } }));
-      }, function () { /* the list is optional */ });
-      try { input.focus({ preventScroll: true }); } catch (e) { input.focus(); }
+          if (S.data) draw();
+          // the district list for the choice box
+          var names = S.geo.features.map(function (ft) { return ft.properties.n; }).sort();
+          clear(distSel); distSel.appendChild(h('option', { value: '', text: 'All districts' })); names.forEach(function (n) { distSel.appendChild(h('option', { value: n, text: n, selected: n === f.district })); });
+        });
+      }).catch(function (e) { clear(mapBox); mapBox.appendChild(emptyBox('globe', 'The map could not be shown', e.message)); });
     }
 
-    // ---------- step 2: the job ----------
-    function showForm(d, rec) { stamp++; softShow(body, function () { buildForm(d, rec); }, { fade: true }); }
-    function buildForm(d, rec) {
-      var f = d.farmer;
-      var editing = !!rec;
-      var last = loadLast();
-      var isPilot = opts.me.role === 'Pilot';
-      var done = rec ? rec.status === 'Completed' : true;
-
-      // --- the choices
-      var statusPick = tilePicker(opts.statuses.filter(function (s) { return editing || s !== 'Cancelled'; }).map(function (s) {
-        return { value: s, label: s, icon: { Completed: 'check', Scheduled: 'calendar', Requested: 'clock', Cancelled: 'x' }[s], color: { Completed: 'green', Scheduled: 'sky', Requested: 'sun', Cancelled: 'red' }[s] };
-      }), rec ? rec.status : 'Completed', function () { sync(); }, { small: true });
-
-      var typeDefault = rec ? rec.service_type : (opts.service_types.indexOf(last.type) !== -1 ? last.type : (opts.service_types.length === 1 ? opts.service_types[0] : ''));
-      var typePick = tilePicker(opts.service_types.map(function (t) { var k = ServiceLog.kindOf(t); return { value: t, label: t, icon: k.icon, color: k.color }; }), typeDefault);
-
-      var cropDefault = rec ? rec.crop : (f.crops.filter(function (c) { return opts.crops.indexOf(c) !== -1; })[0] || (opts.crops.indexOf('Paddy') !== -1 ? 'Paddy' : ''));
-      var cropPick = tilePicker(opts.crops.map(function (c) { return { value: c, label: c, icon: 'wheat', color: 'green' }; }), cropDefault, null, { small: true });
-      var dronePick = opts.drones.length ? tilePicker(opts.drones.map(function (c) { return { value: c, label: c, icon: 'drone', color: 'sky' }; }), rec ? rec.drone : (last.drone || ''), null, { small: true, toggle: true }) : null;
-      var payPick = tilePicker(opts.payment_statuses.map(function (c) { return { value: c, label: c, icon: 'cash', color: c === 'Unpaid' ? 'red' : 'green' }; }), rec ? rec.payment_status : '', null, { small: true, toggle: true });
-
-      // acres: a big number with - and +
-      var acres = h('input', { type: 'number', step: '0.25', min: '0', inputmode: 'decimal', placeholder: '0', value: rec && rec.acres_covered !== '' ? rec.acres_covered : '' });
-      function bump(delta) { var v = Math.max(0, Math.round(((Number(acres.value) || 0) + delta) * 100) / 100); acres.value = v ? String(v) : ''; }
-      var quick = h('div', { class: 'quick' });
-      var shortcuts = [];
-      if (f.total_acres) shortcuts.push([f.total_acres, f.total_acres + ' ac (all)']);
-      [1, 2, 3, 5, 10].forEach(function (n) { if (n !== f.total_acres) shortcuts.push([n, String(n)]); });
-      shortcuts.slice(0, 6).forEach(function (s) { quick.appendChild(h('button', { class: 'chip', type: 'button', text: s[1], onclick: function () { acres.value = String(s[0]); } })); });
-
-      // when
-      var sdate = h('input', { type: 'date', value: rec ? rec.service_date : opts.today, style: 'max-width:200px' });
-      var yesterday = new Date(Date.now() - 86400000); var yIso = yesterday.getFullYear() + '-' + ('0' + (yesterday.getMonth() + 1)).slice(-2) + '-' + ('0' + yesterday.getDate()).slice(-2);
-      var start = h('input', { type: 'time', value: rec ? rec.start_time : '' });
-      var end = h('input', { type: 'time', value: rec ? rec.end_time : '' });
-      var dur = h('span', { class: 'pill violet', style: 'display:none' });
-      var nowBtn = h('button', { class: 's', type: 'button', onclick: function () { end.value = hhmm(new Date()); sync(); } }, icon('clock'), 'Now');
-      var nowStart = h('button', { class: 's', type: 'button', onclick: function () { start.value = hhmm(new Date()); sync(); } }, icon('clock'), 'Now');
-
-      // the farmer's feelings
-      var score = rec && rec.satisfaction ? Number(rec.satisfaction) : 0;
-      var rateRow = h('div', { class: 'rate', role: 'group', 'aria-label': 'Rating out of 5' });
-      var rateWord = h('div', { class: 'rateword' });
-      var facesBox = h('div', {}, rateRow, rateWord);
-      var rateBtns = [];
-      for (var i = 1; i <= 5; i++) (function (n) {
-        var b = h('button', { type: 'button', 'aria-label': n + ' out of 5, ' + ServiceLog.ratingWord(n), onclick: function () { score = score === n ? 0 : n; drawFaces(); } }, icon('star'), String(n));
-        rateBtns.push(b);
-        rateRow.appendChild(b);
-      })(i);
-      // the buttons are made once; a tap only changes which are lit and the words below
-      function drawFaces() {
-        rateBtns.forEach(function (b, k) { b.className = k + 1 === score ? 'on' : ''; b.setAttribute('aria-pressed', k + 1 === score ? 'true' : 'false'); });
-        clear(rateWord);
-        if (score) { rateWord.appendChild(h('b', { text: score + ' / 5' })); rateWord.appendChild(document.createTextNode('  ' + ServiceLog.ratingWord(score))); }
-        else rateWord.appendChild(document.createTextNode('Tap a number, or leave empty'));
-      }
-      drawFaces();
-
-      // more details
-      var requested = h('input', { type: 'date', max: opts.today, value: rec ? rec.requested_date : '' });
-      var pilotDefault = rec ? (rec.pilot_email || opts.me.email) : (last.pilot && opts.pilots.some(function (p) { return p.email === last.pilot; }) && !isPilot ? last.pilot : opts.me.email);
-      var pilot = select(opts.pilots.map(function (p) { return { value: p.email, label: p.name }; }), isPilot ? null : 'Choose…', pilotDefault);
-      if (isPilot) pilot.disabled = true;
-      var product = h('input', { type: 'text', maxlength: 80, placeholder: 'Product', value: rec ? rec.product_used : '' });
-      var litres = h('input', { type: 'number', step: '0.1', min: '0', inputmode: 'decimal', placeholder: 'Litres', value: rec && rec.quantity_l !== '' ? rec.quantity_l : '' });
-      var amount = h('input', { type: 'number', step: '1', min: '0', inputmode: 'decimal', placeholder: 'Rs', value: rec && rec.amount_charged !== '' ? rec.amount_charged : '' });
-      var feedback = h('input', { type: 'text', maxlength: 300, placeholder: 'What did the farmer say?', value: rec ? rec.feedback : '' });
-      var notes = h('textarea', { maxlength: 300, style: 'min-height:70px', placeholder: 'Notes', value: rec ? rec.notes : '' });
-
-      var doneOnly = [];
-      var firstSync = true;
-      function wrap(node) { doneOnly.push(node); return node; }
-      function sync() {
-        var isDone = statusPick.get() === 'Completed';
-        doneOnly.forEach(function (n) { slideTo(n, isDone, '', firstSync); });
-        firstSync = false;
-        if (start.value && end.value) {
-          var m = minutesOf(end.value) - minutesOf(start.value);
-          dur.style.display = ''; dur.textContent = ''; dur.appendChild(icon('clock')); dur.appendChild(document.createTextNode(m > 0 ? ServiceLog.fmtDuration(m) : 'End must be after start'));
-          dur.className = 'pill ' + (m > 0 ? 'violet' : 'red');
-        } else dur.style.display = 'none';
-      }
-      [start, end].forEach(function (c) { c.addEventListener('change', sync); c.addEventListener('input', sync); });
-
-      function collect() {
-        return {
-          service_id: rec ? rec.service_id : '', farmer_id: f.farmer_id, status: statusPick.get(), requested_date: requested.value, service_date: sdate.value,
-          start_time: start.value, end_time: end.value, pilot_email: pilot.value, drone: dronePick ? dronePick.get() : '', service_type: typePick.get(), crop: cropPick.get(),
-          acres_covered: acres.value, product_used: product.value, quantity_l: litres.value, amount_charged: amount.value, payment_status: payPick.get(),
-          satisfaction: score || '', feedback: feedback.value, notes: notes.value
-        };
-      }
-      var saveBtn = h('button', { class: 'b big', type: 'button', onclick: save }, icon('check'), editing ? 'Save changes' : 'Save');
-      function resetSave() { setBusy(saveBtn, false); }
-      function save() {
-        hideMsg(); setBusy(saveBtn, true);
-        var sent = collect();
-        call('saveService', sent).then(function (r) {
-          saveLast({ drone: sent.drone, type: sent.service_type, pilot: sent.pilot_email });
-          showSaved(d, r, sent, editing);
-        }).catch(function (e) { resetSave(); showMsg(e.message, true); });
-      }
-
-      // --- the farmer
-      var canGps = opts.me.role === 'Admin' || opts.me.role === 'Pilot';
-      var gpsCard = GpsUI.card({ compact: true, canEdit: canGps, value: f,
-        save: function (v) { return call('saveFarmerGps', f.farmer_id, v.latitude, v.longitude, v.gps_source, v.gps_accuracy); } });
-      var who = h('div', { class: 'card' },
-        h('div', { class: 'profilehead' }, h('span', { class: 'avatar md', text: initials(f.full_name) }),
-          h('div', { style: 'flex:1;min-width:160px' }, h('h2', { text: f.full_name }),
-            h('div', { class: 'meta', style: 'display:flex;gap:6px;align-items:center' }, icon('pin'), [f.village, f.ds_division, f.district].filter(Boolean)[0] || f.farmer_id)),
-          f.phone_primary ? h('a', { class: 'round', href: 'tel:' + String(f.phone_primary).replace(/[^\d+]/g, ''), title: 'Call', 'aria-label': 'Call' }, icon('phone')) : null,
-          f.do_not_contact === 'Yes' ? h('span', { class: 'pill red' }, icon('x'), 'No contact') : null,
-          editing ? h('button', { class: 's', type: 'button', onclick: function () { Nav.open('Record service'); } }, icon('chevronleft'), 'Back')
-                  : h('button', { class: 's', type: 'button', onclick: showSearch }, icon('search'), 'Change')),
-        h('div', { style: 'height:8px' }), ServiceLog.summary(d.summary), h('div', { style: 'height:12px' }), gpsCard.el);
-      body.appendChild(who);
-
-      if (editing) body.appendChild(section('check', 'green', 'Status', statusPick.el));
-      body.appendChild(section('drone', 'sky', 'What?', typePick.el));
-      body.appendChild(wrap(section('acres', 'sun', 'How many acres?', h('div', {},
-        h('div', { class: 'stepper' }, h('button', { type: 'button', 'aria-label': 'Less', onclick: function () { bump(-0.25); } }, '−'), acres, h('button', { type: 'button', 'aria-label': 'More', onclick: function () { bump(0.25); } }, '+')),
-        quick))));
-      body.appendChild(wrap(section('clock', 'violet', 'When?', h('div', {},
-        h('div', { class: 'chipbar' }, h('button', { class: 'chip', type: 'button', text: 'Today', onclick: function () { sdate.value = opts.today; } }), h('button', { class: 'chip', type: 'button', text: 'Yesterday', onclick: function () { sdate.value = yIso; } }), sdate),
-        h('div', { class: 'grid3', style: 'margin-top:6px' },
-          field('Start', h('div', { style: 'display:flex;gap:8px;align-items:center' }, start, nowStart)), field('End', h('div', { style: 'display:flex;gap:8px;align-items:center' }, end, nowBtn)), h('div', { class: 'fld', style: 'align-self:end;padding-bottom:6px' }, dur))))));
-      body.appendChild(wrap(section('star', 'sun', 'Rating', facesBox)));
-
-      var more = h('details', { class: 'fold' }, h('summary', {}, ico('more', 'slate', 'sm'), 'More'),
-        h('div', { class: 'foldbody' },
-          editing ? null : field('Status', statusPick.el), field('Crop', cropPick.el), dronePick ? field('Drone', dronePick.el) : null,
-          h('div', { class: 'grid3' }, field('Product', product), field('Litres', litres), field('Rs', amount)),
-          field('Payment', payPick.el),
-          h('div', { class: 'grid3' }, field('Farmer said', feedback), field('Pilot', pilot), field('Asked on', requested)),
-          field('Notes', notes)));
-      body.appendChild(more);
-
-      body.appendChild(h('div', { class: 'savebar' }, h('button', { class: 'b ghost', type: 'button', onclick: function () { editing ? Nav.open('Record service') : showSearch(); } }, icon('x'), h('span', { class: 'hidesm', text: 'Cancel' })), saveBtn));
-      sync();
+    function draw() {
+      if (!S.ready || !S.data) return;
+      var map = S.map, d = S.data, counts = {}, max = 0;
+      d.summary.by_district.forEach(function (x) { counts[key(x.district)] = x.services; });
+      S.geo.features.forEach(function (ft) { ft.properties.v = counts[key(ft.properties.n)] || 0; if (ft.properties.v > max) max = ft.properties.v; });
+      var stops = [], cols = [];
+      [1, 0.25, 0.5, 0.75, 1].forEach(function (q, i) { var v = i === 0 ? 1 : Math.max(2, Math.ceil(max * q)); if (!stops.length || v > stops[stops.length - 1]) { stops.push(v); cols.push(RAMP[i]); } });
+      var step = ['step', ['get', 'v'], '#cfd8d3'];
+      stops.forEach(function (v, i) { step.push(v, cols[i]); });
+      map.setPaintProperty('dist-fill', 'fill-color', step);
+      map.setPaintProperty('dist-fill', 'fill-opacity', ['case', ['>', ['get', 'v'], 0], 0.72, 0.3]);
+      map.getSource('dist').setData(S.geo);
+      map.getSource('pts').setData({ type: 'FeatureCollection', features: (d.points || []).map(function (p) { return { type: 'Feature', properties: { id: p.id, status: p.status, overdue: !!p.overdue }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } }; }) });
+      map.setFilter('dist-sel', ['==', ['get', 'n'], f.district || '']);
+      S.legend = { max: max, stops: stops, cols: cols };
+      drawLegend();
+    }
+    var legend = h('div', { class: 'sv-legend' });
+    mapCard.appendChild(legend);
+    function drawLegend() {
+      clear(legend);
+      var L = S.legend; if (!L) return;
+      legend.appendChild(h('span', { class: 'lg' }, h('i', { style: 'background:' + COLOR[f.stage] }), 'Each pin is one service'));
+      if (L.max) legend.appendChild(h('span', { class: 'lg ramp' }, 'Fewer', h('b', { style: 'background:linear-gradient(90deg,' + RAMP.join(',') + ')' }), 'More services in the district'));
+      legend.appendChild(h('span', { class: 'lg' }, h('i', { class: 'ring' }), 'Red ring: late'));
     }
 
-    function showSaved(d, r, sent, editing) { stamp++; softShow(body, function () { buildSaved(d, r, sent, editing); }, { fade: true }); revealTop(body); }
-    function buildSaved(d, r, sent, editing) {
-      var again = h('button', { class: 'b big', type: 'button', onclick: function () { if (editing) Nav.open('Record service'); else openFarmer(d.farmer.farmer_id); } }, icon('plus'), editing ? 'New' : 'Same farmer');
-      var next = h('button', { class: 'b ghost big', type: 'button', onclick: function () { editing ? Nav.open(opts.me.role === 'Pilot' ? 'Record service' : 'Service log') : showSearch(); } }, icon(editing ? 'chevronleft' : 'search'), editing ? 'Back' : 'Next farmer');
-      body.appendChild(h('div', { class: 'card svcdone' }, h('div', { class: 'tick' }, icon('check')),
-        h('h2', { text: r && r.queued ? 'Saved on this phone' : (editing ? 'Saved' : 'Service recorded') }),
-        h('p', { class: 'hint', text: d.farmer.full_name + (sent.acres_covered ? ' · ' + sent.acres_covered + ' acres' : '') }),
-        sent.satisfaction ? h('div', { style: 'margin-top:8px' }, ServiceLog.rating(sent.satisfaction)) : null,
-        h('div', { class: 'row' }, again, next)));
+    // ----- the figures and the list -----
+    function load() {
+      var gen = ++S.gen, r = range();
+      var filter = { stage: f.stage, from: r.from, to: r.to, district: f.district, service_type: f.type, limit: 300 };
+      softFetch(listBox, Sync.fast('getServiceMap', [filter]), function (d) {
+        if (gen !== S.gen || S.dead) return;
+        S.data = d; draw(); drawNums(d);
+        listBox.appendChild(h('div', { class: 'sv-listhead' }, h('h3', { text: d.total ? d.total + (d.total === 1 ? ' service' : ' services') + ' on the map' : 'Nothing here' }), d.truncated ? h('span', { class: 'hint', text: 'Showing the first ' + d.rows.length }) : null));
+        if (!d.rows.length) { listBox.appendChild(emptyBox('globe', 'No ' + f.stage.toLowerCase() + ' services for these settings', 'Change the time, district or kind of service.')); return; }
+        d.rows.forEach(function (c) { listBox.appendChild(Svc.row(c, { onclick: function () { Svc.openRoad(c.service_id, load); } })); });
+      }, function (e) { softShow(listBox, function () { listBox.appendChild(h('p', { class: 'hint', text: e.message })); }); });
     }
+    function drawNums(d) {
+      var s = d.summary, acres = s.acres_by_stage[f.stage] || 0;
+      softShow(nums, function () {
+        nums.appendChild(h('div', { class: 'nums' }, ServiceLog.num('drone', 'sky', String(s.total), s.total === 1 ? 'service' : 'services'), ServiceLog.num('acres', 'sun', String(acres), 'acres'),
+          ServiceLog.num('alert', s.overdue ? 'red' : 'slate', String(s.overdue), 'late'), ServiceLog.num('pin', 'slate', String(s.unlocated), 'not on the map (no place)')));
+      });
+    }
+
+    if (arg && arg.stage) f.stage = arg.stage;
+    paint(); relabel();
+    startMap();
+    load();
+    return { destroy: function () { S.dead = true; S.gen++; if (S.map) { try { S.map.remove(); } catch (e) { /* already gone */ } S.map = null; } } };
+  }
+  return { mount: mount };
+})();
+</script>
+
+  <script>
+// Steps 3 and 4 and the history of the services:
+//   SvcOps     the OPERATION REPORT: the scheduled services; a click opens the sheet where the facts of the job are entered, and it becomes Completed.
+//   SvcPay     PAYMENTS: scheduled and completed services; a click opens the payment sheet (advance yes/no, amounts, days); it becomes Paid / Advance paid.
+//   SvcHistory every service with its road and the days it took, with filters for the stage and the payment.
+var SvcShared = (function () {
+  // The head of a sheet: who, where, what and what was promised.
+  function head(c) {
+    var k = ServiceLog.kindOf(c.service_type);
+    return h('div', { class: 'sv-head' }, ico(k.icon, k.color), h('div', { style: 'flex:1;min-width:0' }, h('b', { text: c.farmer_name }),
+      h('div', { class: 'hint', text: c.land_label + ' · ' + (c.service_type || 'Service') + (c.crop ? ' · ' + c.crop : '') }),
+      h('div', { class: 'hint', text: [Svc.windowText(c) ? 'Promised: ' + Svc.windowText(c) : '', c.scheduled_date ? 'Scheduled ' + Svc.day(c.scheduled_date) : ''].filter(Boolean).join(' · ') })), Svc.stagePill(c.status));
+  }
+  // A search box and a row of choices. Returns { el, q(), refresh }. choices: [[key, label]]
+  function toolbar(choices, initial, onChange, placeholder) {
+    var state = { key: initial, q: '' }, btns = {};
+    var input = h('input', { type: 'text', placeholder: placeholder || 'Farmer, land or ID', maxlength: 60, autocomplete: 'off' });
+    var bar = h('div', { class: 'chipbar' });
+    function paint() { Object.keys(btns).forEach(function (k) { btns[k].className = 'chip' + (state.key === k ? ' on' : ''); }); }
+    choices.forEach(function (c) { btns[c[0]] = h('button', { class: 'chip', type: 'button', text: c[1], onclick: function () { state.key = c[0]; paint(); onChange(); } }); bar.appendChild(btns[c[0]]); });
+    var t = null;
+    input.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { state.q = input.value.trim(); onChange(); }, 200); });
+    paint();
+    return { el: h('div', { class: 'card sv-filters' }, h('div', { class: 'searchbox' }, icon('search'), input), bar), state: state };
+  }
+  function mine(c) { var p = String(c.pilot_email || '').toLowerCase(); return !p || p === Svc.me(); }
+  return { head: head, toolbar: toolbar, mine: mine };
+})();
+
+// ---------- the operation report ----------
+var SvcOps = (function () {
+  var WEATHER = ['Clear', 'Cloudy', 'Windy', 'Light rain', 'Heavy rain', 'Other'];
+  function mount(el, arg) {
+    var listBox = h('div'), S = { gen: 0, dead: false };
+    var tb = SvcShared.toolbar([['todo', 'To do'], ['late', 'Late'], ['done', 'Done lately']], 'todo', load);
+    el.appendChild(h('div', { class: 'sv-intro' }, h('h2', { text: 'Operation report' }), h('p', { class: 'hint', text: 'Open a scheduled service and enter how the job went. It is then marked as completed.' })));
+    el.appendChild(tb.el); el.appendChild(listBox);
+    load();
+    if (arg && arg.service_id) openSheet(arg.service_id);
+
+    function load() {
+      var gen = ++S.gen, k = tb.state.key;
+      var filter = { stage: k === 'done' ? 'Completed' : 'Scheduled', q: tb.state.q, limit: 300 };
+      if (k === 'done') filter.from = (function () { var d = new Date(Date.now() + 330 * 60000 - 30 * 86400000); return d.toISOString().slice(0, 10); })();
+      softFetch(listBox, Sync.fast('listServiceFlow', [filter]), function (d) {
+        if (gen !== S.gen || S.dead) return;
+        var rows = d.rows;
+        if (Svc.scope('service.complete') === 'own') rows = rows.filter(SvcShared.mine);
+        if (k === 'late') rows = rows.filter(function (c) { return c.scheduled_date && c.scheduled_date < d.today; });
+        if (!rows.length) { listBox.appendChild(emptyBox('note', k === 'done' ? 'Nothing was completed in the last 30 days' : 'No scheduled services', k === 'todo' ? 'Services appear here once a request has been given a day.' : '')); return; }
+        listBox.appendChild(h('p', { class: 'hint', text: Svc.plural(rows.length, 'service', 'services') }));
+        rows.forEach(function (c) { listBox.appendChild(Svc.row(c, { onclick: function () { openSheet(c.service_id); } })); });
+      }, function (e) { softShow(listBox, function () { listBox.appendChild(h('p', { class: 'hint', text: e.message })); }); });
+    }
+
+    function openSheet(serviceId) {
+      var body = h('div', {}, loadingBox());
+      var m = Svc.modal('Operation report', body);
+      Promise.all([Sync.fast('getServiceRoad', [serviceId], { strict: true }), Svc.options()]).then(function (r) { clear(body); form(r[0], r[1]); }).catch(function (e) { clear(body); body.appendChild(h('p', { class: 'hint', text: e.message })); });
+      function form(rd, o) {
+        var c = rd.card, d = rd.detail, done = c.status === 'Completed';
+        if (!rd.can.complete && !rd.can.schedule) { body.appendChild(SvcShared.head(c)); body.appendChild(h('p', { class: 'hint', text: 'You cannot enter the completion of this service.' })); return; }
+        body.appendChild(SvcShared.head(c));
+        var dayDefault = done ? d.service_date : (c.scheduled_date && c.scheduled_date <= o.today ? c.scheduled_date : o.today);
+        var day = h('input', { type: 'date', max: o.today, value: dayDefault });
+        var start = h('input', { type: 'time', value: done ? d.start_time : '' }), end = h('input', { type: 'time', value: done ? d.end_time : '' });
+        var ownOnly = Svc.scope('service.complete') === 'own';
+        var pilot = Svc.select(o.pilots.map(function (p) { return p.email; }), (done ? d.pilot_email : c.pilot_email) || (ownOnly ? Svc.me() : ''), 'Choose the pilot');
+        Array.prototype.forEach.call(pilot.options, function (op) { var p = o.pilots.filter(function (x) { return x.email === op.value; })[0]; if (p) op.textContent = p.name; });
+        if (ownOnly) pilot.disabled = true;
+        var drone = o.drones.length ? Svc.select(o.drones, done ? d.drone : '', 'Choose the drone') : null;
+        var base = o.base_stations.length ? Svc.select(o.base_stations, c.base_station || '', 'Choose the base station') : h('input', { type: 'text', maxlength: 60, value: c.base_station || '', placeholder: 'Base station' });
+        var acres = h('input', { type: 'number', step: 'any', min: '0', inputmode: 'decimal', value: done ? d.acres_covered : c.acres });
+        var tanks = h('input', { type: 'number', step: '1', min: '0', inputmode: 'numeric', value: done ? d.tanks : '' });
+        var product = h('input', { type: 'text', maxlength: 80, value: done ? d.product_used : '', placeholder: 'Chemical or product used' });
+        var qty = h('input', { type: 'number', step: 'any', min: '0', inputmode: 'decimal', value: done ? d.quantity_l : '' });
+        var weather = Svc.select(WEATHER, done ? d.weather : '', 'Not noted');
+        var crop = Svc.select(o.crops, c.crop, ''), type = Svc.select(o.types, c.service_type, '');
+        var rating = h('select', {}, h('option', { value: '', text: 'Not asked' }), [5, 4, 3, 2, 1].map(function (n) { return h('option', { value: String(n), text: n + ' of 5', selected: done && Number(d.satisfaction) === n }); }));
+        var notes = h('textarea', { maxlength: 300, style: 'min-height:60px', placeholder: 'Anything to remember (optional)' }); notes.value = done ? (d.notes || '') : '';
+        var err = Svc.errBox();
+        var go = h('button', { class: 'b', type: 'button', onclick: function () {
+          var data = { service_date: day.value, start_time: start.value, end_time: end.value, pilot_email: pilot.value, drone: drone ? drone.value : '', base_station: base.value, acres_covered: acres.value, tanks: tanks.value,
+            product_used: product.value, quantity_l: qty.value, weather: weather.value, crop: crop.value, service_type: type.value, satisfaction: rating.value, notes: notes.value };
+          Svc.submit(go, err, function () { return Svc.changed(call('completeService', serviceId, data)); }, function () { showMsg(done ? 'Changes saved' : 'Marked as completed', false); m.close(); load(); });
+        } }, icon('check'), done ? 'Save changes' : 'Mark as completed');
+        if (rd.can.complete) body.appendChild(h('div', { class: 'lform' }, h('h3', { text: 'How the job went' }),
+          h('div', { class: 'two' }, Svc.lab('Day it was done', day), Svc.lab('Pilot', pilot)),
+          h('div', { class: 'two' }, Svc.lab('Start time', start), Svc.lab('End time', end)),
+          h('div', { class: 'two' }, Svc.lab('Acres sprayed', acres, c.acres ? 'Requested: ' + c.acres + ' ac' : ''), Svc.lab('Tanks used', tanks)),
+          h('div', { class: 'two' }, Svc.lab('Product', product), Svc.lab('Quantity (litres)', qty)),
+          h('div', { class: 'two' }, drone ? Svc.lab('Drone', drone) : h('div'), Svc.lab('Base station', base)),
+          h('div', { class: 'two' }, Svc.lab('Weather', weather), Svc.lab('Farmer\'s rating', rating)),
+          h('div', { class: 'two' }, Svc.lab('Crop', crop), Svc.lab('Service', type)), Svc.lab('Notes', notes), err, h('div', { class: 'row', style: 'margin-top:14px' }, go)));
+        if (rd.can.schedule && !done) {
+          var date = h('input', { type: 'date', min: o.today }), why = h('input', { type: 'text', maxlength: 120, placeholder: 'For example: heavy rain' }), err2 = Svc.errBox();
+          var mv = h('button', { class: 'b ghost', type: 'button', onclick: function () {
+            Svc.submit(mv, err2, function () { return Svc.changed(call('scheduleService', serviceId, date.value, { note: why.value })); }, function () { showMsg('Moved to another day', false); m.close(); load(); });
+          } }, icon('calendar'), 'Move to this day');
+          body.appendChild(h('details', { class: 'fold' }, h('summary', {}, ico('calendar', 'sun', 'sm'), 'Not done today? Move it to another day'),
+            h('div', { class: 'foldbody lform' }, h('div', { class: 'two' }, Svc.lab('New day', date), Svc.lab('Why', why)), err2, h('div', { class: 'row', style: 'margin-top:10px' }, mv))));
+        }
+      }
+    }
+    return { destroy: function () { S.dead = true; S.gen++; } };
+  }
+  return { mount: mount };
+})();
+
+// ---------- payments ----------
+var SvcPay = (function () {
+  var METHODS = ['Cash', 'Bank transfer', 'Cheque', 'Card', 'Other'];
+  function mount(el, arg) {
+    var listBox = h('div'), S = { gen: 0, dead: false };
+    var tb = SvcShared.toolbar([['all', 'All'], ['none', 'Not paid'], ['adv', 'Advance paid'], ['paid', 'Paid in full']], 'all', load);
+    el.appendChild(h('div', { class: 'sv-intro' }, h('h2', { text: 'Payments' }), h('p', { class: 'hint', text: 'Open a scheduled or completed service to enter the advance and the payment.' })));
+    el.appendChild(tb.el); el.appendChild(listBox);
+    load();
+    if (arg && arg.service_id) openSheet(arg.service_id);
+
+    function load() {
+      var gen = ++S.gen, k = tb.state.key;
+      softFetch(listBox, Sync.fast('listServiceFlow', [{ stage: 'Payable', q: tb.state.q, limit: 300 }]), function (d) {
+        if (gen !== S.gen || S.dead) return;
+        var rows = d.rows;
+        if (Svc.scope('service.payment') === 'own') rows = rows.filter(SvcShared.mine);
+        rows = rows.filter(function (c) {
+          var p = c.payment_status || '';
+          return k === 'all' || (k === 'none' && (p === '' || p === 'Unpaid')) || (k === 'adv' && p === 'Partly paid') || (k === 'paid' && (p === 'Paid' || p === 'Free'));
+        });
+        if (!rows.length) { listBox.appendChild(emptyBox('cash', 'Nothing here', 'Scheduled and completed services appear here.')); return; }
+        var due = 0; rows.forEach(function (c) { if (c.amount_charged !== '' && c.amount_charged !== undefined) due += Number(c.amount_charged) || 0; });
+        listBox.appendChild(h('p', { class: 'hint', text: Svc.plural(rows.length, 'service', 'services') + (due ? ' · total charged Rs ' + due.toLocaleString() : '') }));
+        rows.forEach(function (c) {
+          listBox.appendChild(Svc.row(c, { onclick: function () { openSheet(c.service_id); }, extra: c.amount_charged !== '' && c.amount_charged !== undefined ? h('b', { class: 'sv-amt', text: Svc.money(c.amount_charged) }) : null }));
+        });
+      }, function (e) { softShow(listBox, function () { listBox.appendChild(h('p', { class: 'hint', text: e.message })); }); });
+    }
+
+    function openSheet(serviceId) {
+      var body = h('div', {}, loadingBox());
+      var m = Svc.modal('Payment', body);
+      Promise.all([Sync.fast('getServiceRoad', [serviceId], { strict: true }), Svc.options()]).then(function (r) { clear(body); form(r[0], r[1]); }).catch(function (e) { clear(body); body.appendChild(h('p', { class: 'hint', text: e.message })); });
+      function form(rd, o) {
+        var c = rd.card, d = rd.detail;
+        body.appendChild(SvcShared.head(c));
+        if (!rd.can.payment) { body.appendChild(h('p', { class: 'hint', text: c.money_hidden ? 'You cannot see the payment of this service.' : 'A payment cannot be entered for this service.' })); return; }
+        var total = h('input', { type: 'number', step: 'any', min: '0', inputmode: 'decimal', value: d.amount_charged, placeholder: '0 if there is no charge' });
+        var adv = d.advance_paid === 'Yes' ? 'Yes' : 'No';
+        var advBtns = {};
+        var advAmt = h('input', { type: 'number', step: 'any', min: '0', inputmode: 'decimal', value: d.advance_amount }), advDate = h('input', { type: 'date', max: o.today, value: d.advance_date || o.today });
+        var advBox = h('div', { class: 'two' }, Svc.lab('Advance amount (Rs)', advAmt), Svc.lab('Day the advance was paid', advDate));
+        function setAdv(v) { adv = v; advBtns.Yes.className = 'chip' + (v === 'Yes' ? ' on' : ''); advBtns.No.className = 'chip' + (v === 'No' ? ' on' : ''); advBox.style.display = v === 'Yes' ? '' : 'none'; summary(); }
+        advBtns.Yes = h('button', { class: 'chip', type: 'button', text: 'Yes, an advance was paid', onclick: function () { setAdv('Yes'); } });
+        advBtns.No = h('button', { class: 'chip', type: 'button', text: 'No advance', onclick: function () { setAdv('No'); } });
+        var fin = h('input', { type: 'number', step: 'any', min: '0', inputmode: 'decimal', value: d.final_amount }), finDate = h('input', { type: 'date', max: o.today, value: d.final_date || '' });
+        var method = Svc.select(METHODS, d.payment_method, 'How was it paid?'), ref = h('input', { type: 'text', maxlength: 60, value: d.payment_ref || '', placeholder: 'Receipt or transfer number' });
+        var note = h('input', { type: 'text', maxlength: 200, value: d.payment_notes || '' });
+        var sum = h('div', { class: 'sv-sum' });
+        function num(x) { x = Number(x.value); return isFinite(x) ? x : 0; }
+        function summary() {
+          var t = num(total), paid = (adv === 'Yes' ? num(advAmt) : 0) + num(fin), left = Math.round((t - paid) * 100) / 100;
+          var state = total.value === '' ? '' : (t === 0 ? 'No charge' : (paid >= t ? 'Paid in full' : (paid > 0 ? 'Advance paid' : 'Not paid')));
+          clear(sum);
+          sum.appendChild(h('div', {}, h('small', { text: 'Total' }), h('b', { text: Svc.money(total.value === '' ? '' : t) })));
+          sum.appendChild(h('div', {}, h('small', { text: 'Paid so far' }), h('b', { text: Svc.money(paid) })));
+          sum.appendChild(h('div', { class: left < 0 ? 'bad' : '' }, h('small', { text: left < 0 ? 'Too much' : 'Still to pay' }), h('b', { text: Svc.money(Math.abs(left)) })));
+          sum.appendChild(h('div', {}, h('small', { text: 'Will be saved as' }), h('b', { text: state || '—' })));
+        }
+        [total, advAmt, fin].forEach(function (i) { i.addEventListener('input', summary); });
+        setAdv(adv);
+        var err = Svc.errBox();
+        var go = h('button', { class: 'b', type: 'button', onclick: function () {
+          var data = { amount_charged: total.value, advance: adv, advance_amount: advAmt.value, advance_date: advDate.value, final_amount: fin.value, final_date: finDate.value || (fin.value ? o.today : ''), payment_method: method.value, payment_ref: ref.value, payment_notes: note.value };
+          Svc.submit(go, err, function () { return Svc.changed(call('recordPayment', serviceId, data)); }, function (r) { showMsg(r.payment_status === 'Paid' ? 'Paid in full' : (r.payment_status === 'Partly paid' ? 'Advance paid' : 'Saved'), false); m.close(); load(); });
+        } }, icon('check'), 'Save payment');
+        body.appendChild(h('div', { class: 'lform' }, h('h3', { text: 'Payment' }), Svc.lab('Total amount for this service (Rs)', total),
+          h('div', { class: 'lf' }, h('label', { text: 'Was an advance paid?' }), h('div', { class: 'chipbar seg' }, advBtns.Yes, advBtns.No)), advBox,
+          h('div', { class: 'two' }, Svc.lab('Payment received (Rs)', fin, 'Leave empty if nothing more was paid yet'), Svc.lab('Day it was paid', finDate)),
+          h('div', { class: 'two' }, Svc.lab('Method', method), Svc.lab('Reference', ref)), Svc.lab('Note', note), sum, err, h('div', { class: 'row', style: 'margin-top:14px' }, go)));
+      }
+    }
+    return { destroy: function () { S.dead = true; S.gen++; } };
+  }
+  return { mount: mount };
+})();
+
+// ---------- history ----------
+var SvcHistory = (function () {
+  var memo = { stage: '', pay: '', period: 'all' };
+  function mount(el) {
+    var f = memo, listBox = h('div'), nums = h('div'), S = { gen: 0, dead: false };
+    var tb = SvcShared.toolbar([], '', load, 'Farmer, land or ID');
+    var stageBtns = {}, payBtns = {}, perBtns = {};
+    function paint() {
+      Object.keys(stageBtns).forEach(function (k) { stageBtns[k].className = 'chip' + (f.stage === k ? ' on' : ''); });
+      Object.keys(payBtns).forEach(function (k) { payBtns[k].className = 'chip' + (f.pay === k ? ' on' : ''); });
+      Object.keys(perBtns).forEach(function (k) { perBtns[k].className = 'chip' + (f.period === k ? ' on' : ''); });
+    }
+    function chips(spec, store, key, group) { return h('div', { class: 'chipbar' }, spec.map(function (s) { var b = store[s[0]] = h('button', { class: 'chip', type: 'button', text: s[1], onclick: function () { f[key] = s[0]; paint(); load(); } }); return b; })); }
+    tb.el.appendChild(h('div', { class: 'sv-flabel', text: 'Stage' }));
+    tb.el.appendChild(chips([['', 'All'], ['Requested', 'Requested'], ['Scheduled', 'Scheduled'], ['Completed', 'Completed'], ['Cancelled', 'Cancelled']], stageBtns, 'stage'));
+    if (Svc.can('service.payment')) { tb.el.appendChild(h('div', { class: 'sv-flabel', text: 'Payment' })); tb.el.appendChild(chips([['', 'Any'], ['none', 'Not paid'], ['adv', 'Advance paid'], ['paid', 'Paid in full']], payBtns, 'pay')); }
+    tb.el.appendChild(h('div', { class: 'sv-flabel', text: 'Time' }));
+    tb.el.appendChild(chips([['all', 'All time'], ['30', 'Last 30 days'], ['90', 'Last 3 months'], ['year', 'This year']], perBtns, 'period'));
+    paint();
+    el.appendChild(h('div', { class: 'sv-intro' }, h('h2', { text: 'History' }), h('p', { class: 'hint', text: 'Every service, with its road and how many days it took.' })));
+    el.appendChild(tb.el); el.appendChild(nums); el.appendChild(listBox);
+    load();
+
+    function range() {
+      var t = new Date(Date.now() + 330 * 60000);
+      if (f.period === 'all') return { from: '', to: '' };
+      if (f.period === 'year') return { from: t.getUTCFullYear() + '-01-01', to: '' };
+      return { from: new Date(t.getTime() - Number(f.period) * 86400000).toISOString().slice(0, 10), to: '' };
+    }
+    function took(c) {
+      function dd(a, b) { var x = Date.parse(a + 'T00:00:00Z'), y = Date.parse(b + 'T00:00:00Z'); return isFinite(x) && isFinite(y) ? Math.round((y - x) / 86400000) : null; }
+      var bits = [];
+      if (c.status === 'Completed' && c.service_date) { var n = dd(c.requested_date, c.service_date); if (n !== null) bits.push(n === 0 ? 'Done the same day' : 'Done ' + Svc.plural(n, 'day', 'days') + ' after the request'); }
+      if (c.payment_status === 'Paid' && c.paid_on) { var w = dd(c.requested_date, c.paid_on); if (w !== null) bits.push('Whole road: ' + (w === 0 ? 'one day' : Svc.plural(w, 'day', 'days'))); }
+      return bits.join(' · ');
+    }
+    function load() {
+      var gen = ++S.gen, r = range();
+      softFetch(listBox, Sync.fast('listServiceFlow', [{ stage: f.stage, from: r.from, to: r.to, q: tb.state.q, limit: 300 }]), function (d) {
+        if (gen !== S.gen || S.dead) return;
+        var rows = d.rows.filter(function (c) {
+          var p = c.payment_status || '';
+          if (!f.pay) return true;
+          if (c.status === 'Requested' || c.status === 'Cancelled') return false;
+          return (f.pay === 'none' && (p === '' || p === 'Unpaid')) || (f.pay === 'adv' && p === 'Partly paid') || (f.pay === 'paid' && (p === 'Paid' || p === 'Free'));
+        });
+        softShow(nums, function () {
+          var s = d.summary.by_stage;
+          nums.appendChild(h('div', { class: 'nums' }, ServiceLog.num('clock', 'sun', String(s.Requested), 'requested'), ServiceLog.num('calendar', 'sky', String(s.Scheduled), 'scheduled'),
+            ServiceLog.num('check', 'green', String(s.Completed), 'completed'), ServiceLog.num('x', 'slate', String(s.Cancelled), 'cancelled')));
+        });
+        if (!rows.length) { listBox.appendChild(emptyBox('clock', 'No services for these settings')); return; }
+        listBox.appendChild(h('p', { class: 'hint', text: Svc.plural(rows.length, 'service', 'services') + (d.truncated ? ' (the newest ' + d.rows.length + ')' : '') }));
+        rows.forEach(function (c) {
+          var t = took(c);
+          listBox.appendChild(h('div', { class: 'sv-hrow' }, Svc.row(c, { onclick: function () { Svc.openRoad(c.service_id, load); } }), h('div', { class: 'sv-hroad' }, Svc.miniRoad(c), t ? h('div', { class: 'sv-took', text: t }) : null)));
+        });
+      }, function (e) { softShow(listBox, function () { listBox.appendChild(h('p', { class: 'hint', text: e.message })); }); });
+    }
+    return { destroy: function () { S.dead = true; S.gen++; } };
   }
   return { mount: mount };
 })();
@@ -8773,7 +9400,7 @@ var TopSearch = (function () {
 
     function open(f) {
       input.value = ''; close(); input.blur();
-      if (pilot) Nav.open('Record service', { farmer_id: f.farmer_id }); else Nav.openFarmer(f.farmer_id);
+      if (pilot) Nav.open('Services', { tab: 'request', farmer_id: f.farmer_id }); else Nav.openFarmer(f.farmer_id);
     }
     function close() { list.style.display = 'none'; clear(list); rows = []; active = -1; box.classList.remove('open'); }
     function paintActive() { Array.prototype.forEach.call(list.querySelectorAll('.tsrow'), function (el, i) { el.classList.toggle('on', i === active); }); }
@@ -9581,8 +10208,7 @@ function startApp() {
   if (role !== 'DataEntry') tabs.push({ label: 'Home', screen: Home, icon: 'home', color: 'green', title: 'Home', short: 'Home', sub: '', primary: true });
   if (can.enter) tabs.push({ label: 'Register farmer', screen: Register, icon: 'userplus', color: 'green', title: 'New farmer', short: role === 'Pilot' ? 'New' : 'Register', sub: 'Add a farmer in five short steps', primary: role !== 'Admin' });
   if (can.look || role === 'Pilot') tabs.push({ label: 'Find farmer', screen: Find, icon: 'search', color: 'green', title: 'Find a farmer', short: 'Find', sub: 'Search by name, phone, village or ID', primary: true });
-  if (can.serve) tabs.push({ label: 'Record service', screen: ServiceEntry, icon: 'drone', color: 'sky', title: 'Record a service', short: 'Service', sub: 'Log a spraying job in under a minute', primary: true });
-  if (can.serve && role !== 'Pilot') tabs.push({ label: 'Service log', screen: ServiceList, icon: 'list', color: 'sky', title: 'Service log', short: 'Log', sub: 'Every job, with filters and export', primary: false });
+  if (Svc.can('service.request') || Svc.can('service.view') || Svc.can('service.complete') || Svc.can('service.payment')) tabs.push({ label: 'Services', screen: ServiceHub, icon: 'drone', color: 'sky', title: 'Services', short: 'Services', sub: 'Request, schedule, complete and payment', primary: true });
   if (can.look) tabs.push({ label: 'Service report', screen: ServiceReport, icon: 'chart', color: 'sun', title: 'Reports', short: 'Report', sub: 'Figures by time, place, pilot and crop', primary: true });
   if (can.look) tabs.push({ label: 'Messages', screen: Messages, icon: 'megaphone', color: 'violet', title: 'Send a message', short: 'Message', sub: 'Write to a group of farmers', primary: false });
   if (can.look) tabs.push({ label: 'Earth', screen: Earth, icon: 'globe', color: 'aqua', title: 'Earth', short: 'Map', sub: 'Farmers and spraying on the map', primary: true, instant: true });

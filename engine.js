@@ -614,6 +614,7 @@ const SIGN_IN_FAILED = 'Wrong email or password, or the account is temporarily l
 const API_NAMES_ = [
   'getFormDefinition', 'getDesignerData', 'saveQuestion', 'setQuestionActive', 'moveQuestion', 'saveOptions', 'updateOption', 'setOptionActive',
   'getRegistrationData', 'saveFarmer', 'getFarmer', 'getFarmerView', 'findFarmers', 'getLand', 'getFarmerLands', 'findLands', 'saveLand', 'assignLand', 'addPastOwner', 'editOwnership',
+  'getServiceFlowOptions', 'listServiceFlow', 'getServiceMap', 'getServiceRoad', 'createServiceRequest', 'updateServiceRequest', 'cancelService', 'scheduleService', 'completeService', 'recordPayment',
   'getOriginMap', 'getFarmerOrigin', 'getDashboard',
   'getFinderOptions', 'runFinder', 'exportFinder', 'listSegments', 'saveSegment', 'deleteSegment',
   'getExportInfo', 'readTableChunk',
@@ -664,6 +665,7 @@ function findUserByEmail_(email) {
 function publicUser_(row) {
   const u = { user_id: row.user_id, email: String(row.email).toLowerCase(), name: row.name, role: row.role, label: row.label, must_change: row.must_change_password === 'Yes' };
   if (row.role === 'Admin' && isDeveloperEmail_(row.email)) { u.tools = true; u.roleLabel = 'Developer'; }
+  u.powers = powersOf_(u);      // what the person may do (see Powers.gs); the screens show only what they may use
   return u;
 }
 
@@ -749,6 +751,7 @@ function sessionFromToken_(token) {
   if (!raw) return null;
   let s;
   try { s = JSON.parse(raw); } catch (e) { cache.remove(key); return null; }
+  if (s.user && !s.user.powers) s.user.powers = powersOf_(s.user);      // a session made before powers existed
   const revoked = Number(cache.get('r:' + s.email) || 0);
   if (revoked && revoked >= s.issued) { cache.remove(key); return null; }
   const now = Date.now();
@@ -1198,6 +1201,9 @@ function db_() {
   return ss;
 }
 
+// Tabs that gained columns at their right end after the first release: how many (they are added by sheet_ the first time the tab is opened).
+const ADDED_COLUMNS_ = { Fields: 8, Services: 28 };
+
 function sheet_(name) {
   if (SHEET_MEMO_[name]) return SHEET_MEMO_[name];
   let sh = db_().getSheetByName(name);
@@ -1211,12 +1217,12 @@ function sheet_(name) {
   // by hand and the new code never reads columns that are not there. Checked again under the lock, so two requests cannot both add them.
   // The Fields tab (the land table) got its own details at the right end the same way.
   // (A new tab has room for 26 columns, so for Fields the header of the last column is what tells whether the new ones were added.)
-  const lacksColumns_ = () => sh.getMaxColumns() < SCHEMA[name].length || (name === 'Fields' && String(sh.getRange(1, SCHEMA[name].length).getValue()) !== SCHEMA[name][SCHEMA[name].length - 1]);
-  if ((name === 'Farmers' || name === 'Fields') && lacksColumns_()) {
+  const lacksColumns_ = () => sh.getMaxColumns() < SCHEMA[name].length || (ADDED_COLUMNS_[name] && String(sh.getRange(1, SCHEMA[name].length).getValue()) !== SCHEMA[name][SCHEMA[name].length - 1]);
+  if ((name === 'Farmers' || ADDED_COLUMNS_[name]) && lacksColumns_()) {
     withLock_(() => {
       if (!lacksColumns_()) return;
       const headers = SCHEMA[name];
-      const before = sh.getMaxColumns() < headers.length ? sh.getMaxColumns() : SCHEMA.Fields.length - 8;
+      const before = ADDED_COLUMNS_[name] ? headers.length - ADDED_COLUMNS_[name] : sh.getMaxColumns();
       if (sh.getMaxColumns() < headers.length) sh.insertColumnsAfter(sh.getMaxColumns(), headers.length - sh.getMaxColumns());
       sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold').setBackground('#e8f0e8');
       // Text columns (dates, places) stay text, so Sheets never turns "2015-03-02" into a date.
@@ -1831,7 +1837,9 @@ function seedPlaces_(S, places) {
 }
 
 function getEarthGeo() {
-  requireEarthUser_();
+  // the boundaries are also needed by the service map, for anyone who may see it
+  const who = currentUser_();
+  if (!(who && hasPower_(who, 'service.view'))) requireEarthUser_();
   return { ds: EARTH_GEO_DS, districts: EARTH_GEO_DISTRICTS };
 }
 
@@ -4696,14 +4704,14 @@ const LOCAL_PLAN_ = {
   Pilot: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'LandOwners', 'FarmerAnswers', 'Services', 'Users'],
   DataEntry: ['Config', 'Lists', 'FormQuestions', 'FormOptions']
 };
-const LOCAL_CONFIG_KEYS_ = ['duplicate_check_mode', 'mock_services_on', 'lands_migrated'];       // the only settings a device receives
+const LOCAL_CONFIG_KEYS_ = ['duplicate_check_mode', 'mock_services_on', 'lands_migrated', 'services_flow_migrated'];       // the only settings a device receives
 const LOCAL_PAGE_ROWS_ = 3000;
 const LOCAL_DATE_MARK_ = '~D:';             // in front of a date sent to the device; the device turns it back into a date
 
 function getLocalPlan() {
   const user = requireRole_(ROLES);
   // The one-time carry-over of the old fields into lands is done here, on the server, before any device makes its copy (a device must never do it itself).
-  if (user.role !== 'DataEntry') ensureLandOwners_();
+  if (user.role !== 'DataEntry') { ensureLandOwners_(); ensureServiceFlow_(); }
   const names = LOCAL_PLAN_[user.role] || [];
   return plain_({ role: user.role, tables: names.map(n => ({ name: n, kind: LOCAL_TABLE_KINDS_[n][0], delta: LOCAL_TABLE_KINDS_[n][1], columns: SCHEMA[n].length })), revs: currentRevs_() });
 }
@@ -4724,7 +4732,8 @@ function getTableDelta(table, since, from) {
   const upd = headers.indexOf('updated_at');
   const mask = {};
   if (name === 'Users') ['password_hash', 'password_salt', 'failed_attempts', 'locked_until', 'last_login', 'must_change_password'].forEach(c => { mask[headers.indexOf(c)] = true; });
-  if (name === 'Services' && user.role === 'Pilot') { mask[headers.indexOf('amount_charged')] = 'money'; mask[headers.indexOf('payment_status')] = 'money'; }
+  // money columns of the services: hidden without the payment power; with only the 'own' scope, hidden on other pilots' jobs (a job with no pilot yet is open to all)
+  if (name === 'Services') { const sc = powerScope_(user, 'service.payment'); if (sc !== 'all') SERVICE_MONEY_COLS_.forEach(k => { if (headers.indexOf(k) !== -1) mask[headers.indexOf(k)] = sc === 'own' ? 'money' : true; }); }
   const pilotAt = headers.indexOf('pilot_email');
   const cut = since && upd !== -1 ? new Date(Date.parse(String(since)) - SERVICE_SYNC_OVERLAP_MS).toISOString() : '';
   const pick = [];
@@ -4747,7 +4756,7 @@ function getTableDelta(table, since, from) {
   out.next = start + page.length;
   out.rows = page.map(row => row.map((v, i) => {
     if (mask[i] === true) return '';
-    if (mask[i] === 'money' && String(row[pilotAt]).toLowerCase() !== String(user.email).toLowerCase()) return '';
+    if (mask[i] === 'money' && String(row[pilotAt]) !== '' && String(row[pilotAt]).toLowerCase() !== String(user.email).toLowerCase()) return '';
     if (dev && staff.indexOf(i) !== -1 && String(v).toLowerCase() === dev) return 'system';
     return v instanceof Date ? LOCAL_DATE_MARK_ + v.toISOString() : v;       // a date stays a date on the device (the server code treats dates and text differently)
   }));
@@ -4875,6 +4884,61 @@ function getFarmerOrigin(farmerId) {
   });
 }
 
+// ---- Powers.gs
+// Powers: what a person may DO, kept apart from who they are. Every action the service screens offer is one named power; a role is just a set of powers.
+// Today the sets below are fixed in code (Admin, Manager, Pilot, DataEntry). Job roles with their own sets of powers will be added later: only
+// powerScope_() has to learn to read them (from a tab), because every function and every screen asks it and nothing else.
+//
+// A power is granted with a scope:  'all'  = on every record,  'own' = only on the person's own jobs (a pilot's jobs, or jobs nobody is assigned to yet).
+
+const POWERS_ = {
+  'service.request': 'Record, change and cancel service requests',
+  'service.schedule': 'Choose the day of a service (Scheduled) and move it',
+  'service.view': 'See the service map, the lists and the history',
+  'service.complete': 'Enter that a service was done, and how',
+  'service.payment': 'Enter and see payments and amounts'
+};
+
+const ROLE_POWERS_ = {
+  Admin: { 'service.request': 'all', 'service.schedule': 'all', 'service.view': 'all', 'service.complete': 'all', 'service.payment': 'all' },
+  Manager: { 'service.request': 'all', 'service.schedule': 'all', 'service.view': 'all', 'service.complete': 'all', 'service.payment': 'all' },
+  Pilot: { 'service.request': 'all', 'service.schedule': 'all', 'service.view': 'all', 'service.complete': 'own', 'service.payment': 'own' },
+  DataEntry: {}
+};
+
+// 'all', 'own' or '' (no power) for this person.
+function powerScope_(user, power) {
+  if (!user) return '';
+  const set = ROLE_POWERS_[user.role] || {};
+  return set[power] || '';
+}
+
+function hasPower_(user, power) { return !!powerScope_(user, power); }
+
+// The signed-in person, or an error naming what they are not allowed to do.
+function requirePower_(power) {
+  const user = currentUser_();
+  if (!user) throw new Error('Not signed in.');
+  if (!powerScope_(user, power)) throw new Error('Not authorised: you do not have the power to ' + String(POWERS_[power] || power).toLowerCase() + '.');
+  return user;
+}
+
+// What the screens receive: { power: 'all' | 'own' } for every power the person has.
+function powersOf_(user) {
+  const out = {};
+  Object.keys(POWERS_).forEach(p => { const s = powerScope_(user, p); if (s) out[p] = s; });
+  return out;
+}
+
+// True when this person may act on the job: 'all' scope, or 'own' scope and the job is theirs or still has no pilot.
+function powerCovers_(user, power, record) {
+  const s = powerScope_(user, power);
+  if (s === 'all') return true;
+  if (s !== 'own') return false;
+  const mine = String((record && record.pilot_email) || '').toLowerCase();
+  return !mine || mine === String(user.email).toLowerCase();
+}
+
 // ---- Schema.gs
 // Tab definitions. Mirrors DATA_MODEL.md section by section.
 // Changing a header here does not alter an existing sheet; see setupDatabase().
@@ -4942,7 +5006,17 @@ const SCHEMA = {
     'service_id', 'farmer_id', 'status', 'requested_date', 'service_date', 'start_time', 'end_time', 'duration_min',
     'pilot_name', 'pilot_email', 'drone', 'service_type', 'crop', 'acres_covered', 'product_used', 'quantity_l',
     'amount_charged', 'payment_status', 'satisfaction', 'feedback', 'notes'
-  ].concat(AUDIT_COLS),
+  ].concat(AUDIT_COLS).concat([
+    // The four steps of a service (see SERVICE_FLOW.md). Last, so a Services tab made before them is extended without moving anything.
+    // 1 request: the land, who recorded it, where the order came from, the window CAFT promised (window_from .. window_to; an exact day has both the same and exact_day Yes)
+    'land_id', 'request_group', 'request_source', 'requested_by', 'window_from', 'window_to', 'exact_day', 'acres_requested', 'request_notes',
+    // 2 scheduled: the day chosen (service_date holds the day it was DONE once completed), when and by whom, and why it was moved
+    'scheduled_date', 'scheduled_on', 'scheduled_by', 'schedule_notes',
+    // 3 completed: when it was entered and by whom, plus the facts of the job
+    'base_station', 'tanks', 'weather', 'completed_on', 'completed_by',
+    // 4 payment: amount_charged is the total due; an advance may come first; payment_status is Unpaid / Partly paid / Paid (Free for no charge)
+    'advance_paid', 'advance_amount', 'advance_date', 'final_amount', 'final_date', 'payment_method', 'payment_ref', 'payment_notes', 'paid_on', 'paid_by'
+  ]),
 
   // One row per bulk message prepared and sent to a group of farmers (the text, who it went to, how). Each farmer reached also gets an
   // Outreach row, so a farmer's profile can show which messages they were sent.
@@ -4962,7 +5036,7 @@ const SCHEMA = {
 
 // Columns that must stay text so Sheets never strips leading zeros or turns IDs into numbers.
 const TEXT_COLUMNS = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'meta', 'nic', 'phone_primary', 'phone_alt', 'path', 'parent_question_ids', 'date_of_birth', 'date', 'password_hash', 'password_salt',
-  'requested_date', 'service_date', 'start_time', 'end_time', 'ref', 'period', 'registered_date', 'start_date', 'end_date', 'land_name', 'village', 'tank', 'geology', 'irrigation', 'ds_division'];
+  'requested_date', 'service_date', 'start_time', 'end_time', 'ref', 'period', 'registered_date', 'start_date', 'end_date', 'window_from', 'window_to', 'scheduled_date', 'scheduled_on', 'completed_on', 'advance_date', 'final_date', 'paid_on', 'request_group', 'base_station', 'land_name', 'village', 'tank', 'geology', 'irrigation', 'ds_division'];
 
 // DataEntry: register farmers only. Manager: find farmers, Origin Map, export, service reports, record services. Admin: everything, plus accounts.
 // Pilot: drone pilot in the field, two jobs: register new farmers (like DataEntry) and record the services they did (and see their own records).
@@ -5426,6 +5500,511 @@ function seedMockFarmers(n, budgetMs, batch) {
 function seedMockFarmers30000() { return seedMockFarmers(30000); }
 
 
+// ---- ServiceFlow.gs
+// The four steps of a service: Request -> Scheduled -> Completed -> Paid (see SERVICE_FLOW.md). One row of the Services tab is one service on one land.
+// A request that names several lands makes several rows, tied together by request_group. status is Requested / Scheduled / Completed / Cancelled;
+// the payment has its own payment_status (Unpaid / Partly paid / Paid / Free). Nobody completes a job or marks it paid from the map: those are done
+// by their own functions here, each behind its own power (Powers.gs).
+//
+// Dates are ISO text (yyyy-mm-dd), times HH:MM, like the rest of the Services tab.
+
+const REQUEST_SOURCES_ = ['Field officer', 'Hotline', 'Farmer', 'AI officer', 'Lead farmer', 'Other'];
+const FLOW_ANY_POWER_ = ['service.request', 'service.schedule', 'service.view', 'service.complete', 'service.payment'];
+const FLOW_LIST_LIMIT_ = 300;        // rows sent with a list or the map
+const FLOW_MAP_POINTS_ = 4000;       // pins sent with the map
+const FLOW_MAX_ITEMS_ = 12;          // lands in one request
+const FLOW_STARTER_TYPES_ = ['Glyphosate spraying', 'Seed broadcasting', 'Pre-emergent spraying', 'Post-emergent spraying', 'Urea spreading', 'Fungicide spraying', 'Liquid fertilizer spraying'];
+// What a list needs from every service (the long texts are only read for one service).
+const FLOW_COLS_ = ['service_id', 'farmer_id', 'land_id', 'request_group', 'status', 'requested_date', 'requested_by', 'request_source', 'window_from', 'window_to', 'exact_day', 'acres_requested',
+  'scheduled_date', 'service_date', 'pilot_name', 'pilot_email', 'base_station', 'service_type', 'crop', 'acres_covered', 'amount_charged', 'payment_status', 'advance_paid', 'advance_amount',
+  'final_amount', 'completed_on', 'paid_on', 'start_time', 'end_time'];
+const SERVICE_MONEY_COLS_ = ['amount_charged', 'payment_status', 'advance_paid', 'advance_amount', 'advance_date', 'final_amount', 'final_date', 'payment_method', 'payment_ref', 'payment_notes', 'paid_on', 'paid_by'];
+
+function requireFlowUser_() {
+  const user = currentUser_();
+  if (!user) throw new Error('Not signed in.');
+  if (!FLOW_ANY_POWER_.some(p => hasPower_(user, p))) throw new Error('Not authorised for role ' + user.role + '.');
+  return user;
+}
+
+// ---------- small helpers ----------
+
+function flowDate_(raw, label, o) {
+  o = o || {};
+  const s = String(raw === undefined || raw === null ? '' : raw).trim().slice(0, 10);
+  if (!s) { if (o.required) throw new Error(label + ' is required.'); return ''; }
+  if (!isIsoDate_(s)) throw new Error(label + ' is not a valid date.');
+  const today = localToday_();
+  if (o.notFuture && s > today) throw new Error(label + ' cannot be in the future.');
+  if (o.notPast && s < today) throw new Error(label + ' cannot be before today.');
+  return s;
+}
+
+function dayNumber_(iso) { const d = isoDay_(iso); return d ? Math.round(Date.UTC(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, Number(d.slice(8, 10))) / 86400000) : null; }
+function daysBetween_(a, b) { const x = dayNumber_(a), y = dayNumber_(b); return x === null || y === null ? null : y - x; }
+
+function windowText_(r) {
+  const from = isoDay_(r.window_from), to = isoDay_(r.window_to);
+  if (!to) return '';
+  if (String(r.exact_day) === 'Yes') return 'On ' + to;
+  return from && from !== to ? from + ' to ' + to : 'Before ' + to;
+}
+
+function moneyAllowed_(user, r) { return hasPower_(user, 'service.payment') && powerCovers_(user, 'service.payment', r); }
+
+// The lands and the farmers, looked up once per request.
+function flowContext_() {
+  const lands = {};
+  readColumns_('Fields', ['field_id', 'farmer_id', 'acres', 'crop', 'active', 'land_name', 'district', 'ds_division', 'village', 'tank', 'latitude', 'longitude']).forEach(l => { lands[l.field_id] = l; });
+  return { lands: lands, farmers: indexLoad_().byId };
+}
+
+function placeOfLand_(land, farmer) {
+  const v = farmer ? farmer.v : [];
+  return {
+    village: (land && land.village) || v[11] || '', ds_division: (land && land.ds_division) || v[10] || '', district: (land && land.district) || v[9] || ''
+  };
+}
+
+function landLabel_(land, id) {
+  if (!land) return id ? id : 'Land not recorded';
+  return String(land.land_name || land.tank || land.village || land.field_id) + ' · ' + (Number(land.acres) || 0) + ' ac';
+}
+
+// One service as a list line (and a map pin): the farmer's name, the land, the place, where it is on the road, the money only for people who may see it.
+function flowCard_(r, ctx, user, today) {
+  const land = r.land_id ? ctx.lands[r.land_id] : null;
+  const farmer = ctx.farmers[r.farmer_id];
+  const place = placeOfLand_(land, farmer);
+  let lat = '', lng = '';
+  if (land && land.latitude !== '' && land.longitude !== '' && land.latitude !== undefined) { lat = Number(land.latitude); lng = Number(land.longitude); }
+  else if (farmer && farmer.v[16] !== '' && farmer.v[17] !== '') { lat = Number(farmer.v[16]); lng = Number(farmer.v[17]); }
+  const status = String(r.status);
+  const to = isoDay_(r.window_to);
+  const card = {
+    service_id: r.service_id, farmer_id: r.farmer_id, farmer_name: farmer ? farmer.v[1] : r.farmer_id, farmer_phone: farmer ? farmer.v[7] : '',
+    land_id: r.land_id || '', land_label: landLabel_(land, r.land_id), village: place.village, ds_division: place.ds_division, district: place.district,
+    latitude: lat === '' || !isFinite(lat) ? '' : lat, longitude: lng === '' || !isFinite(lng) ? '' : lng, located: lat !== '' && isFinite(lat),
+    status: status, service_type: r.service_type, crop: r.crop,
+    acres: status === 'Completed' ? (Number(r.acres_covered) || 0) : (Number(r.acres_requested) || (land ? Number(land.acres) || 0 : 0)),
+    requested_date: isoDay_(r.requested_date), requested_by: r.requested_by, request_source: r.request_source, request_group: r.request_group,
+    window_from: isoDay_(r.window_from), window_to: to, exact_day: String(r.exact_day) === 'Yes', window_text: windowText_(r),
+    scheduled_date: isoDay_(r.scheduled_date) || (status === 'Scheduled' || status === 'Completed' ? isoDay_(r.service_date) : ''),
+    service_date: status === 'Completed' ? isoDay_(r.service_date) : '', completed_on: isoDay_(r.completed_on),
+    pilot_name: r.pilot_name, pilot_email: r.pilot_email, base_station: r.base_station,
+    overdue: (status === 'Requested' && !!to && to < today) || (status === 'Scheduled' && !!to && isoDay_(r.scheduled_date || r.service_date) > to),
+    paid_on: isoDay_(r.paid_on)
+  };
+  if (moneyAllowed_(user, r)) {
+    card.amount_charged = r.amount_charged; card.payment_status = r.payment_status; card.advance_paid = r.advance_paid; card.advance_amount = r.advance_amount; card.final_amount = r.final_amount;
+  } else card.money_hidden = true;
+  return card;
+}
+
+// ---------- the one-time carry-over of the old service records ----------
+// Adds only: the planned day of a Scheduled job is copied into scheduled_date; a job whose farmer has exactly one land is tied to that land;
+// the kinds of service of the new flow are added to the list. Flag: Config services_flow_migrated.
+function ensureServiceFlow_() {
+  if (String(getConfig_('services_flow_migrated') || '') === 'Yes') return { skipped: true };
+  return withLock_(() => {
+    if (String(getConfig_('services_flow_migrated') || '') === 'Yes') return { skipped: true };
+    const H = SCHEMA.Services;
+    const sh = sheet_('Services');
+    const last = sh.getLastRow();
+    let linked = 0, dated = 0;
+    if (last >= 2) {
+      const landsBy = {};
+      readColumns_('Fields', ['field_id', 'farmer_id', 'active']).forEach(l => { if (l.active === 'Yes') (landsBy[l.farmer_id] = landsBy[l.farmer_id] || []).push(l.field_id); });
+      const c = n => H.indexOf(n);
+      const cols = [c('land_id'), c('scheduled_date')];
+      const from = Math.min(cols[0], cols[1]), to = Math.max(cols[0], cols[1]);
+      const block = sh.getRange(2, 1, last - 1, H.length).getValues();
+      const out = [];
+      let changed = false;
+      block.forEach(v => {
+        const row = v.slice(from, to + 1);
+        if (v[c('service_id')] !== '') {
+          if (v[c('land_id')] === '' && (landsBy[v[c('farmer_id')]] || []).length === 1) { row[c('land_id') - from] = landsBy[v[c('farmer_id')]][0]; linked++; changed = true; }
+          if (v[c('scheduled_date')] === '' && (v[c('status')] === 'Scheduled') && v[c('service_date')] !== '') { row[c('scheduled_date') - from] = isoDay_(v[c('service_date')]); dated++; changed = true; }
+        }
+        out.push(row);
+      });
+      if (changed) { touch_('Services'); sh.getRange(2, from + 1, out.length, to - from + 1).setValues(out); }
+    }
+    const have = serviceListValues_('service_type', true).map(x => x.toLowerCase());
+    const add = FLOW_STARTER_TYPES_.filter(t => have.indexOf(t.toLowerCase()) === -1);
+    if (add.length) appendObjects_('Lists', add.map(t => ({ list_name: 'service_type', value: t, active: 'Yes' })));
+    setConfig_('services_flow_migrated', 'Yes', 'Old services carried over to the four-step flow (see ServiceFlow.gs)');
+    audit_('migrate', 'Services', '', 'linked ' + linked + ' to a land, dated ' + dated + ' scheduled, added ' + add.length + ' kinds of service');
+    return { linked: linked, dated: dated, added: add.length };
+  });
+}
+
+// ---------- options ----------
+
+function getServiceFlowOptions() {
+  const user = requireFlowUser_();
+  ensureServiceFlow_();
+  const pilots = [];
+  readAll_('Users').forEach(u => {
+    if (u.active !== 'Yes' || hiddenRow_(u)) return;
+    if (u.role === 'Pilot' || u.role === 'Admin' || u.role === 'Manager') pilots.push({ email: String(u.email).toLowerCase(), name: u.name, role: u.role });
+  });
+  return plain_({
+    types: serviceListValues_('service_type'), crops: listsMap_().crop, drones: serviceListValues_('drone'), base_stations: serviceListValues_('base_station'),
+    sources: REQUEST_SOURCES_, pilots: pilots.sort((a, b) => String(a.name).localeCompare(String(b.name))), today: localToday_(),
+    me: { email: String(user.email).toLowerCase(), name: user.name, role: user.role }, powers: powersOf_(user)
+  });
+}
+
+// ---------- step 1: request ----------
+
+// old = the stored request when it is being changed: its owner check and its past days are then left alone (the land may have been sold, the window may have passed).
+function cleanRequestItem_(it, i, farmerId, ctx, lists, types, old) {
+  const n = 'Land ' + (i + 1);
+  const land = ctx.lands[String(it.land_id || '')];
+  if (!land || land.active !== 'Yes') throw new Error(n + ': choose one of the farmer\'s lands.');
+  if (!old && String(land.farmer_id) !== farmerId) throw new Error(n + ': this land is not owned by this farmer now.');
+  const crop = checkList_(clean_(it.crop), lists.crop, n + ' crop', '');
+  if (!crop) throw new Error(n + ': choose the crop.');
+  const type = checkList_(clean_(it.service_type), types, n + ' service', '');
+  if (!type) throw new Error(n + ': choose the service.');
+  let acres = cleanNumber_(it.acres === undefined || it.acres === '' ? land.acres : it.acres, n + ' acres', 0, MAX_SERVICE_ACRES);
+  if (acres === '' || acres <= 0) throw new Error(n + ': acres must be more than 0.');
+  let from = '', to = '', exact = 'No';
+  if (String(it.exact_day || '').trim()) {
+    to = from = flowDate_(it.exact_day, n + ' day', { notPast: !(old && isoDay_(old.window_to) === String(it.exact_day).slice(0, 10)) }); exact = 'Yes';
+  } else {
+    to = flowDate_(it.window_to, n + ' "before this day"', { required: true, notPast: !(old && isoDay_(old.window_to) === String(it.window_to).slice(0, 10)) });
+    from = flowDate_(it.window_from, n + ' "from"', { notPast: !(old && isoDay_(old.window_from) === String(it.window_from || '').slice(0, 10)) });
+    if (from && from > to) throw new Error(n + ': the first day is after the last day.');
+  }
+  return { land_id: land.field_id, crop: crop, service_type: type, acres: round2_(acres), window_from: from, window_to: to, exact_day: exact };
+}
+
+// input: { farmer_id, source, notes, items: [{ land_id, crop, service_type, acres?, window_to | exact_day, window_from? }] }
+function createServiceRequest(input) {
+  const user = requirePower_('service.request');
+  return withLock_(() => {
+    ensureServiceFlow_();
+    input = input || {};
+    const farmerId = String(input.farmer_id || '').trim();
+    const e = farmerId ? indexEntry_(farmerId) : null;
+    if (!e) throw new Error('Choose the farmer first.');
+    if (e.v[14] !== 'Active') throw new Error('This farmer has been removed, so a request cannot be recorded.');
+    const items = Array.isArray(input.items) ? input.items : [];
+    if (!items.length) throw new Error('Choose at least one land.');
+    if (items.length > FLOW_MAX_ITEMS_) throw new Error('A request can have at most ' + FLOW_MAX_ITEMS_ + ' lands.');
+    const source = REQUEST_SOURCES_.indexOf(input.source) !== -1 ? input.source : 'Field officer';
+    const ctx = flowContext_();
+    const lists = listsMap_(), types = serviceListValues_('service_type');
+    const clean = items.map((it, i) => cleanRequestItem_(it, i, farmerId, ctx, lists, types));
+    const seen = {};
+    clean.forEach((c, i) => { const k = c.land_id + '|' + c.service_type; if (seen[k]) throw new Error('Land ' + (i + 1) + ': the same service is listed twice for this land.'); seen[k] = true; });
+    // an open request for the same land and service already exists
+    const open = readColumns_('Services', ['service_id', 'land_id', 'service_type', 'status', 'farmer_id']).filter(r => r.farmer_id === farmerId && (r.status === 'Requested' || r.status === 'Scheduled'));
+    clean.forEach((c, i) => { const twin = open.find(r => r.land_id === c.land_id && String(r.service_type) === c.service_type); if (twin) throw new Error('Land ' + (i + 1) + ': there is already an open request for this service (' + twin.service_id + ').'); });
+    const ids = nextIds_('SV', 6, clean.length), group = nextId_('RQ', 6), today = localToday_(), me = String(user.email).toLowerCase();
+    const rows = clean.map((c, i) => Object.assign({
+      service_id: ids[i], farmer_id: farmerId, status: 'Requested', requested_date: today, service_type: c.service_type, crop: c.crop,
+      land_id: c.land_id, request_group: group, request_source: source, requested_by: me, window_from: c.window_from, window_to: c.window_to, exact_day: c.exact_day,
+      acres_requested: c.acres, request_notes: clean_(input.notes).slice(0, 300)
+    }, auditCols_(true)));
+    appendObjects_('Services', rows);
+    audit_('create', 'Services', group, farmerId + ' requested ' + rows.length + (rows.length === 1 ? ' service' : ' services'));
+    return { request_group: group, service_ids: ids };
+  });
+}
+
+function loadFlowRow_(serviceId) {
+  const rec = findServiceRow_(String(serviceId || ''));
+  if (!rec) throw new Error('Service not found.');
+  return rec;
+}
+
+function saveFlowRow_(rec, patch, note) {
+  const row = rec._archived ? restoreServiceRow_(rec.service_id) : rec;
+  const obj = Object.assign({}, row, patch, auditCols_(false));
+  writeRowObject_('Services', row._row, obj);
+  audit_('update', 'Services', obj.service_id, note);
+  return obj;
+}
+
+// Changes an open request (crop, service, acres, the promised window, the note).
+function updateServiceRequest(serviceId, patch) {
+  const user = requirePower_('service.request');
+  return withLock_(() => {
+    const rec = loadFlowRow_(serviceId);
+    if (rec.status !== 'Requested') throw new Error('Only a request that has not been scheduled yet can be changed.');
+    const p = patch || {};
+    const ctx = flowContext_();
+    const c = cleanRequestItem_({ land_id: rec.land_id, crop: p.crop === undefined ? rec.crop : p.crop, service_type: p.service_type === undefined ? rec.service_type : p.service_type, acres: p.acres === undefined ? rec.acres_requested : p.acres,
+      exact_day: p.exact_day === undefined && p.window_to === undefined ? (String(rec.exact_day) === 'Yes' ? isoDay_(rec.window_to) : '') : p.exact_day, window_to: p.window_to === undefined ? isoDay_(rec.window_to) : p.window_to,
+      window_from: p.window_from === undefined ? isoDay_(rec.window_from) : p.window_from }, 0, rec.farmer_id, ctx, listsMap_(), serviceListValues_('service_type'), rec);
+    saveFlowRow_(rec, { crop: c.crop, service_type: c.service_type, acres_requested: c.acres, window_from: c.window_from, window_to: c.window_to, exact_day: c.exact_day,
+      request_notes: p.notes === undefined ? rec.request_notes : clean_(p.notes).slice(0, 300) }, 'request changed');
+    return { service_id: rec.service_id };
+  });
+}
+
+function cancelService(serviceId, reason) {
+  requirePower_('service.request');
+  return withLock_(() => {
+    const rec = loadFlowRow_(serviceId);
+    if (rec.status !== 'Requested' && rec.status !== 'Scheduled') throw new Error('Only a request or a scheduled service can be cancelled.');
+    const why = clean_(reason).slice(0, 200);
+    if (!why) throw new Error('Say why it is cancelled.');
+    saveFlowRow_(rec, { status: 'Cancelled', notes: clean_((rec.notes ? rec.notes + ' | ' : '') + 'Cancelled: ' + why).slice(0, 300) }, 'cancelled: ' + why);
+    return { service_id: rec.service_id, status: 'Cancelled' };
+  });
+}
+
+// ---------- step 2: scheduled ----------
+
+// A request gets its day (or a scheduled service is moved: the note says why). Optionally the pilot and base station are named already.
+function scheduleService(serviceId, date, opts) {
+  const user = requirePower_('service.schedule');
+  return withLock_(() => {
+    const rec = loadFlowRow_(serviceId);
+    if (rec.status !== 'Requested' && rec.status !== 'Scheduled') throw new Error('Only a request or a scheduled service can be given a day.');
+    const o = opts || {};
+    const day = flowDate_(date, 'The day', { required: true, notPast: true });
+    const patch = { status: 'Scheduled', scheduled_date: day, service_date: day, scheduled_on: localToday_(), scheduled_by: String(user.email).toLowerCase() };
+    if (rec.status === 'Scheduled') {
+      const was = isoDay_(rec.scheduled_date) || isoDay_(rec.service_date);
+      if (was === day) throw new Error('It is already scheduled for that day.');
+      const why = clean_(o.note).slice(0, 120);
+      if (!why) throw new Error('Say why the day is changed.');
+      patch.schedule_notes = clean_((rec.schedule_notes ? rec.schedule_notes + ' | ' : '') + 'Moved from ' + was + ' to ' + day + ': ' + why).slice(0, 300);
+    } else if (o.note) patch.schedule_notes = clean_(o.note).slice(0, 300);
+    if (o.pilot_email) {
+      const row = findUserByEmail_(String(o.pilot_email).toLowerCase());
+      if (!row || row.active !== 'Yes' || hiddenRow_(row) || row.role === 'DataEntry') throw new Error('Choose the pilot from the list.');
+      patch.pilot_email = String(row.email).toLowerCase(); patch.pilot_name = row.name;
+    }
+    if (o.base_station) patch.base_station = checkList_(clean_(o.base_station), serviceListValues_('base_station'), 'Base station', rec.base_station);
+    saveFlowRow_(rec, patch, 'scheduled for ' + day);
+    const to = isoDay_(rec.window_to);
+    return { service_id: rec.service_id, status: 'Scheduled', scheduled_date: day, late: !!to && day > to };
+  });
+}
+
+// ---------- step 3: completed ----------
+
+// data: { service_date (the day it was done), start_time, end_time, pilot_email, drone, base_station, acres_covered, tanks, product_used, quantity_l, weather, crop, service_type, satisfaction?, notes }
+function completeService(serviceId, data) {
+  const user = requirePower_('service.complete');
+  return withLock_(() => {
+    const rec = loadFlowRow_(serviceId);
+    if (rec.status !== 'Scheduled' && rec.status !== 'Completed') throw new Error('Only a scheduled service can be completed.');
+    if (!powerCovers_(user, 'service.complete', rec)) throw new Error('Not authorised: this job belongs to another pilot.');
+    if (rec.status === 'Completed' && powerScope_(user, 'service.complete') === 'own' && Date.now() - new Date(rec.created_at).getTime() > PILOT_EDIT_DAYS * 86400000) throw new Error('Not authorised: a pilot can only correct their own records for ' + PILOT_EDIT_DAYS + ' days.');
+    const d = data || {};
+    const today = localToday_();
+    const day = flowDate_(d.service_date || isoDay_(rec.scheduled_date) || isoDay_(rec.service_date), 'The day it was done', { required: true, notFuture: true });
+    const req = isoDay_(rec.requested_date);
+    if (req && day < req) throw new Error('The service cannot be dated before the day it was requested.');
+    const start = String(d.start_time || '').trim(), end = String(d.end_time || '').trim();
+    if (!isTime_(start) || !isTime_(end)) throw new Error('Enter the start time and the end time.');
+    if (minutesOf_(end) <= minutesOf_(start)) throw new Error('The end time must be after the start time.');
+    let pilotEmail = String(rec.pilot_email || ''), pilotName = String(rec.pilot_name || '');
+    if (powerScope_(user, 'service.complete') === 'own') { pilotEmail = String(user.email).toLowerCase(); pilotName = user.name; }
+    else if (d.pilot_email) {
+      const row = findUserByEmail_(String(d.pilot_email).toLowerCase());
+      if (!row || row.active !== 'Yes' || hiddenRow_(row) || row.role === 'DataEntry') throw new Error('Choose the pilot from the list.');
+      pilotEmail = String(row.email).toLowerCase(); pilotName = row.name;
+    }
+    if (!pilotEmail) throw new Error('Choose the pilot who did the job.');
+    const lists = listsMap_();
+    const crop = checkList_(clean_(d.crop || rec.crop), lists.crop, 'Crop', rec.crop);
+    const type = checkList_(clean_(d.service_type || rec.service_type), serviceListValues_('service_type'), 'Service', rec.service_type);
+    if (!crop || !type) throw new Error('Choose the crop and the service.');
+    const acres = cleanNumber_(d.acres_covered, 'Acres sprayed', 0, MAX_SERVICE_ACRES);
+    if (acres === '' || acres <= 0) throw new Error('Acres sprayed must be more than 0.');
+    const drones = serviceListValues_('drone'), bases = serviceListValues_('base_station');
+    const tanks = cleanNumber_(d.tanks, 'Tanks', 0, 10000);
+    let sat = '';
+    if (d.satisfaction !== '' && d.satisfaction !== undefined && d.satisfaction !== null) { sat = Number(d.satisfaction); if (!Number.isInteger(sat) || sat < 1 || sat > 5) throw new Error('Satisfaction is a score from 1 to 5.'); }
+    const patch = {
+      status: 'Completed', service_date: day, start_time: start, end_time: end, duration_min: minutesOf_(end) - minutesOf_(start), pilot_email: pilotEmail, pilot_name: pilotName,
+      drone: drones.length ? checkList_(clean_(d.drone), drones, 'Drone', rec.drone) : '', base_station: bases.length ? checkList_(clean_(d.base_station || rec.base_station), bases, 'Base station', rec.base_station) : clean_(d.base_station || rec.base_station).slice(0, 60),
+      crop: crop, service_type: type, acres_covered: round2_(acres), tanks: tanks, product_used: clean_(d.product_used).slice(0, 80), quantity_l: cleanNumber_(d.quantity_l, 'Quantity', 0, 100000),
+      weather: clean_(d.weather).slice(0, 80), satisfaction: sat, notes: clean_(d.notes === undefined ? rec.notes : d.notes).slice(0, 300),
+      completed_on: rec.status === 'Completed' ? rec.completed_on : today, completed_by: rec.status === 'Completed' ? rec.completed_by : String(user.email).toLowerCase()
+    };
+    if (!isoDay_(rec.scheduled_date) && rec.status === 'Scheduled') patch.scheduled_date = isoDay_(rec.service_date);
+    saveFlowRow_(rec, patch, 'completed ' + patch.acres_covered + ' ac');
+    return { service_id: rec.service_id, status: 'Completed' };
+  });
+}
+
+// ---------- step 4: payment ----------
+
+// data: { amount_charged (the total), advance: 'Yes'|'No', advance_amount, advance_date, final_amount, final_date, payment_method, payment_ref, payment_notes }
+function recordPayment(serviceId, data) {
+  const user = requirePower_('service.payment');
+  return withLock_(() => {
+    const rec = loadFlowRow_(serviceId);
+    if (rec.status !== 'Scheduled' && rec.status !== 'Completed') throw new Error('A payment can be entered for a scheduled or a completed service.');
+    if (!powerCovers_(user, 'service.payment', rec)) throw new Error('Not authorised: this job belongs to another pilot.');
+    const d = data || {};
+    const total = cleanNumber_(d.amount_charged, 'The total amount', 0, 100000000);
+    if (total === '') throw new Error('Enter the total amount (0 if it is free).');
+    const req = isoDay_(rec.requested_date);
+    const early = (v, l) => { if (req && v < req) throw new Error(l + ' cannot be before the day it was requested.'); return v; };
+    const adv = String(d.advance) === 'Yes';
+    let advAmt = '', advDate = '';
+    if (adv) {
+      advAmt = cleanNumber_(d.advance_amount, 'The advance', 0, 100000000);
+      if (advAmt === '' || advAmt <= 0) throw new Error('Enter the advance amount.');
+      advDate = early(flowDate_(d.advance_date, 'The day the advance was paid', { required: true, notFuture: true }), 'The advance day');
+    }
+    let finAmt = cleanNumber_(d.final_amount, 'The payment', 0, 100000000), finDate = '';
+    if (finAmt !== '' && finAmt > 0) finDate = early(flowDate_(d.final_date, 'The day it was paid', { required: true, notFuture: true }), 'The payment day');
+    else finAmt = '';
+    const paid = round2_((Number(advAmt) || 0) + (Number(finAmt) || 0));
+    if (paid > Number(total)) throw new Error('The money paid (' + paid + ') is more than the total (' + total + ').');
+    const status = Number(total) === 0 ? 'Free' : (paid >= Number(total) ? 'Paid' : (paid > 0 ? 'Partly paid' : 'Unpaid'));
+    const last = [advDate, finDate].filter(Boolean).sort().pop() || '';
+    saveFlowRow_(rec, {
+      amount_charged: round2_(total), payment_status: status, advance_paid: adv ? 'Yes' : 'No', advance_amount: advAmt, advance_date: advDate, final_amount: finAmt, final_date: finDate,
+      payment_method: clean_(d.payment_method).slice(0, 40), payment_ref: clean_(d.payment_ref).slice(0, 60), payment_notes: clean_(d.payment_notes).slice(0, 200), paid_on: last, paid_by: String(user.email).toLowerCase()
+    }, 'payment ' + status);
+    return { service_id: rec.service_id, payment_status: status, paid: paid, total: round2_(total) };
+  });
+}
+
+// ---------- reading: list, map, one service ----------
+
+function flowFilter_(input) {
+  const f = input || {};
+  const out = { stage: clean_(f.stage), from: flowDate_(f.from, 'From', {}), to: flowDate_(f.to, 'To', {}), district: clean_(f.district).slice(0, 60), ds_division: clean_(f.ds_division).slice(0, 60),
+    type: clean_(f.service_type).slice(0, 80), crop: clean_(f.crop).slice(0, 60), payment: clean_(f.payment), q: clean_(f.q).toLowerCase().slice(0, 60), farmer_id: clean_(f.farmer_id).slice(0, 20),
+    land_id: clean_(f.land_id).slice(0, 20), pilot: clean_(f.pilot_email).toLowerCase(), overdue: f.overdue === true || f.overdue === 'Yes' };
+  if (out.from && out.to && out.from > out.to) throw new Error('"From" is after "To".');
+  if (out.stage && ['Requested', 'Scheduled', 'Completed', 'Cancelled', 'Active', 'Payable'].indexOf(out.stage) === -1) throw new Error('Unknown stage.');
+  if (out.payment && ['Paid', 'Partly paid', 'Unpaid', 'Free', 'None'].indexOf(out.payment) === -1) throw new Error('Unknown payment state.');
+  return out;
+}
+
+// The day a service counts under for a time period: requests by their promised window (any overlap), the others by their own day.
+function flowInPeriod_(r, f) {
+  if (!f.from && !f.to) return true;
+  const s = String(r.status);
+  if (s === 'Requested') {
+    const lo = isoDay_(r.window_from) || isoDay_(r.requested_date), hi = isoDay_(r.window_to) || lo;
+    return (!f.to || lo <= f.to) && (!f.from || hi >= f.from);
+  }
+  const day = s === 'Scheduled' ? (isoDay_(r.scheduled_date) || isoDay_(r.service_date)) : (s === 'Completed' ? isoDay_(r.service_date) : isoDay_(r.requested_date));
+  return !!day && (!f.from || day >= f.from) && (!f.to || day <= f.to);
+}
+
+function flowMatches_(r, f, card, user) {
+  // Active = still to be done (requested or scheduled); Payable = a payment can be entered (scheduled or completed)
+  if (f.stage === 'Active' ? (r.status !== 'Requested' && r.status !== 'Scheduled') : f.stage === 'Payable' ? (r.status !== 'Scheduled' && r.status !== 'Completed') : (f.stage && r.status !== f.stage)) return false;
+  if (!flowInPeriod_(r, f)) return false;
+  if (f.type && String(r.service_type) !== f.type) return false;
+  if (f.crop && String(r.crop) !== f.crop) return false;
+  if (f.farmer_id && r.farmer_id !== f.farmer_id) return false;
+  if (f.land_id && r.land_id !== f.land_id) return false;
+  if (f.pilot && String(r.pilot_email).toLowerCase() !== f.pilot) return false;
+  if (f.district && card.district !== f.district) return false;
+  if (f.ds_division && card.ds_division !== f.ds_division) return false;
+  if (f.overdue && !card.overdue) return false;
+  if (f.payment) {
+    if (!moneyAllowed_(user, r)) return false;
+    const p = String(r.payment_status || '');
+    if (f.payment === 'None' ? p !== '' : p !== f.payment) return false;
+  }
+  if (f.q && [card.farmer_name, card.farmer_id, card.land_label, card.land_id, card.service_id, card.village].join(' ').toLowerCase().indexOf(f.q) === -1) return false;
+  return true;
+}
+
+function flowSort_(rows, stage) {
+  // requests: the most urgent promise first; scheduled: the nearest day first; everything else: the latest first
+  const key = c => (c.status === 'Requested' ? (c.window_to || '9999') : c.status === 'Scheduled' ? (c.scheduled_date || '9999') : (c.service_date || c.requested_date || ''));
+  const asc = stage === 'Requested' || stage === 'Scheduled' || stage === 'Active';      // (Payable: latest first, like the history)
+  return rows.sort((a, b) => (asc ? key(a).localeCompare(key(b)) : key(b).localeCompare(key(a))) || String(a.service_id).localeCompare(String(b.service_id)));
+}
+
+function flowSummary_(cards) {
+  const by = { Requested: 0, Scheduled: 0, Completed: 0, Cancelled: 0 }, acres = { Requested: 0, Scheduled: 0, Completed: 0, Cancelled: 0 };
+  const district = {}, type = {};
+  let overdue = 0, unlocated = 0;
+  cards.forEach(c => {
+    by[c.status] = (by[c.status] || 0) + 1; acres[c.status] = round2_((acres[c.status] || 0) + c.acres);
+    const d = c.district || 'Not recorded';
+    district[d] = district[d] || { district: d, services: 0, acres: 0 }; district[d].services++; district[d].acres = round2_(district[d].acres + c.acres);
+    const t = c.service_type || 'Not recorded'; type[t] = (type[t] || 0) + 1;
+    if (c.overdue) overdue++;
+    if (!c.located) unlocated++;
+  });
+  return { total: cards.length, by_stage: by, acres_by_stage: acres, overdue: overdue, unlocated: unlocated,
+    by_district: Object.keys(district).map(k => district[k]).sort((a, b) => b.services - a.services),
+    by_type: Object.keys(type).map(k => ({ name: k, services: type[k] })).sort((a, b) => b.services - a.services) };
+}
+
+// Everything the list screens need: the services that match the filters, as cards, the figures over ALL of them and (for the map) their pins.
+function flowRun_(input, withPoints) {
+  const user = requireFlowUser_();
+  ensureServiceFlow_();
+  const f = flowFilter_(input);
+  const ctx = flowContext_(), today = localToday_();
+  const all = readColumns_('Services', FLOW_COLS_);
+  const cards = [];
+  all.forEach(r => {
+    const card = flowCard_(r, ctx, user, today);
+    // a person who has only the 'own' scope for completion or payment sees just those jobs in the lists meant for them: the caller asks with f.pilot
+    if (flowMatches_(r, f, card, user)) cards.push(card);
+  });
+  flowSort_(cards, f.stage);
+  const out = { rows: cards.slice(0, Number(input && input.limit) > 0 ? Math.min(Number(input.limit), FLOW_LIST_LIMIT_) : FLOW_LIST_LIMIT_), total: cards.length, truncated: cards.length > FLOW_LIST_LIMIT_, summary: flowSummary_(cards), today: today };
+  if (withPoints) out.points = cards.filter(c => c.located).slice(0, FLOW_MAP_POINTS_).map(c => ({ id: c.service_id, lat: c.latitude, lng: c.longitude, status: c.status, acres: c.acres, type: c.service_type, overdue: c.overdue, district: c.district }));
+  return out;
+}
+
+function listServiceFlow(filter) { return plain_(flowRun_(filter, false)); }
+function getServiceMap(filter) { return plain_(flowRun_(filter, true)); }
+
+// The road of one service: its nodes, the days between them and what the signed-in person may do with it now.
+function getServiceRoad(serviceId) {
+  const user = requireFlowUser_();
+  ensureServiceFlow_();
+  const rec = loadFlowRow_(serviceId);
+  const ctx = flowContext_(), today = localToday_();
+  const card = flowCard_(rec, ctx, user, today);
+  const s = String(rec.status);
+  const sched = isoDay_(rec.scheduled_date) || (s === 'Scheduled' || s === 'Completed' ? isoDay_(rec.service_date) : '');
+  const money = moneyAllowed_(user, rec);
+  const pay = String(rec.payment_status || '');
+  const nodes = [{ key: 'requested', label: 'Requested', state: 'done', date: isoDay_(rec.requested_date), by: rec.requested_by, note: windowText_(rec) }];
+  if (s === 'Cancelled') nodes.push({ key: 'cancelled', label: 'Cancelled', state: 'cancelled', date: '', note: String(rec.notes || '') });
+  else {
+    nodes.push({ key: 'scheduled', label: 'Scheduled', state: s === 'Requested' ? 'next' : 'done', date: sched, by: rec.scheduled_by, note: rec.schedule_notes || '', late: !!sched && !!isoDay_(rec.window_to) && sched > isoDay_(rec.window_to) });
+    nodes.push({ key: 'completed', label: 'Completed', state: s === 'Completed' ? 'done' : (s === 'Scheduled' ? 'next' : 'todo'), date: s === 'Completed' ? isoDay_(rec.service_date) : '', by: rec.completed_by, note: s === 'Completed' ? (Number(rec.acres_covered) || 0) + ' acres' : '' });
+    nodes.push(money ? { key: 'paid', label: pay === 'Paid' ? 'Paid in full' : (pay === 'Partly paid' ? 'Advance paid' : (pay === 'Free' ? 'No charge' : 'Payment')), state: (pay === 'Paid' || pay === 'Free') ? 'done' : (pay === 'Partly paid' ? 'partial' : (s === 'Completed' ? 'next' : 'todo')),
+      date: isoDay_(rec.paid_on), by: rec.paid_by, note: '' } : { key: 'paid', label: 'Payment', state: 'hidden', date: '', note: '' });
+  }
+  const days = { request_to_schedule: daysBetween_(rec.requested_date, rec.scheduled_on || sched), request_to_done: s === 'Completed' ? daysBetween_(rec.requested_date, rec.service_date) : null,
+    done_to_paid: pay === 'Paid' && s === 'Completed' ? daysBetween_(rec.service_date, rec.paid_on) : null,
+    total: pay === 'Paid' ? daysBetween_(rec.requested_date, rec.paid_on) : (s === 'Completed' ? daysBetween_(rec.requested_date, rec.service_date) : null),
+    open: s === 'Requested' || s === 'Scheduled' ? daysBetween_(rec.requested_date, today) : null,
+    late_by: s === 'Completed' && isoDay_(rec.window_to) && isoDay_(rec.service_date) > isoDay_(rec.window_to) ? daysBetween_(rec.window_to, rec.service_date) : null };
+  const detail = stripRow_(rec); delete detail._archived;
+  ['requested_date', 'service_date', 'window_from', 'window_to', 'scheduled_date', 'scheduled_on', 'completed_on', 'advance_date', 'final_date', 'paid_on'].forEach(k => { detail[k] = isoDay_(detail[k]); });
+  detail.start_time = timeText_(detail.start_time); detail.end_time = timeText_(detail.end_time);
+  if (!money) SERVICE_MONEY_COLS_.forEach(k => { detail[k] = ''; });
+  return plain_({
+    card: card, nodes: nodes, days: days, detail: detail, today: today,
+    can: {
+      edit_request: s === 'Requested' && hasPower_(user, 'service.request'), cancel: (s === 'Requested' || s === 'Scheduled') && hasPower_(user, 'service.request'),
+      schedule: (s === 'Requested' || s === 'Scheduled') && hasPower_(user, 'service.schedule'),
+      complete: (s === 'Scheduled' || s === 'Completed') && hasPower_(user, 'service.complete') && powerCovers_(user, 'service.complete', rec),
+      payment: (s === 'Scheduled' || s === 'Completed') && hasPower_(user, 'service.payment') && powerCovers_(user, 'service.payment', rec)
+    }
+  });
+}
+
 // ---- ServiceReportData.gs
 // Numbers for the Service report screen, the best-customer ranking, and the service export. Counting happens here, so the
 // browser only receives a small summary however many services there are.
@@ -5649,7 +6228,7 @@ function exportServices(input) {
 
 const SERVICE_STATUSES = ['Requested', 'Scheduled', 'Completed', 'Cancelled'];
 const PAYMENT_STATUSES = ['Paid', 'Partly paid', 'Unpaid', 'Free'];
-const SERVICE_LISTS = [['service_type', 'Kinds of service'], ['drone', 'Drones']];
+const SERVICE_LISTS = [['service_type', 'Kinds of service'], ['drone', 'Drones'], ['base_station', 'Base stations']];
 const SERVICE_ROLES = ['Admin', 'Manager', 'Pilot'];
 const MAX_SERVICE_ACRES = 5000;
 const LOCAL_OFFSET_MINUTES = 330;     // Sri Lanka time (UTC+5:30): the "today" a pilot means, whatever the server clock says
@@ -5739,7 +6318,7 @@ function serviceOut_(r, user) {
   o.service_date = isoDay_(o.service_date);
   o.start_time = timeText_(o.start_time);
   o.end_time = timeText_(o.end_time);
-  if (user && user.role === 'Pilot' && String(r.pilot_email).toLowerCase() !== String(user.email).toLowerCase()) { o.amount_charged = ''; o.payment_status = ''; }
+  if (user && !moneyAllowed_(user, r)) SERVICE_MONEY_COLS_.forEach(k => { o[k] = ''; });      // money only for people with the payment power (and, with the 'own' scope, only on their own jobs)
   return o;
 }
 
@@ -6336,7 +6915,7 @@ function syncStatus() {
 }
 
 // The read-only screen functions whose answers the browser may keep (it must list the same names, see DEPS in Sync.html).
-const SYNCED_READS_ = ['listRecentServices', 'listServices', 'getServiceReport', 'getEarthData', 'getFarmerLogbook', 'getFarmerView', 'getFarmerServices', 'getFarmer', 'getService', 'getLand', 'getFarmerLands', 'findLands',
+const SYNCED_READS_ = ['listRecentServices', 'listServices', 'getServiceReport', 'getEarthData', 'getFarmerLogbook', 'getFarmerView', 'getFarmerServices', 'getFarmer', 'getService', 'getLand', 'getFarmerLands', 'findLands', 'getServiceFlowOptions', 'listServiceFlow', 'getServiceMap', 'getServiceRoad',
   'getOriginMap', 'getFarmerOrigin', 'listMessages', 'listUsers', 'listSegments', 'getExportInfo', 'getAreaOptions', 'getFinderOptions', 'getServiceSetup', 'getServiceOptions',
   'getDesignerData', 'getFormDefinition', 'getRegistrationData', 'previewAudience', 'listAudience', 'getEarthGeo'];
 
@@ -6504,7 +7083,7 @@ var __ENG_FMT = 3;
 var __ENG = { meta: null, temps: null };
 var __ENG_READS = ['getRegistrationData', 'getFormDefinition', 'getFarmer', 'getFarmerView', 'findFarmers', 'getOriginMap', 'getFarmerOrigin', 'getDashboard', 'getFinderOptions', 'runFinder',
   'listSegments', 'getServiceOptions', 'findFarmersForService', 'getFarmerServices', 'getService', 'listRecentServices', 'listServices', 'getAreaOptions', 'getServiceReport', 'previewAudience',
-  'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows', 'getLand', 'getFarmerLands', 'findLands'];
+  'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows', 'getLand', 'getFarmerLands', 'findLands', 'getServiceFlowOptions', 'listServiceFlow', 'getServiceMap', 'getServiceRoad'];
 var __ENG_WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer'];
 var __ENG_DATA_ENTRY = ['getRegistrationData', 'getFormDefinition', 'saveFarmer'];     // a data entry account receives no farmer data, so only these can be answered on the device
 
