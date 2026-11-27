@@ -590,6 +590,55 @@ function archiveStatus() {
     files: archiveIndex_().map(e => ({ table: e.table, period: e.period, rows: e.rows })) };
 }
 
+// ---- AuditData.gs
+// The log book (REDESIGN.md): every change made in the app is a line of the AuditLog tab (see audit_ in Db.gs): who, when, what kind of thing, which one, and the details.
+// getAuditLog reads it for the Log book screen and the audit report: by period, person, farmer, land, service, kind of record and kind of event.
+// (Lines older than ARCH_KEEP_AUDIT_MONTHS months are moved to the Drive archive and are not in this list.)
+
+const AUDIT_ROWS_ = 3000;
+const AUDIT_REPORT_ROWS_ = 20000;
+
+function auditAt_(v) {
+  const d = v instanceof Date ? v : new Date(v);
+  return isNaN(d.getTime()) ? '' : new Date(d.getTime() + LOCAL_OFFSET_MINUTES * 60000).toISOString().slice(0, 16).replace('T', ' ');
+}
+
+// filter: { from, to (days), user (email), entity, action, farmer_id, land_id, service_id, q, all (report: more rows) }
+function getAuditLog(filter) {
+  requirePower_('audit.view');
+  const f = filter || {};
+  const from = f.from ? flowDate_(f.from, 'From', {}) : '', to = f.to ? flowDate_(f.to, 'To', {}) : '';
+  if (from && to && from > to) throw new Error('"From" is after "To".');
+  const who = clean_(f.user).toLowerCase(), entity = clean_(f.entity), action = clean_(f.action);
+  const farmer = clean_(f.farmer_id).toUpperCase(), land = clean_(f.land_id).toUpperCase(), service = clean_(f.service_id).toUpperCase(), q = clean_(f.q).toLowerCase().slice(0, 60);
+  const names = {};
+  const users = [];
+  readAll_('Users').forEach(u => { if (hiddenRow_(u)) return; names[String(u.email).toLowerCase()] = u.name; users.push({ email: String(u.email).toLowerCase(), name: u.name }); });
+  const entities = {}, actions = {};
+  const out = [];
+  readAll_('AuditLog').forEach(r => {
+    const e = String(r.entity || ''), a = String(r.action || '');
+    entities[e] = 1; actions[a] = 1;
+    const at = auditAt_(r.timestamp), day = at.slice(0, 10);
+    if (from && day < from) return;
+    if (to && day > to) return;
+    if (who && String(r.user).toLowerCase() !== who) return;
+    if (entity && e !== entity) return;
+    if (action && a !== action) return;
+    const det = String(r.details || '');
+    if (farmer && det.indexOf(farmer) === -1 && String(r.entity_id) !== farmer) return;
+    if (land && det.indexOf(land) === -1 && String(r.entity_id) !== land) return;
+    if (service && det.indexOf(service) === -1 && String(r.entity_id) !== service) return;
+    const text = det.replace(/ ?\{(farmer|land|service):[^}]*\}/g, '');
+    if (q && (text + ' ' + e + ' ' + a + ' ' + r.entity_id + ' ' + r.user).toLowerCase().indexOf(q) === -1) return;
+    const tagOf = k => { const m = det.match(new RegExp('\\{[^}]*' + k + ':([^ }]*)')); return m ? m[1] : ''; };
+    out.push({ at: at, user: String(r.user || ''), name: names[String(r.user || '').toLowerCase()] || '', action: a, entity: e, entity_id: String(r.entity_id || ''), details: text, farmer: tagOf('farmer'), land: tagOf('land'), service: tagOf('service') });
+  });
+  out.reverse();
+  const cap = f.all ? AUDIT_REPORT_ROWS_ : AUDIT_ROWS_;
+  return plain_({ rows: out.slice(0, cap), total: out.length, truncated: out.length > cap, users: users.sort((x, y) => String(x.name).localeCompare(String(y.name))), entities: Object.keys(entities).filter(Boolean).sort(), actions: Object.keys(actions).filter(Boolean).sort() });
+}
+
 // ---- Auth.gs
 // Accounts, passwords, sessions and permissions.
 //
@@ -614,7 +663,7 @@ const SIGN_IN_FAILED = 'Wrong email or password, or the account is temporarily l
 const API_NAMES_ = [
   'getFormDefinition', 'getDesignerData', 'saveQuestion', 'setQuestionActive', 'moveQuestion', 'saveOptions', 'updateOption', 'setOptionActive',
   'getRegistrationData', 'saveFarmer', 'getFarmer', 'getFarmerView', 'findFarmers', 'getLand', 'getFarmerLands', 'findLands', 'saveLand', 'assignLand', 'addPastOwner', 'editOwnership',
-  'getServiceFlowOptions', 'listServiceFlow', 'getServiceMap', 'getServiceRoad', 'createServiceRequest', 'updateServiceRequest', 'cancelService', 'scheduleService', 'completeService', 'recordPayment',
+  'getServiceFlowOptions', 'listServiceFlow', 'getServiceMap', 'getServiceRoad', 'createServiceRequest', 'updateServiceRequest', 'cancelService', 'scheduleService', 'unscheduleService', 'assignJobs', 'completeService', 'recordPayment', 'issueBill', 'getServiceTable', 'getAuditLog',
   'getOriginMap', 'getFarmerOrigin', 'getDashboard',
   'getFinderOptions', 'runFinder', 'exportFinder', 'listSegments', 'saveSegment', 'deleteSegment',
   'getExportInfo', 'readTableChunk',
@@ -622,6 +671,7 @@ const API_NAMES_ = [
   'getServiceSetup', 'addServiceListValue', 'setServiceListValueActive', 'getAreaOptions', 'getServiceReport', 'exportServices',
   'previewAudience', 'listAudience', 'prepareMessage', 'logMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'addInteraction', 'removeFarmer', 'restoreFarmer', 'getHome', 'getEarthGeo', 'getEarthData', 'savePlace',
   'syncStatus', 'syncedRead', 'getFarmerChunks', 'getServiceRows', 'getFarmerPack', 'getServicePack', 'getFormPack', 'getLocalPlan', 'getTableDelta', 'submitOp', 'saveFarmerGps',
+  'getOrgSetup', 'saveBaseStation', 'saveDrone', 'saveJobRole',
   'listUsers', 'createUser', 'updateUser', 'resetUserPassword', 'unlockUser', 'deleteUser', 'changeOwnPassword', 'changeOwnEmail',
   'devGpsStatus', 'devEstimateGps', 'devClearEstimatedGps', 'devEnableMockServices', 'devDisableMockServices',
   'devStatus', 'devEnableMockStep', 'devDisableMock', 'devRebuildIndex', 'getExtraScreen'
@@ -665,7 +715,9 @@ function findUserByEmail_(email) {
 function publicUser_(row) {
   const u = { user_id: row.user_id, email: String(row.email).toLowerCase(), name: row.name, role: row.role, label: row.label, must_change: row.must_change_password === 'Yes' };
   if (row.role === 'Admin' && isDeveloperEmail_(row.email)) { u.tools = true; u.roleLabel = 'Developer'; }
-  u.powers = powersOf_(u);      // what the person may do (see Powers.gs); the screens show only what they may use
+  const jr = jobRoleOf_(row);
+  u.job_role_id = jr.id; u.job_role = jr.name; u.base_station = String(row.base_station || ''); u.drone = String(row.drone || '');
+  u.powers = powersFromRow_(row);      // what the person may do (see Powers.gs); the screens show only what they may use
   return u;
 }
 
@@ -751,7 +803,10 @@ function sessionFromToken_(token) {
   if (!raw) return null;
   let s;
   try { s = JSON.parse(raw); } catch (e) { cache.remove(key); return null; }
-  if (s.user && !s.user.powers) s.user.powers = powersOf_(s.user);      // a session made before powers existed
+  if (s.user && s.user.job_role_id === undefined) {      // a session made before job roles existed: take the account's own settings now
+    const row0 = findUserByEmail_(s.email);
+    if (row0 && row0.active === 'Yes') { s.user = publicUser_(row0); cache.put(key, JSON.stringify(s), SESSION_TTL_SECONDS); } else s.user.powers = powersOf_(s.user);
+  }
   const revoked = Number(cache.get('r:' + s.email) || 0);
   if (revoked && revoked >= s.issued) { cache.remove(key); return null; }
   const now = Date.now();
@@ -879,6 +934,7 @@ function userRowToList_(r) {
   const last = r.last_login;
   return {
     user_id: r.user_id, name: r.name, email: String(r.email).toLowerCase(), role: r.role, label: r.label, active: r.active,
+    job_role_id: jobRoleOf_(r).id, job_role: jobRoleOf_(r).name, base_station: String(r.base_station || ''), drone: String(r.drone || ''),
     must_change: r.must_change_password === 'Yes', has_password: !!r.password_hash, locked: Number(r.locked_until) > Date.now(),
     last_login: last ? (Object.prototype.toString.call(last) === '[object Date]' ? last.toISOString() : String(last)) : '',
     created_at: r.created_at, roleLabel: isDeveloperRow_(r) ? 'Developer' : undefined
@@ -900,14 +956,15 @@ function createUser(input) {
   if (!validEmail_(email)) throw new Error('Enter a valid email address.');
   const taken = findUserByEmail_(email);
   if (taken) throw new Error(hiddenRow_(taken) ? 'That email address cannot be used.' : 'An account with that email already exists.');
-  if (ROLES.indexOf(input.role) === -1) throw new Error('Choose a role.');
+  if (input.job_role_id === undefined && ROLES.indexOf(input.role) === -1) throw new Error('Choose a job role.');
+  const scope = input.job_role_id === undefined ? { job_role_id: '', role: input.role, base_station: '', drone: '' } : cleanAccountScope_(input, null);
   const password = checkPasswordPolicy_(input.password, email);
   const id = nextId_('U', 3);
   appendObjects_('Users', [Object.assign({
-    user_id: id, email: email, name: name, role: input.role, label: clean_(input.label).slice(0, 60), active: 'Yes',
+    user_id: id, email: email, name: name, role: scope.role, job_role_id: scope.job_role_id, base_station: scope.base_station, drone: scope.drone, label: clean_(input.label).slice(0, 60), active: 'Yes',
     failed_attempts: 0, locked_until: '', last_login: '', must_change_password: input.must_change ? 'Yes' : 'No'
   }, makePasswordRecord_(password), auditCols_(true))]);
-  audit_('create', 'Users', id, email + ' as ' + input.role);
+  audit_('create', 'Users', id, email + ' as ' + (scope.job_role_id || scope.role) + (scope.base_station ? ' at ' + scope.base_station : '') + (scope.drone ? ' with ' + scope.drone : ''));
   return { user_id: id };
 }
 
@@ -933,11 +990,16 @@ function updateUser(userId, input) {
     patch.email = email;
   }
   if (input.must_change !== undefined) patch.must_change_password = input.must_change ? 'Yes' : 'No';
-  if (input.role !== undefined && input.role !== row.role) {
-    if (ROLES.indexOf(input.role) === -1) throw new Error('Choose a role.');
-    if (userId === me.user_id) throw new Error('You cannot change your own role.');
-    if (row.role === 'Admin' && activeAdminCount_(rows, userId) === 0) throw new Error('There must be at least one active Admin.');
-    patch.role = input.role;
+  if (input.job_role_id !== undefined || input.base_station !== undefined || input.drone !== undefined || (input.role !== undefined && input.role !== row.role)) {
+    // a change of the old role alone (older screens) is a change to the system job role of that name
+    const asked = input.job_role_id === undefined && input.role !== undefined ? Object.assign({}, input, { job_role_id: 'SYS_' + input.role }) : input;
+    const scope = cleanAccountScope_(asked, row);
+    const roleChanged = scope.job_role_id !== jobRoleOf_(row).id || scope.role !== row.role;
+    const placeChanged = scope.base_station !== String(row.base_station || '') || scope.drone !== String(row.drone || '');
+    if (roleChanged && userId === me.user_id) throw new Error('You cannot change your own role.');
+    if (placeChanged && userId === me.user_id) throw new Error('You cannot change your own base station or drone.');
+    if (roleChanged && row.role === 'Admin' && scope.role !== 'Admin' && activeAdminCount_(rows, userId) === 0) throw new Error('There must be at least one active Admin.');
+    if (roleChanged || placeChanged) { patch.role = scope.role; patch.job_role_id = scope.job_role_id; patch.base_station = scope.base_station; patch.drone = scope.drone; }
   }
   if (input.active !== undefined && (input.active ? 'Yes' : 'No') !== row.active) {
     if (userId === me.user_id) throw new Error('You cannot deactivate your own account.');
@@ -946,7 +1008,7 @@ function updateUser(userId, input) {
   }
   if (!Object.keys(patch).length) return true;
   updateById_('Users', userId, Object.assign(patch, auditCols_(false)));
-  if (patch.role !== undefined || patch.active !== undefined || patch.email !== undefined) revokeSessions_(row.email);
+  if (patch.role !== undefined || patch.job_role_id !== undefined || patch.active !== undefined || patch.email !== undefined) revokeSessions_(row.email);
   audit_('update', 'Users', userId, row.email + ': ' + Object.keys(patch).join(', ') + (patch.email ? ' (now ' + patch.email + ')' : ''));
   return true;
 }
@@ -1202,13 +1264,13 @@ function db_() {
 }
 
 // Tabs that gained columns at their right end after the first release: how many (they are added by sheet_ the first time the tab is opened).
-const ADDED_COLUMNS_ = { Fields: 8, Services: 28 };
+const ADDED_COLUMNS_ = { Fields: 8, Services: 35, Users: 3 };
 
 function sheet_(name) {
   if (SHEET_MEMO_[name]) return SHEET_MEMO_[name];
   let sh = db_().getSheetByName(name);
   // The archive index was added later: an older spreadsheet gets the tab here, once (checked again under the lock, so two requests cannot both make it).
-  if (!sh && (name === 'ArchiveIndex' || name === 'OpLog' || name === 'LandOwners')) {
+  if (!sh && (name === 'ArchiveIndex' || name === 'OpLog' || name === 'LandOwners' || name === 'BaseStations' || name === 'Drones' || name === 'JobRoles')) {
     withLock_(() => { if (!db_().getSheetByName(name)) ensureSheet_(db_(), name); });
     sh = db_().getSheetByName(name);
   }
@@ -1492,14 +1554,21 @@ function nextIds_(prefix, width, n) {
   });
 }
 
-function audit_(action, entity, entityId, details) {
+// One line of the log book. refs ({ farmer_id, land_id, service_id }) say which farmer, land or service the line is about; they are written at the end of the
+// details as {farmer:F000001 land:FLD000002 service:SV000003}, so the log book can be searched by them (the screen hides the tag).
+function audit_(action, entity, entityId, details, refs) {
+  const r = Object.assign({}, refs || {});
+  if (entity === 'Farmers' && entityId && !r.farmer_id) r.farmer_id = entityId;
+  if (entity === 'Fields' && entityId && !r.land_id) r.land_id = entityId;
+  if (entity === 'Services' && /^SV/.test(String(entityId)) && !r.service_id) r.service_id = entityId;
+  const tag = [['farmer', r.farmer_id], ['land', r.land_id], ['service', r.service_id]].filter(p => p[1]).map(p => p[0] + ':' + p[1]).join(' ');
   appendObjects_('AuditLog', [{
     timestamp: new Date(),
     user: currentEmail_(),
     action: action,
     entity: entity,
     entity_id: entityId || '',
-    details: details || ''
+    details: String(details || '') + (tag ? ' {' + tag + '}' : '')
   }]);
 }
 
@@ -3980,7 +4049,7 @@ function saveLandLocked_(user, input) {
     indexMarkDirty_();
     const row = Object.assign({}, existing, details, auditCols_(false));
     writeRowObject_('Fields', existing._row, row);
-    audit_('update', 'Fields', existing.field_id, 'land details');
+    audit_('update', 'Fields', existing.field_id, 'land details', { farmer_id: existing.farmer_id });
     reindexLands_([{ farmerId: existing.farmer_id, drop: existing._row, add: fieldEntry_(row, existing._row) }]);
     return { land_id: existing.field_id, created: false };
   }
@@ -3996,7 +4065,7 @@ function saveLandLocked_(user, input) {
   const landRowNo = appendObjects_('Fields', [land]);
   appendObjects_('LandOwners', [Object.assign({ ownership_id: nextId_('OWN', 6), land_id: id, farmer_id: owner.farmer.farmer_id, start_date: start, end_date: '',
     start_known: start ? 'Yes' : 'No', how: how, notes: clean_(input.ownership_notes).slice(0, 200) }, auditCols_(true))]);
-  audit_('create', 'Fields', id, 'new land for ' + owner.farmer.farmer_id);
+  audit_('create', 'Fields', id, 'new land for ' + owner.farmer.farmer_id, { farmer_id: owner.farmer.farmer_id });
   reindexLands_([{ farmerId: owner.farmer.farmer_id, drop: 0, add: fieldEntry_(land, landRowNo) }]);
   return { land_id: id, created: true };
 }
@@ -4029,7 +4098,7 @@ function assignLandLocked_(user, input) {
     start_known: 'Yes', how: how, notes: clean_(input.notes).slice(0, 200) }, auditCols_(true))]);
   const row = Object.assign({}, land, { farmer_id: to.farmer.farmer_id }, auditCols_(false));
   writeRowObject_('Fields', land._row, row);
-  audit_('transfer', 'Fields', land.field_id, land.farmer_id + ' -> ' + to.farmer.farmer_id + ' on ' + day);
+  audit_('transfer', 'Fields', land.field_id, land.farmer_id + ' -> ' + to.farmer.farmer_id + ' on ' + day, { farmer_id: land.farmer_id + ' ' + to.farmer.farmer_id });
   reindexLands_([{ farmerId: land.farmer_id, drop: land._row, add: null }, { farmerId: to.farmer.farmer_id, drop: 0, add: fieldEntry_(row, land._row) }]);
   return { land_id: land.field_id, farmer_id: to.farmer.farmer_id, from_farmer_id: land.farmer_id, date: day };
 }
@@ -4056,7 +4125,7 @@ function addPastOwner(input) {
     const sorted = sortOwners_(rows.concat([{ ownership_id: id, start_date: start, end_date: end }]));
     const next = sorted[sorted.findIndex(o => o.ownership_id === id) + 1];
     if (next && !isoDay_(next.start_date)) updateByIdLocked_('LandOwners', next.ownership_id, Object.assign({ start_date: end, start_known: 'Yes' }, auditCols_(false)));
-    audit_('create', 'LandOwners', id, 'past owner ' + who.farmer.farmer_id + ' of ' + land.field_id);
+    audit_('create', 'LandOwners', id, 'past owner ' + who.farmer.farmer_id + ' of ' + land.field_id, { farmer_id: who.farmer.farmer_id, land_id: land.field_id });
     return { ownership_id: id };
   });
 }
@@ -4156,7 +4225,7 @@ function addInteraction(input) {
   return withLock_(() => {
     const oid = nextId_('OR', 6);
     appendObjects_('Outreach', [Object.assign({ outreach_id: oid, product_id: '', farmer_id: id, channel: type, date: date, outcome: outcome, notes: notes, by: currentEmail_() }, auditCols_(true))]);
-    audit_('create', 'Outreach', oid, id + ' ' + type);
+    audit_('create', 'Outreach', oid, id + ' ' + type, { farmer_id: id });
     return { outreach_id: oid };
   });
 }
@@ -4587,7 +4656,7 @@ function mockServicesStatusFromEditor() { const r = devMockServicesStatus(); Log
 const PACK_CHUNKS_PER_CALL = 10;     // farmer chunks (100 farmers each) in one answer
 const PACK_SERVICE_PAGE = 2500;      // job rows in one answer
 const OPLOG_KEEP_ROWS_ = 4000;       // the log of finished operations is cut back to this many rows
-const QUEUEABLE_FUNCTIONS_ = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'createServiceRequest', 'updateServiceRequest', 'cancelService', 'scheduleService', 'completeService', 'recordPayment'];
+const QUEUEABLE_FUNCTIONS_ = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'createServiceRequest', 'updateServiceRequest', 'cancelService', 'scheduleService', 'unscheduleService', 'assignJobs', 'completeService', 'recordPayment'];
 const REPLAY_MAX_DAYS_ = 30;       // a save that waited longer than this is replayed with today's date
 
 // ---------- the complete farmer records ----------
@@ -4702,22 +4771,23 @@ function submitOp(opId, fn, args, madeAt) {
 const LOCAL_TABLE_KINDS_ = {
   Config: ['lists', false], Lists: ['lists', false], FormQuestions: ['form', true], FormOptions: ['form', true],
   Farmers: ['farmers', true], Fields: ['farmers', true], LandOwners: ['farmers', true], FarmerAnswers: ['farmers', true], Services: ['services', true],
-  Users: ['users', true], Places: ['places', true], Segments: ['segments', true], Messages: ['messages', true], Outreach: ['outreach', true]
+  Users: ['users', true], Places: ['places', true], Segments: ['segments', true], Messages: ['messages', true], Outreach: ['outreach', true],
+  BaseStations: ['lists', false], Drones: ['lists', false]
 };
 const LOCAL_PLAN_ = {
-  Admin: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'LandOwners', 'FarmerAnswers', 'Services', 'Users', 'Places', 'Segments', 'Messages', 'Outreach'],
-  Manager: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'LandOwners', 'FarmerAnswers', 'Services', 'Users', 'Places', 'Segments', 'Messages', 'Outreach'],
-  Pilot: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'LandOwners', 'FarmerAnswers', 'Services', 'Users'],
+  Admin: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'LandOwners', 'FarmerAnswers', 'Services', 'Users', 'Places', 'Segments', 'Messages', 'Outreach', 'BaseStations', 'Drones'],
+  Manager: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'LandOwners', 'FarmerAnswers', 'Services', 'Users', 'Places', 'Segments', 'Messages', 'Outreach', 'BaseStations', 'Drones'],
+  Pilot: ['Config', 'Lists', 'FormQuestions', 'FormOptions', 'Farmers', 'Fields', 'LandOwners', 'FarmerAnswers', 'Services', 'Users', 'BaseStations', 'Drones'],
   DataEntry: ['Config', 'Lists', 'FormQuestions', 'FormOptions']
 };
-const LOCAL_CONFIG_KEYS_ = ['duplicate_check_mode', 'mock_services_on', 'lands_migrated', 'services_flow_migrated'];       // the only settings a device receives
+const LOCAL_CONFIG_KEYS_ = ['duplicate_check_mode', 'mock_services_on', 'lands_migrated', 'services_flow_migrated', 'org_seeded'];       // the only settings a device receives
 const LOCAL_PAGE_ROWS_ = 3000;
 const LOCAL_DATE_MARK_ = '~D:';             // in front of a date sent to the device; the device turns it back into a date
 
 function getLocalPlan() {
   const user = requireRole_(ROLES);
   // The one-time carry-over of the old fields into lands is done here, on the server, before any device makes its copy (a device must never do it itself).
-  if (user.role !== 'DataEntry') { ensureLandOwners_(); ensureServiceFlow_(); }
+  if (user.role !== 'DataEntry') { ensureOrg_(); ensureLandOwners_(); ensureServiceFlow_(); }
   const names = LOCAL_PLAN_[user.role] || [];
   return plain_({ role: user.role, tables: names.map(n => ({ name: n, kind: LOCAL_TABLE_KINDS_[n][0], delta: LOCAL_TABLE_KINDS_[n][1], columns: SCHEMA[n].length })), revs: currentRevs_() });
 }
@@ -4740,7 +4810,8 @@ function getTableDelta(table, since, from) {
   if (name === 'Users') ['password_hash', 'password_salt', 'failed_attempts', 'locked_until', 'last_login', 'must_change_password'].forEach(c => { mask[headers.indexOf(c)] = true; });
   // money columns of the services: hidden without the payment power; with only the 'own' scope, hidden on other pilots' jobs (a job with no pilot yet is open to all)
   if (name === 'Services') { const sc = powerScope_(user, 'service.payment'); if (sc !== 'all') SERVICE_MONEY_COLS_.forEach(k => { if (headers.indexOf(k) !== -1) mask[headers.indexOf(k)] = sc === 'own' ? 'money' : true; }); }
-  const pilotAt = headers.indexOf('pilot_email');
+  const pilotAt = headers.indexOf('pilot_email'), droneAt = headers.indexOf('drone'), stationAt = headers.indexOf('base_station');
+  const meMail = String(user.email).toLowerCase(), myStation = String(user.base_station || ''), myDrone = String(user.drone || '');
   const cut = since && upd !== -1 ? new Date(Date.parse(String(since)) - SERVICE_SYNC_OVERLAP_MS).toISOString() : '';
   const pick = [];
   let top = '';
@@ -4750,6 +4821,11 @@ function getTableDelta(table, since, from) {
       if (!row.some(c => c !== '')) return;
       if (name === 'Users' && hiddenRow_(objectOfRow_(headers, row))) return;
       if (name === 'Config' && LOCAL_CONFIG_KEYS_.indexOf(String(row[0])) === -1) return;
+      // a person receives only the jobs of their base station, and a drone account only its drone's jobs (see Powers.gs)
+      if (name === 'Services') {
+        if (myStation && String(row[stationAt]) !== '' && String(row[stationAt]) !== myStation) return;
+        if (myDrone && String(row[droneAt]) !== myDrone && String(row[pilotAt]).toLowerCase() !== meMail) return;
+      }
       out.count++;
       const st = upd !== -1 ? stampText_(row[upd]) : '';
       if (st > top) top = st;
@@ -4762,7 +4838,7 @@ function getTableDelta(table, since, from) {
   out.next = start + page.length;
   out.rows = page.map(row => row.map((v, i) => {
     if (mask[i] === true) return '';
-    if (mask[i] === 'money' && String(row[pilotAt]) !== '' && String(row[pilotAt]).toLowerCase() !== String(user.email).toLowerCase()) return '';
+    if (mask[i] === 'money' && !((myDrone && String(row[droneAt]) === myDrone) || String(row[pilotAt]).toLowerCase() === meMail)) return '';
     if (dev && staff.indexOf(i) !== -1 && String(v).toLowerCase() === dev) return 'system';
     return v instanceof Date ? LOCAL_DATE_MARK_ + v.toISOString() : v;       // a date stays a date on the device (the server code treats dates and text differently)
   }));
@@ -4773,6 +4849,228 @@ function getTableDelta(table, since, from) {
 }
 
 function objectOfRow_(headers, row) { const o = {}; headers.forEach((h, i) => { o[h] = row[i]; }); return o; }
+
+// ---- Org.gs
+// The organisation: base stations, drones and job roles (REDESIGN.md). The Admin sets these up; every account then has a job role (its powers, see Powers.gs),
+// a base station (empty = every station) and, for a pilot account, the one drone it belongs to.
+
+const DEFAULT_STATIONS_ = [
+  { name: 'Ampara', district: 'Ampara', lat: 7.2975, lng: 81.682 },
+  { name: 'Anuradhapura', district: 'Anuradhapura', lat: 8.3114, lng: 80.4037 },
+  { name: 'Hambantota', district: 'Hambantota', lat: 6.1241, lng: 81.1185 },
+  { name: 'Polonnaruwa', district: 'Polonnaruwa', lat: 7.9403, lng: 81.0188 }
+];
+
+function orgSeeded_() { return String(getConfig_('org_seeded') || '') === 'Yes'; }
+
+// One-time carry-over (Config org_seeded): the four stations (plus any station or drone name the old Lists tab held) become rows of the new tabs. Adds only.
+function ensureOrg_() {
+  if (orgSeeded_()) return { skipped: true };
+  return withLock_(() => {
+    if (orgSeeded_()) return { skipped: true };
+    const lists = readAll_('Lists');
+    const stations = DEFAULT_STATIONS_.map(s => ({ name: s.name, district: s.district, latitude: s.lat, longitude: s.lng, active: 'Yes' }));
+    lists.filter(l => l.list_name === 'base_station').forEach(l => {
+      const have = stations.find(s => s.name.toLowerCase() === String(l.value).toLowerCase());
+      if (!have) stations.push({ name: String(l.value), district: '', latitude: '', longitude: '', active: l.active === 'Yes' ? 'Yes' : 'No' });
+    });
+    const sIds = nextIds_('BS', 2, stations.length);
+    appendObjects_('BaseStations', stations.map((s, i) => Object.assign({ station_id: sIds[i] }, s, auditCols_(true))));
+    const drones = lists.filter(l => l.list_name === 'drone');
+    if (drones.length) {
+      const dIds = nextIds_('DR', 2, drones.length);
+      appendObjects_('Drones', drones.map((l, i) => Object.assign({ drone_id: dIds[i], name: String(l.value), base_station: '', model: '', active: l.active === 'Yes' ? 'Yes' : 'No', notes: '' }, auditCols_(true))));
+    }
+    setConfig_('org_seeded', 'Yes', 'Base stations and drones carried over from the old lists (see Org.gs)');
+    audit_('migrate', 'BaseStations', '', stations.length + ' base stations, ' + drones.length + ' drones');
+    return { stations: stations.length, drones: drones.length };
+  });
+}
+
+// drone name -> the name of the pilot whose account belongs to it
+function dronePilots_() {
+  const o = {};
+  readAll_('Users').forEach(u => { if (u.active === 'Yes' && u.drone && !hiddenRow_(u)) o[String(u.drone)] = u.name; });
+  return o;
+}
+
+function stationRows_(includeOff) { return readAll_('BaseStations').filter(r => includeOff || r.active === 'Yes'); }
+function droneRows_(includeOff) { return readAll_('Drones').filter(r => includeOff || r.active === 'Yes'); }
+
+// The stations as the screens use them (name, district, point).
+function stationList_(includeOff) {
+  return stationRows_(includeOff).map(r => ({ station_id: r.station_id, name: String(r.name), district: String(r.district || ''), latitude: r.latitude === '' ? '' : Number(r.latitude), longitude: r.longitude === '' ? '' : Number(r.longitude), active: r.active === 'Yes' }));
+}
+function droneList_(includeOff) {
+  return droneRows_(includeOff).map(r => ({ drone_id: r.drone_id, name: String(r.name), base_station: String(r.base_station || ''), model: String(r.model || ''), notes: String(r.notes || ''), active: r.active === 'Yes' }));
+}
+
+function requireOrgAdmin_() { return requirePower_('admin.manage'); }
+
+// ---------- the setup screen ----------
+
+function jobRoleList_() {
+  const tab = readAll_('JobRoles');
+  const users = readAll_('Users').filter(u => !hiddenRow_(u));
+  const out = [];
+  const used = key => users.filter(u => (String(u.job_role_id || '') || 'SYS_' + u.role) === key && u.active === 'Yes').length;
+  Object.keys(SYSTEM_JOB_ROLES_).forEach(id => {
+    const sys = SYSTEM_JOB_ROLES_[id];
+    const own = tab.find(r => r.role_id === id && r.active === 'Yes');
+    out.push({ role_id: id, name: sys.name, system: true, fixed: !!sys.fixed, active: true, powers: own && !sys.fixed ? parsePowers_(own.powers) : sys.powers, changed: !!own && !sys.fixed, notes: own ? String(own.notes || '') : '', users: used(id) });
+  });
+  tab.filter(r => !SYSTEM_JOB_ROLES_[r.role_id]).forEach(r => out.push({ role_id: r.role_id, name: String(r.name), system: false, fixed: false, active: r.active === 'Yes', powers: parsePowers_(r.powers), notes: String(r.notes || ''), users: used(r.role_id) }));
+  return out;
+}
+
+function getOrgSetup() {
+  requireOrgAdmin_();
+  ensureOrg_();
+  return plain_({
+    stations: stationList_(true), drones: droneList_(true), roles: jobRoleList_(),
+    drone_users: (() => { const o = {}; readAll_('Users').forEach(u => { if (u.active === 'Yes' && u.drone && !hiddenRow_(u)) o[String(u.drone)] = u.name; }); return o; })(),
+    powers: Object.keys(POWERS_).map(id => ({ id: id, label: POWERS_[id], limited: DRONE_LIMITED_.indexOf(id) !== -1 })), groups: POWER_GROUPS_
+  });
+}
+
+// ---------- base stations ----------
+
+function cleanCoord_(v, label, lo, hi) {
+  if (v === '' || v === undefined || v === null) return '';
+  const n = Number(v);
+  if (!isFinite(n) || n < lo || n > hi) throw new Error(label + ' is not a place in Sri Lanka.');
+  return Math.round(n * 1e6) / 1e6;
+}
+
+// input: { station_id?, name, district, latitude, longitude, active }. A station's name is what jobs and accounts store, so it cannot be changed after it is made.
+function saveBaseStation(input) {
+  requireOrgAdmin_();
+  return withLock_(() => {
+    ensureOrg_();
+    const i = input || {};
+    const rows = readAll_('BaseStations');
+    const lat = cleanCoord_(i.latitude, 'The latitude', 5.5, 10.2), lng = cleanCoord_(i.longitude, 'The longitude', 79, 82.5);
+    if ((lat === '') !== (lng === '')) throw new Error('Enter both the latitude and the longitude, or neither.');
+    const district = clean_(i.district).slice(0, 40);
+    if (i.station_id) {
+      const row = rows.find(r => r.station_id === i.station_id);
+      if (!row) throw new Error('Base station not found.');
+      const active = i.active === undefined ? row.active : (i.active ? 'Yes' : 'No');
+      updateById_('BaseStations', row.station_id, Object.assign({ district: district, latitude: lat, longitude: lng, active: active }, auditCols_(false)));
+      audit_('update', 'BaseStations', row.station_id, row.name + (active !== row.active ? (active === 'Yes' ? ' switched on' : ' switched off') : ' changed'));
+      return { station_id: row.station_id };
+    }
+    const name = clean_(i.name).slice(0, 40);
+    if (!name) throw new Error('Type the name of the base station.');
+    if (rows.some(r => String(r.name).toLowerCase() === name.toLowerCase())) throw new Error('There is already a base station called "' + name + '".');
+    const id = nextId_('BS', 2);
+    appendObjects_('BaseStations', [Object.assign({ station_id: id, name: name, district: district, latitude: lat, longitude: lng, active: 'Yes' }, auditCols_(true))]);
+    audit_('create', 'BaseStations', id, name);
+    return { station_id: id };
+  });
+}
+
+// ---------- drones ----------
+
+// input: { drone_id?, name, base_station, model, notes, active }. Name cannot be changed after it is made (jobs store it).
+function saveDrone(input) {
+  requireOrgAdmin_();
+  return withLock_(() => {
+    ensureOrg_();
+    const i = input || {};
+    const rows = readAll_('Drones');
+    const stations = stationList_(false).map(s => s.name);
+    const station = clean_(i.base_station);
+    if (!station) throw new Error('Choose the base station this drone works from.');
+    if (stations.indexOf(station) === -1) throw new Error('Choose the base station from the list.');
+    const model = clean_(i.model).slice(0, 40), notes = clean_(i.notes).slice(0, 200);
+    if (i.drone_id) {
+      const row = rows.find(r => r.drone_id === i.drone_id);
+      if (!row) throw new Error('Drone not found.');
+      const active = i.active === undefined ? row.active : (i.active ? 'Yes' : 'No');
+      updateById_('Drones', row.drone_id, Object.assign({ base_station: station, model: model, notes: notes, active: active }, auditCols_(false)));
+      audit_('update', 'Drones', row.drone_id, row.name + (active !== row.active ? (active === 'Yes' ? ' switched on' : ' switched off') : ' changed'));
+      return { drone_id: row.drone_id };
+    }
+    const name = clean_(i.name).slice(0, 40);
+    if (!name) throw new Error('Type the name of the drone.');
+    if (rows.some(r => String(r.name).toLowerCase() === name.toLowerCase())) throw new Error('There is already a drone called "' + name + '".');
+    const id = nextId_('DR', 2);
+    appendObjects_('Drones', [Object.assign({ drone_id: id, name: name, base_station: station, model: model, active: 'Yes', notes: notes }, auditCols_(true))]);
+    audit_('create', 'Drones', id, name + ' at ' + station);
+    return { drone_id: id };
+  });
+}
+
+// ---------- job roles ----------
+
+// input: { role_id?, name, powers: { 'service.complete': true | 'own', ... }, notes, active }
+function saveJobRole(input) {
+  const me = requireOrgAdmin_();
+  return withLock_(() => {
+    const i = input || {};
+    const tab = readAll_('JobRoles');
+    const set = {};
+    Object.keys(i.powers || {}).forEach(p => { if (POWERS_[p] && i.powers[p]) set[p] = i.powers[p] === 'own' && DRONE_LIMITED_.indexOf(p) !== -1 ? 'own' : true; });
+    if (!Object.keys(set).length) throw new Error('Choose at least one power for this job role.');
+    const notes = clean_(i.notes).slice(0, 200);
+    let id = String(i.role_id || '');
+    const sys = SYSTEM_JOB_ROLES_[id];
+    if (sys && sys.fixed) throw new Error('The Admin job role cannot be changed.');
+    if (id && !sys && !tab.find(r => r.role_id === id)) throw new Error('Job role not found.');
+    let name = sys ? sys.name : clean_(i.name).slice(0, 40);
+    if (!name) throw new Error('Type the name of the job role.');
+    const taken = r => String(r.name).toLowerCase() === name.toLowerCase() && r.role_id !== id;
+    if (tab.some(taken) || Object.keys(SYSTEM_JOB_ROLES_).some(k => SYSTEM_JOB_ROLES_[k].name.toLowerCase() === name.toLowerCase() && k !== id)) throw new Error('There is already a job role called "' + name + '".');
+    const active = i.active === false ? 'No' : 'Yes';
+    const newLegacy = legacyRoleOf_(set);
+    // Never leave the app without an active Admin: the people on this role would stop being Admins.
+    const users = readAll_('Users').filter(u => !hiddenRow_(u));
+    const onRole = u => (String(u.job_role_id || '') || 'SYS_' + u.role) === id;
+    if (id && (newLegacy !== 'Admin' || active === 'No')) {
+      const others = users.filter(u => u.active === 'Yes' && u.role === 'Admin' && !onRole(u));
+      if (users.some(u => u.active === 'Yes' && u.role === 'Admin' && onRole(u)) && !others.length) throw new Error('There must be at least one active Admin.');
+    }
+    const existing = tab.find(r => r.role_id === id);
+    if (existing) updateById_('JobRoles', id, Object.assign({ name: name, powers: powersText_(set), active: active, notes: notes }, auditCols_(false)));
+    else {
+      if (!id) id = nextId_('JR', 3);
+      appendObjects_('JobRoles', [Object.assign({ role_id: id, name: name, powers: powersText_(set), active: active, notes: notes }, auditCols_(true))]);
+    }
+    // The people on this role take its new powers: their old role follows and their sessions are refreshed.
+    users.filter(onRole).forEach(u => {
+      const now = jobRoleOf_(Object.assign({}, u, { job_role_id: id }));
+      if (now.role !== u.role) updateById_('Users', u.user_id, Object.assign({ role: now.role }, auditCols_(false)));
+      revokeSessions_(u.email);
+    });
+    audit_(existing || sys ? 'update' : 'create', 'JobRoles', id, name + ': ' + Object.keys(set).length + ' powers' + (active === 'No' ? ' (switched off)' : '') + ' by ' + me.email);
+    return { role_id: id };
+  });
+}
+
+// ---------- accounts: the three new settings ----------
+
+// Checks and returns { job_role_id, role, base_station, drone } for an account being made or changed. current = the account's present row (or null).
+function cleanAccountScope_(input, current) {
+  const jobId = input.job_role_id !== undefined ? String(input.job_role_id || '') : String((current && current.job_role_id) || '');
+  const probe = { job_role_id: jobId, role: current ? current.role : (input.role || '') };
+  let jr = jobRoleOf_(probe);
+  if (input.job_role_id !== undefined && jobId && jr.id !== jobId) throw new Error('Choose a job role from the list.');
+  if (!jr.id) throw new Error('Choose a job role.');
+  const station = input.base_station !== undefined ? clean_(input.base_station) : String((current && current.base_station) || '');
+  const drone = input.drone !== undefined ? clean_(input.drone) : String((current && current.drone) || '');
+  if (station && stationList_(true).map(s => s.name).indexOf(station) === -1) throw new Error('Choose the base station from the list.');
+  let st = station;
+  if (drone) {
+    const d = droneList_(false).find(x => x.name === drone);
+    if (!d) throw new Error('Choose the drone from the list.');
+    if (st && d.base_station && d.base_station !== st) throw new Error(drone + ' works from ' + d.base_station + ', not ' + st + '.');
+    if (!st) st = d.base_station;
+    const other = readAll_('Users').find(u => u.active === 'Yes' && String(u.drone || '') === drone && (!current || u.user_id !== current.user_id));
+    if (other) throw new Error(drone + ' already belongs to the account of ' + other.name + '.');
+  }
+  return { job_role_id: jr.id, role: jr.role, base_station: st, drone: drone };
+}
 
 // ---- OriginMapData.gs
 // Data for the Origin Map screen. Counting happens here so the browser only receives one small
@@ -4891,32 +5189,107 @@ function getFarmerOrigin(farmerId) {
 }
 
 // ---- Powers.gs
-// Powers: what a person may DO, kept apart from who they are. Every action the service screens offer is one named power; a role is just a set of powers.
-// Today the sets below are fixed in code (Admin, Manager, Pilot, DataEntry). Job roles with their own sets of powers will be added later: only
-// powerScope_() has to learn to read them (from a tab), because every function and every screen asks it and nothing else.
+// Powers: what a person may DO, kept apart from who they are. Every feature is one named power; a JOB ROLE is a named set of powers (Org.gs),
+// an account has a job role, a base station and (a pilot account) one drone. Every function and every screen asks only powerScope_/hasPower_.
 //
-// A power is granted with a scope:  'all'  = on every record,  'own' = only on the person's own jobs (a pilot's jobs, or jobs nobody is assigned to yet).
+// A power is held with a scope:  'all' = on every job the person's base station covers,  'own' = only on the jobs given to the person's drone
+// (service.complete and service.payment can be limited this way: a pilot account sees only its drone's jobs).
+// The base station of the account limits every job list and every save (powerCovers_ / stationOk_); no base station = every station.
 
 const POWERS_ = {
+  'home.view': 'See the home page figures',
+  'farmer.register': 'Register new farmers',
+  'farmer.find': 'Find farmers and lands and open their profiles',
+  'land.edit': 'Add and change the lands of a farmer',
   'service.request': 'Record, change and cancel service requests',
-  'service.schedule': 'Choose the day of a service (Scheduled) and move it',
-  'service.view': 'See the service map, the lists and the history',
+  'service.schedule': 'Choose the day and time of a service (Scheduled) and move it',
+  'service.assign': 'Give scheduled jobs to a drone and plan the day',
   'service.complete': 'Enter that a service was done, and how',
-  'service.payment': 'Enter and see payments and amounts'
+  'service.payment': 'Enter payments and amounts, print bills',
+  'service.view': 'See the service lists, the map and the history',
+  'report.view': 'See and print the service reports',
+  'audit.view': 'See the log book and print audit reports',
+  'insight.view': 'Use the Earth map, the tree map, messages and export',
+  'admin.manage': 'Manage job roles, accounts, base stations, drones and forms'
 };
 
-const ROLE_POWERS_ = {
-  Admin: { 'service.request': 'all', 'service.schedule': 'all', 'service.view': 'all', 'service.complete': 'all', 'service.payment': 'all' },
-  Manager: { 'service.request': 'all', 'service.schedule': 'all', 'service.view': 'all', 'service.complete': 'all', 'service.payment': 'all' },
-  Pilot: { 'service.request': 'all', 'service.schedule': 'all', 'service.view': 'all', 'service.complete': 'own', 'service.payment': 'own' },
-  DataEntry: {}
+// How the powers are grouped on the job role screen: [group title, [power ids]]
+const POWER_GROUPS_ = [
+  ['Farmers and lands', ['farmer.register', 'farmer.find', 'land.edit']],
+  ['Services', ['service.request', 'service.schedule', 'service.assign', 'service.complete', 'service.payment', 'service.view']],
+  ['Figures and records', ['home.view', 'report.view', 'audit.view', 'insight.view']],
+  ['Administration', ['admin.manage']]
+];
+
+// Powers that can be limited to the person's own drone.
+const DRONE_LIMITED_ = ['service.complete', 'service.payment'];
+
+// The job roles every system starts with (the four old roles). Admin cannot be changed. The others can be changed on the Job roles screen
+// (that writes a row with the same role id into the JobRoles tab, which then wins). value true = all, 'own' = own drone only.
+const SYSTEM_JOB_ROLES_ = {
+  SYS_Admin: { name: 'Admin', role: 'Admin', fixed: true, powers: allPowers_() },
+  SYS_Manager: { name: 'Manager', role: 'Manager', powers: allPowers_(['admin.manage']) },
+  SYS_Pilot: { name: 'Pilot', role: 'Pilot', powers: { 'home.view': true, 'farmer.register': true, 'farmer.find': true, 'land.edit': true, 'service.view': true, 'service.complete': 'own', 'service.payment': 'own' } },
+  SYS_DataEntry: { name: 'DataEntry', role: 'DataEntry', powers: { 'farmer.register': true } }
 };
+
+function allPowers_(except) {
+  const o = {};
+  Object.keys(POWERS_).forEach(p => { if (!except || except.indexOf(p) === -1) o[p] = true; });
+  return o;
+}
+
+// "service.complete:own,farmer.register" <-> { 'service.complete': 'own', 'farmer.register': true }
+function parsePowers_(text) {
+  const o = {};
+  String(text || '').split(',').forEach(t => {
+    const p = t.trim().split(':');
+    if (POWERS_[p[0]]) o[p[0]] = p[1] === 'own' && DRONE_LIMITED_.indexOf(p[0]) !== -1 ? 'own' : true;
+  });
+  return o;
+}
+function powersText_(set) { return Object.keys(set).filter(p => POWERS_[p] && set[p]).map(p => p + (set[p] === 'own' ? ':own' : '')).join(','); }
+
+// The old role, which many server gates still check, follows from the powers: admin.manage -> Admin, insight.view -> Manager,
+// only registering farmers -> DataEntry, anything else -> Pilot (the field role: register, find, lands, services).
+function legacyRoleOf_(set) {
+  if (set['admin.manage']) return 'Admin';
+  if (set['insight.view']) return 'Manager';
+  const keys = Object.keys(set).filter(p => set[p]);
+  if (keys.every(p => p === 'farmer.register')) return 'DataEntry';
+  return 'Pilot';
+}
+
+// The job role of an account row: { id, name, role, powers: {power: true|'own'}, fixed } (custom or changed role from the tab, else the system one).
+function jobRoleOf_(row) {
+  const id = String((row && row.job_role_id) || '').trim();
+  const byName = row && row.role ? 'SYS_' + row.role : '';
+  const key = id || byName;
+  let tab = [];
+  try { tab = readAll_('JobRoles'); } catch (e) { tab = []; }
+  const own = tab.find(r => r.role_id === key && r.active === 'Yes');
+  const sys = SYSTEM_JOB_ROLES_[key];
+  if (own && !(sys && sys.fixed)) return { id: key, name: sys ? sys.name : String(own.name), role: legacyRoleOf_(parsePowers_(own.powers)), powers: parsePowers_(own.powers), fixed: false, system: !!sys };
+  if (sys) return { id: key, name: sys.name, role: sys.role, powers: sys.powers, fixed: !!sys.fixed, system: true };
+  const fallback = SYSTEM_JOB_ROLES_[byName];      // a deleted or switched-off custom role: the account falls back to its old role
+  return fallback ? { id: byName, name: fallback.name, role: fallback.role, powers: fallback.powers, fixed: !!fallback.fixed, system: true } : { id: '', name: '', role: 'DataEntry', powers: {}, fixed: false, system: false };
+}
+
+// What the screens and the server gates receive: { power: 'all' | 'own' } for every power the person has.
+function powersFromRow_(row) {
+  const jr = jobRoleOf_(row);
+  const out = {};
+  Object.keys(jr.powers).forEach(p => { if (jr.powers[p]) out[p] = jr.powers[p] === 'own' ? 'own' : 'all'; });
+  return out;
+}
 
 // 'all', 'own' or '' (no power) for this person.
 function powerScope_(user, power) {
   if (!user) return '';
-  const set = ROLE_POWERS_[user.role] || {};
-  return set[power] || '';
+  if (user.powers) return user.powers[power] || '';
+  const sys = SYSTEM_JOB_ROLES_['SYS_' + user.role];      // a user object made without powers (the owner running from the editor, or an old session)
+  const v = sys && sys.powers[power];
+  return v ? (v === 'own' ? 'own' : 'all') : '';
 }
 
 function hasPower_(user, power) { return !!powerScope_(user, power); }
@@ -4929,20 +5302,29 @@ function requirePower_(power) {
   return user;
 }
 
-// What the screens receive: { power: 'all' | 'own' } for every power the person has.
 function powersOf_(user) {
+  if (user && user.powers) return user.powers;
   const out = {};
   Object.keys(POWERS_).forEach(p => { const s = powerScope_(user, p); if (s) out[p] = s; });
   return out;
 }
 
-// True when this person may act on the job: 'all' scope, or 'own' scope and the job is theirs or still has no pilot.
+// True when the job belongs to the person's base station (an account without a base station sees every station; a job without one is still open to all).
+function stationOk_(user, record) {
+  const mine = String((user && user.base_station) || '');
+  const its = String((record && record.base_station) || '');
+  return !mine || !its || mine === its;
+}
+
+// True when this person may act on the job: it is in their station, and with 'own' scope it is a job of their drone (or one they did themselves).
 function powerCovers_(user, power, record) {
   const s = powerScope_(user, power);
+  if (!s || !stationOk_(user, record)) return false;
   if (s === 'all') return true;
-  if (s !== 'own') return false;
-  const mine = String((record && record.pilot_email) || '').toLowerCase();
-  return !mine || mine === String(user.email).toLowerCase();
+  const drone = String((user && user.drone) || '');
+  const myMail = String(user.email || '').toLowerCase();
+  const doneByMe = !!record && String(record.pilot_email || '').toLowerCase() === myMail && String(record.status) === 'Completed';
+  return (!!drone && String((record && record.drone) || '') === drone) || doneByMe;
 }
 
 // ---- Schema.gs
@@ -4958,6 +5340,9 @@ const SCHEMA = {
   // locked_until: milliseconds since 1970 while locked after too many wrong passwords.
   Users: ['user_id', 'email', 'name', 'role', 'label', 'active'].concat(AUDIT_COLS).concat([
     'password_hash', 'password_salt', 'failed_attempts', 'locked_until', 'last_login', 'must_change_password'
+  ]).concat([
+    // A person's job role (the powers they have), the base station they work from (empty = every station) and, for a pilot account, the one drone it belongs to. See Org.gs and REDESIGN.md.
+    'job_role_id', 'base_station', 'drone'
   ]),
   Lists: ['list_name', 'value', 'active'],
 
@@ -5022,7 +5407,15 @@ const SCHEMA = {
     'base_station', 'tanks', 'weather', 'completed_on', 'completed_by',
     // 4 payment: amount_charged is the total due; an advance may come first; payment_status is Unpaid / Partly paid / Paid (Free for no charge)
     'advance_paid', 'advance_amount', 'advance_date', 'final_amount', 'final_date', 'payment_method', 'payment_ref', 'payment_notes', 'paid_on', 'paid_by'
+  ]).concat([
+    // The day plan (REDESIGN.md): the time of day chosen when scheduling, who gave the job to the drone and when (the drone itself is in `drone`), the stop number in that drone's day, and the bills printed.
+    'scheduled_time', 'assigned_on', 'assigned_by', 'stop_order', 'bill_no', 'advance_bill_no', 'billed_on'
   ]),
+
+  // The base stations (CAFT runs four), the drones that work from them, and the job roles (a named set of powers, see Powers.gs and Org.gs).
+  BaseStations: ['station_id', 'name', 'district', 'latitude', 'longitude', 'active'].concat(AUDIT_COLS),
+  Drones: ['drone_id', 'name', 'base_station', 'model', 'active', 'notes'].concat(AUDIT_COLS),
+  JobRoles: ['role_id', 'name', 'powers', 'active', 'notes'].concat(AUDIT_COLS),
 
   // One row per bulk message prepared and sent to a group of farmers (the text, who it went to, how). Each farmer reached also gets an
   // Outreach row, so a farmer's profile can show which messages they were sent.
@@ -5042,7 +5435,7 @@ const SCHEMA = {
 
 // Columns that must stay text so Sheets never strips leading zeros or turns IDs into numbers.
 const TEXT_COLUMNS = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'meta', 'nic', 'phone_primary', 'phone_alt', 'path', 'parent_question_ids', 'date_of_birth', 'date', 'password_hash', 'password_salt',
-  'requested_date', 'service_date', 'start_time', 'end_time', 'ref', 'period', 'registered_date', 'start_date', 'end_date', 'window_from', 'window_to', 'scheduled_date', 'scheduled_on', 'completed_on', 'advance_date', 'final_date', 'paid_on', 'request_group', 'base_station', 'land_name', 'village', 'tank', 'geology', 'irrigation', 'ds_division'];
+  'requested_date', 'service_date', 'start_time', 'end_time', 'ref', 'period', 'registered_date', 'start_date', 'end_date', 'window_from', 'window_to', 'scheduled_date', 'scheduled_on', 'completed_on', 'advance_date', 'final_date', 'paid_on', 'request_group', 'base_station', 'land_name', 'village', 'tank', 'geology', 'irrigation', 'ds_division', 'scheduled_time', 'assigned_on', 'billed_on', 'bill_no', 'advance_bill_no', 'job_role_id', 'drone_id', 'station_id', 'role_id'];
 
 // DataEntry: register farmers only. Manager: find farmers, Origin Map, export, service reports, record services. Admin: everything, plus accounts.
 // Pilot: drone pilot in the field, two jobs: register new farmers (like DataEntry) and record the services they did (and see their own records).
@@ -5515,7 +5908,7 @@ function seedMockFarmers30000() { return seedMockFarmers(30000); }
 // Dates are ISO text (yyyy-mm-dd), times HH:MM, like the rest of the Services tab.
 
 const REQUEST_SOURCES_ = ['Field officer', 'Hotline', 'Farmer', 'AI officer', 'Lead farmer', 'Other'];
-const FLOW_ANY_POWER_ = ['service.request', 'service.schedule', 'service.view', 'service.complete', 'service.payment'];
+const FLOW_ANY_POWER_ = ['service.request', 'service.schedule', 'service.assign', 'service.view', 'service.complete', 'service.payment', 'report.view'];
 const FLOW_LIST_LIMIT_ = 300;        // rows sent with a list or the map
 const FLOW_MAP_POINTS_ = 4000;       // pins sent with the map
 const FLOW_MAX_ITEMS_ = 12;          // lands in one request
@@ -5523,7 +5916,7 @@ const FLOW_STARTER_TYPES_ = ['Glyphosate spraying', 'Seed broadcasting', 'Pre-em
 // What a list needs from every service (the long texts are only read for one service).
 const FLOW_COLS_ = ['service_id', 'farmer_id', 'land_id', 'request_group', 'status', 'requested_date', 'requested_by', 'request_source', 'window_from', 'window_to', 'exact_day', 'acres_requested',
   'scheduled_date', 'service_date', 'pilot_name', 'pilot_email', 'base_station', 'service_type', 'crop', 'acres_covered', 'amount_charged', 'payment_status', 'advance_paid', 'advance_amount',
-  'final_amount', 'completed_on', 'paid_on', 'start_time', 'end_time'];
+  'final_amount', 'completed_on', 'paid_on', 'start_time', 'end_time', 'drone', 'scheduled_time', 'stop_order', 'assigned_on'];
 const SERVICE_MONEY_COLS_ = ['amount_charged', 'payment_status', 'advance_paid', 'advance_amount', 'advance_date', 'final_amount', 'final_date', 'payment_method', 'payment_ref', 'payment_notes', 'paid_on', 'paid_by'];
 
 function requireFlowUser_() {
@@ -5597,7 +5990,7 @@ function flowCard_(r, ctx, user, today) {
     window_from: isoDay_(r.window_from), window_to: to, exact_day: String(r.exact_day) === 'Yes', window_text: windowText_(r),
     scheduled_date: isoDay_(r.scheduled_date) || (status === 'Scheduled' || status === 'Completed' ? isoDay_(r.service_date) : ''),
     service_date: status === 'Completed' ? isoDay_(r.service_date) : '', completed_on: isoDay_(r.completed_on),
-    pilot_name: r.pilot_name, pilot_email: r.pilot_email, base_station: r.base_station,
+    pilot_name: r.pilot_name, pilot_email: r.pilot_email, base_station: r.base_station, drone: String(r.drone || ''), scheduled_time: timeText_(r.scheduled_time), stop_order: r.stop_order === '' ? '' : Number(r.stop_order) || '',
     overdue: (status === 'Requested' && !!to && to < today) || (status === 'Scheduled' && !!to && isoDay_(r.scheduled_date || r.service_date) > to),
     paid_on: isoDay_(r.paid_on)
   };
@@ -5658,6 +6051,8 @@ function getServiceFlowOptions() {
   });
   return plain_({
     types: serviceListValues_('service_type'), crops: listsMap_().crop, drones: serviceListValues_('drone'), base_stations: serviceListValues_('base_station'),
+    stations: stationList_(false).filter(s => !user.base_station || s.name === user.base_station), drone_list: droneList_(false).filter(d => !user.base_station || d.base_station === user.base_station).map(d => Object.assign(d, { pilot: dronePilots_()[d.name] || '' })),
+    my_station: String(user.base_station || ''), my_drone: String(user.drone || ''),
     sources: REQUEST_SOURCES_, pilots: pilots.sort((a, b) => String(a.name).localeCompare(String(b.name))), today: localToday_(),
     me: { email: String(user.email).toLowerCase(), name: user.name, role: user.role }, powers: powersOf_(user)
   });
@@ -5702,6 +6097,7 @@ function createServiceRequest(input) {
     if (!items.length) throw new Error('Choose at least one land.');
     if (items.length > FLOW_MAX_ITEMS_) throw new Error('A request can have at most ' + FLOW_MAX_ITEMS_ + ' lands.');
     const source = REQUEST_SOURCES_.indexOf(input.source) !== -1 ? input.source : 'Field officer';
+    const station = cleanStation_(input.base_station, user, '');
     const ctx = flowContext_();
     const lists = listsMap_(), types = serviceListValues_('service_type');
     const clean = items.map((it, i) => cleanRequestItem_(it, i, farmerId, ctx, lists, types));
@@ -5714,12 +6110,23 @@ function createServiceRequest(input) {
     const rows = clean.map((c, i) => Object.assign({
       service_id: ids[i], farmer_id: farmerId, status: 'Requested', requested_date: today, service_type: c.service_type, crop: c.crop,
       land_id: c.land_id, request_group: group, request_source: source, requested_by: me, window_from: c.window_from, window_to: c.window_to, exact_day: c.exact_day,
-      acres_requested: c.acres, request_notes: clean_(input.notes).slice(0, 300)
+      acres_requested: c.acres, request_notes: clean_(input.notes).slice(0, 300), base_station: station
     }, auditCols_(true)));
     appendObjects_('Services', rows);
-    audit_('create', 'Services', group, farmerId + ' requested ' + rows.length + (rows.length === 1 ? ' service' : ' services'));
+    audit_('create', 'Services', group, farmerId + ' requested ' + rows.length + (rows.length === 1 ? ' service' : ' services') + ' (' + ids.join(', ') + ') at ' + station, { farmer_id: farmerId, land_id: clean.map(c => c.land_id).join(',') });
     return { request_group: group, service_ids: ids };
   });
+}
+
+// The base station of a job: the one chosen (or the person's own when they work from one); it must exist, and a person cannot use another station than theirs.
+function cleanStation_(raw, user, current) {
+  const stations = serviceListValues_('base_station');
+  const mine = String((user && user.base_station) || '');
+  const st = clean_(raw) || (current ? String(current) : mine);
+  if (!st) throw new Error('Choose the base station that will handle this service.');
+  if (stations.indexOf(st) === -1 && st !== String(current || '')) throw new Error('Choose the base station from the list.');
+  if (mine && st !== mine) throw new Error('Not authorised: your account works from ' + mine + '.');
+  return st;
 }
 
 function loadFlowRow_(serviceId) {
@@ -5732,7 +6139,9 @@ function saveFlowRow_(rec, patch, note) {
   const row = rec._archived ? restoreServiceRow_(rec.service_id) : rec;
   const obj = Object.assign({}, row, patch, auditCols_(false));
   writeRowObject_('Services', row._row, obj);
-  audit_('update', 'Services', obj.service_id, note);
+  const bits = [];
+  Object.keys(patch).forEach(k => { const a = String(row[k] === undefined || row[k] === null ? '' : row[k]), b = String(patch[k] === undefined || patch[k] === null ? '' : patch[k]); if (a !== b) bits.push(k + ': ' + (a || '-') + ' > ' + (b || '-')); });
+  audit_('update', 'Services', obj.service_id, note + (bits.length ? ' (' + bits.join('; ').slice(0, 400) + ')' : ''), { farmer_id: obj.farmer_id, land_id: obj.land_id });
   return obj;
 }
 
@@ -5741,6 +6150,7 @@ function updateServiceRequest(serviceId, patch) {
   const user = requirePower_('service.request');
   return withLock_(() => {
     const rec = loadFlowRow_(serviceId);
+    if (!stationOk_(user, rec)) throw new Error('Not authorised: this job belongs to another base station.');
     if (rec.status !== 'Requested') throw new Error('Only a request that has not been scheduled yet can be changed.');
     const p = patch || {};
     const ctx = flowContext_();
@@ -5748,15 +6158,16 @@ function updateServiceRequest(serviceId, patch) {
       exact_day: p.exact_day === undefined && p.window_to === undefined ? (String(rec.exact_day) === 'Yes' ? isoDay_(rec.window_to) : '') : p.exact_day, window_to: p.window_to === undefined ? isoDay_(rec.window_to) : p.window_to,
       window_from: p.window_from === undefined ? isoDay_(rec.window_from) : p.window_from }, 0, rec.farmer_id, ctx, listsMap_(), serviceListValues_('service_type'), rec);
     saveFlowRow_(rec, { crop: c.crop, service_type: c.service_type, acres_requested: c.acres, window_from: c.window_from, window_to: c.window_to, exact_day: c.exact_day,
-      request_notes: p.notes === undefined ? rec.request_notes : clean_(p.notes).slice(0, 300) }, 'request changed');
+      request_notes: p.notes === undefined ? rec.request_notes : clean_(p.notes).slice(0, 300), base_station: p.base_station === undefined ? rec.base_station : cleanStation_(p.base_station, user, rec.base_station) }, 'request changed');
     return { service_id: rec.service_id };
   });
 }
 
 function cancelService(serviceId, reason) {
-  requirePower_('service.request');
+  const user = requirePower_('service.request');
   return withLock_(() => {
     const rec = loadFlowRow_(serviceId);
+    if (!stationOk_(user, rec)) throw new Error('Not authorised: this job belongs to another base station.');
     if (rec.status !== 'Requested' && rec.status !== 'Scheduled') throw new Error('Only a request or a scheduled service can be cancelled.');
     const why = clean_(reason).slice(0, 200);
     if (!why) throw new Error('Say why it is cancelled.');
@@ -5767,31 +6178,80 @@ function cancelService(serviceId, reason) {
 
 // ---------- step 2: scheduled ----------
 
-// A request gets its day (or a scheduled service is moved: the note says why). Optionally the pilot and base station are named already.
+// A request gets its day and time (or a scheduled service is moved to another day or time, as often as needed). opts: { time: 'HH:MM', note }.
+// Moving a job to ANOTHER day takes it off its drone (the drone was chosen for the old day).
 function scheduleService(serviceId, date, opts) {
   const user = requirePower_('service.schedule');
   return withLock_(() => {
     const rec = loadFlowRow_(serviceId);
+    if (!powerCovers_(user, 'service.schedule', rec)) throw new Error('Not authorised: this job belongs to another base station.');
     if (rec.status !== 'Requested' && rec.status !== 'Scheduled') throw new Error('Only a request or a scheduled service can be given a day.');
     const o = opts || {};
     const day = flowDate_(date, 'The day', { required: true, notPast: true });
-    const patch = { status: 'Scheduled', scheduled_date: day, service_date: day, scheduled_on: localToday_(), scheduled_by: String(user.email).toLowerCase() };
+    const time = String(o.time || '').trim();
+    if (time && !isTime_(time)) throw new Error('The time is not valid: enter hours and minutes.');
+    const patch = { status: 'Scheduled', scheduled_date: day, service_date: day, scheduled_time: time, scheduled_on: localToday_(), scheduled_by: String(user.email).toLowerCase() };
+    const why = clean_(o.note).slice(0, 120);
     if (rec.status === 'Scheduled') {
-      const was = isoDay_(rec.scheduled_date) || isoDay_(rec.service_date);
-      if (was === day) throw new Error('It is already scheduled for that day.');
-      const why = clean_(o.note).slice(0, 120);
-      if (!why) throw new Error('Say why the day is changed.');
-      patch.schedule_notes = clean_((rec.schedule_notes ? rec.schedule_notes + ' | ' : '') + 'Moved from ' + was + ' to ' + day + ': ' + why).slice(0, 300);
-    } else if (o.note) patch.schedule_notes = clean_(o.note).slice(0, 300);
-    if (o.pilot_email) {
-      const row = findUserByEmail_(String(o.pilot_email).toLowerCase());
-      if (!row || row.active !== 'Yes' || hiddenRow_(row) || row.role === 'DataEntry') throw new Error('Choose the pilot from the list.');
-      patch.pilot_email = String(row.email).toLowerCase(); patch.pilot_name = row.name;
-    }
-    if (o.base_station) patch.base_station = checkList_(clean_(o.base_station), serviceListValues_('base_station'), 'Base station', rec.base_station);
-    saveFlowRow_(rec, patch, 'scheduled for ' + day);
+      const was = isoDay_(rec.scheduled_date) || isoDay_(rec.service_date), wasTime = timeText_(rec.scheduled_time);
+      if (was === day && wasTime === time) throw new Error('It is already scheduled for that day and time.');
+      patch.schedule_notes = clean_((rec.schedule_notes ? rec.schedule_notes + ' | ' : '') + 'Moved from ' + was + (wasTime ? ' ' + wasTime : '') + ' to ' + day + (time ? ' ' + time : '') + (why ? ': ' + why : '')).slice(0, 300);
+      if (was !== day) { patch.drone = ''; patch.stop_order = ''; patch.assigned_on = ''; patch.assigned_by = ''; patch.pilot_email = ''; patch.pilot_name = ''; }
+    } else if (why) patch.schedule_notes = why;
+    saveFlowRow_(rec, patch, 'scheduled for ' + day + (time ? ' ' + time : ''));
     const to = isoDay_(rec.window_to);
     return { service_id: rec.service_id, status: 'Scheduled', scheduled_date: day, late: !!to && day > to };
+  });
+}
+
+// A scheduled service goes back to the requests (its day, time and drone are forgotten; the history of moves stays in its notes).
+function unscheduleService(serviceId, note) {
+  const user = requirePower_('service.schedule');
+  return withLock_(() => {
+    const rec = loadFlowRow_(serviceId);
+    if (!powerCovers_(user, 'service.schedule', rec)) throw new Error('Not authorised: this job belongs to another base station.');
+    if (rec.status !== 'Scheduled') throw new Error('Only a scheduled service can go back to requested.');
+    const was = isoDay_(rec.scheduled_date) || isoDay_(rec.service_date), why = clean_(note).slice(0, 120);
+    saveFlowRow_(rec, { status: 'Requested', scheduled_date: '', service_date: '', scheduled_time: '', scheduled_on: '', scheduled_by: '', drone: '', stop_order: '', assigned_on: '', assigned_by: '', pilot_email: '', pilot_name: '',
+      schedule_notes: clean_((rec.schedule_notes ? rec.schedule_notes + ' | ' : '') + 'Back to requested (was ' + was + ')' + (why ? ': ' + why : '')).slice(0, 300) }, 'back to requested');
+    return { service_id: rec.service_id, status: 'Requested' };
+  });
+}
+
+// ---------- the day plan: scheduled services given to a drone ----------
+
+// assignments: [{ service_id, drone ('' takes the job off its drone), stop_order }]. Only scheduled services; the drone must work from the job's base station.
+// The pilot of the job is the account that belongs to the drone (if there is one).
+function assignJobs(assignments) {
+  const user = requirePower_('service.assign');
+  return withLock_(() => {
+    const list = Array.isArray(assignments) ? assignments : [];
+    if (!list.length) throw new Error('Nothing to assign.');
+    if (list.length > 80) throw new Error('At most 80 jobs can be assigned at once.');
+    const drones = droneList_(false), accounts = {}, me = String(user.email).toLowerCase();
+    readAll_('Users').forEach(u => { if (u.active === 'Yes' && u.drone && !hiddenRow_(u)) accounts[String(u.drone)] = u; });
+    const out = [];
+    list.forEach(a => {
+      const rec = loadFlowRow_(a && a.service_id);
+      if (!powerCovers_(user, 'service.assign', rec)) throw new Error('Not authorised: ' + rec.service_id + ' belongs to another base station.');
+      if (rec.status !== 'Scheduled') throw new Error(rec.service_id + ': only a scheduled service can be given to a drone.');
+      const drone = clean_(a.drone);
+      let patch;
+      if (!drone) patch = { drone: '', stop_order: '', assigned_on: '', assigned_by: '', pilot_email: '', pilot_name: '' };
+      else {
+        const d = drones.find(x => x.name === drone);
+        if (!d) throw new Error('Choose the drone from the list.');
+        const st = String(rec.base_station || '');
+        if (st && d.base_station && d.base_station !== st) throw new Error(drone + ' works from ' + d.base_station + ', not ' + st + '.');
+        const acct = accounts[drone], order = Math.floor(Number(a.stop_order));
+        patch = { drone: drone, stop_order: order > 0 ? order : '', assigned_on: rec.drone === drone && rec.assigned_on ? rec.assigned_on : localToday_(), assigned_by: me,
+          pilot_email: acct ? String(acct.email).toLowerCase() : '', pilot_name: acct ? acct.name : '' };
+        if (!st && d.base_station) patch.base_station = d.base_station;
+      }
+      saveFlowRow_(rec, patch, drone ? 'given to ' + drone : 'taken off its drone');
+      out.push(rec.service_id);
+    });
+    return { service_ids: out };
   });
 }
 
@@ -5804,6 +6264,7 @@ function completeService(serviceId, data) {
     const rec = loadFlowRow_(serviceId);
     if (rec.status !== 'Scheduled' && rec.status !== 'Completed') throw new Error('Only a scheduled service can be completed.');
     if (!powerCovers_(user, 'service.complete', rec)) throw new Error('Not authorised: this job belongs to another pilot.');
+    if (rec.status === 'Scheduled' && !rec.drone) throw new Error('Give this job to a drone first (Job assigning).');
     if (rec.status === 'Completed' && powerScope_(user, 'service.complete') === 'own' && Date.now() - new Date(rec.created_at).getTime() > PILOT_EDIT_DAYS * 86400000) throw new Error('Not authorised: a pilot can only correct their own records for ' + PILOT_EDIT_DAYS + ' days.');
     const d = data || {};
     const today = localToday_();
@@ -5820,6 +6281,7 @@ function completeService(serviceId, data) {
       if (!row || row.active !== 'Yes' || hiddenRow_(row) || row.role === 'DataEntry') throw new Error('Choose the pilot from the list.');
       pilotEmail = String(row.email).toLowerCase(); pilotName = row.name;
     }
+    if (!pilotEmail && rec.drone) { const a = readAll_('Users').find(u => u.active === 'Yes' && String(u.drone || '') === String(rec.drone)); if (a) { pilotEmail = String(a.email).toLowerCase(); pilotName = a.name; } }
     if (!pilotEmail) throw new Error('Choose the pilot who did the job.');
     const lists = listsMap_();
     const crop = checkList_(clean_(d.crop || rec.crop), lists.crop, 'Crop', rec.crop);
@@ -5827,13 +6289,12 @@ function completeService(serviceId, data) {
     if (!crop || !type) throw new Error('Choose the crop and the service.');
     const acres = cleanNumber_(d.acres_covered, 'Acres sprayed', 0, MAX_SERVICE_ACRES);
     if (acres === '' || acres <= 0) throw new Error('Acres sprayed must be more than 0.');
-    const drones = serviceListValues_('drone'), bases = serviceListValues_('base_station');
     const tanks = cleanNumber_(d.tanks, 'Tanks', 0, 10000);
     let sat = '';
     if (d.satisfaction !== '' && d.satisfaction !== undefined && d.satisfaction !== null) { sat = Number(d.satisfaction); if (!Number.isInteger(sat) || sat < 1 || sat > 5) throw new Error('Satisfaction is a score from 1 to 5.'); }
     const patch = {
       status: 'Completed', service_date: day, start_time: start, end_time: end, duration_min: minutesOf_(end) - minutesOf_(start), pilot_email: pilotEmail, pilot_name: pilotName,
-      drone: drones.length ? checkList_(clean_(d.drone), drones, 'Drone', rec.drone) : '', base_station: bases.length ? checkList_(clean_(d.base_station || rec.base_station), bases, 'Base station', rec.base_station) : clean_(d.base_station || rec.base_station).slice(0, 60),
+      drone: String(rec.drone || ''), base_station: String(rec.base_station || ''),
       crop: crop, service_type: type, acres_covered: round2_(acres), tanks: tanks, product_used: clean_(d.product_used).slice(0, 80), quantity_l: cleanNumber_(d.quantity_l, 'Quantity', 0, 100000),
       weather: clean_(d.weather).slice(0, 80), satisfaction: sat, notes: clean_(d.notes === undefined ? rec.notes : d.notes).slice(0, 300),
       completed_on: rec.status === 'Completed' ? rec.completed_on : today, completed_by: rec.status === 'Completed' ? rec.completed_by : String(user.email).toLowerCase()
@@ -5851,7 +6312,7 @@ function recordPayment(serviceId, data) {
   const user = requirePower_('service.payment');
   return withLock_(() => {
     const rec = loadFlowRow_(serviceId);
-    if (rec.status !== 'Scheduled' && rec.status !== 'Completed') throw new Error('A payment can be entered for a scheduled or a completed service.');
+    if (rec.status === 'Cancelled') throw new Error('A payment cannot be entered for a cancelled service.');
     if (!powerCovers_(user, 'service.payment', rec)) throw new Error('Not authorised: this job belongs to another pilot.');
     const d = data || {};
     const total = cleanNumber_(d.amount_charged, 'The total amount', 0, 100000000);
@@ -5886,7 +6347,8 @@ function flowFilter_(input) {
   const f = input || {};
   const out = { stage: clean_(f.stage), from: flowDate_(f.from, 'From', {}), to: flowDate_(f.to, 'To', {}), district: clean_(f.district).slice(0, 60), ds_division: clean_(f.ds_division).slice(0, 60),
     type: clean_(f.service_type).slice(0, 80), crop: clean_(f.crop).slice(0, 60), payment: clean_(f.payment), q: clean_(f.q).toLowerCase().slice(0, 60), farmer_id: clean_(f.farmer_id).slice(0, 20),
-    land_id: clean_(f.land_id).slice(0, 20), pilot: clean_(f.pilot_email).toLowerCase(), overdue: f.overdue === true || f.overdue === 'Yes' };
+    land_id: clean_(f.land_id).slice(0, 20), pilot: clean_(f.pilot_email).toLowerCase(), overdue: f.overdue === true || f.overdue === 'Yes',
+    base_station: clean_(f.base_station).slice(0, 40), drone: clean_(f.drone).slice(0, 40), assigned: f.assigned === 'Yes' || f.assigned === 'No' ? f.assigned : '' };
   if (out.from && out.to && out.from > out.to) throw new Error('"From" is after "To".');
   if (out.stage && ['Requested', 'Scheduled', 'Completed', 'Cancelled', 'Active', 'Payable'].indexOf(out.stage) === -1) throw new Error('Unknown stage.');
   if (out.payment && ['Paid', 'Partly paid', 'Unpaid', 'Free', 'None'].indexOf(out.payment) === -1) throw new Error('Unknown payment state.');
@@ -5906,8 +6368,15 @@ function flowInPeriod_(r, f) {
 }
 
 function flowMatches_(r, f, card, user) {
+  // a person sees only their base station's jobs, and a drone account only its drone's jobs (see Powers.gs)
+  if (!stationOk_(user, r)) return false;
+  if (user.drone && String(r.drone || '') !== user.drone && String(r.pilot_email || '').toLowerCase() !== String(user.email).toLowerCase()) return false;
+  if (f.base_station && String(r.base_station || '') !== f.base_station) return false;
+  if (f.drone && String(r.drone || '') !== f.drone) return false;
+  if (f.assigned === 'Yes' && !r.drone) return false;
+  if (f.assigned === 'No' && r.drone) return false;
   // Active = still to be done (requested or scheduled); Payable = a payment can be entered (scheduled or completed)
-  if (f.stage === 'Active' ? (r.status !== 'Requested' && r.status !== 'Scheduled') : f.stage === 'Payable' ? (r.status !== 'Scheduled' && r.status !== 'Completed') : (f.stage && r.status !== f.stage)) return false;
+  if (f.stage === 'Active' ? (r.status !== 'Requested' && r.status !== 'Scheduled') : f.stage === 'Payable' ? (r.status === 'Cancelled') : (f.stage && r.status !== f.stage)) return false;
   if (!flowInPeriod_(r, f)) return false;
   if (f.type && String(r.service_type) !== f.type) return false;
   if (f.crop && String(r.crop) !== f.crop) return false;
@@ -5951,7 +6420,7 @@ function flowSummary_(cards) {
 }
 
 // Everything the list screens need: the services that match the filters, as cards, the figures over ALL of them and (for the map) their pins.
-function flowRun_(input, withPoints) {
+function flowRun_(input, withPoints, cap) {
   const user = requireFlowUser_();
   ensureServiceFlow_();
   const f = flowFilter_(input);
@@ -5964,12 +6433,20 @@ function flowRun_(input, withPoints) {
     if (flowMatches_(r, f, card, user)) cards.push(card);
   });
   flowSort_(cards, f.stage);
-  const out = { rows: cards.slice(0, Number(input && input.limit) > 0 ? Math.min(Number(input.limit), FLOW_LIST_LIMIT_) : FLOW_LIST_LIMIT_), total: cards.length, truncated: cards.length > FLOW_LIST_LIMIT_, summary: flowSummary_(cards), today: today };
+  const out = { rows: cards.slice(0, Number(input && input.limit) > 0 ? Math.min(Number(input.limit), cap || FLOW_LIST_LIMIT_) : (cap || FLOW_LIST_LIMIT_)), total: cards.length, truncated: cards.length > (cap || FLOW_LIST_LIMIT_), summary: flowSummary_(cards), today: today };
   if (withPoints) out.points = cards.filter(c => c.located).slice(0, FLOW_MAP_POINTS_).map(c => ({ id: c.service_id, lat: c.latitude, lng: c.longitude, status: c.status, acres: c.acres, type: c.service_type, overdue: c.overdue, district: c.district }));
   return out;
 }
 
 function listServiceFlow(filter) { return plain_(flowRun_(filter, false)); }
+
+// The Reports table: the same filters as the lists, but up to 5000 rows and no map. Needs the report power.
+const REPORT_ROWS_ = 5000;
+function getServiceTable(filter) {
+  requirePower_('report.view');
+  const f = Object.assign({}, filter || {}, { limit: REPORT_ROWS_ });
+  return plain_(flowRun_(f, false, REPORT_ROWS_));
+}
 function getServiceMap(filter) { return plain_(flowRun_(filter, true)); }
 
 // The road of one service: its nodes, the days between them and what the signed-in person may do with it now.
@@ -5977,6 +6454,7 @@ function getServiceRoad(serviceId) {
   const user = requireFlowUser_();
   ensureServiceFlow_();
   const rec = loadFlowRow_(serviceId);
+  if (!stationOk_(user, rec) || (user.drone && String(rec.drone || '') !== user.drone && String(rec.pilot_email || '').toLowerCase() !== String(user.email).toLowerCase())) throw new Error('Not authorised: this job is not in your base station.');
   const ctx = flowContext_(), today = localToday_();
   const card = flowCard_(rec, ctx, user, today);
   const s = String(rec.status);
@@ -5987,6 +6465,7 @@ function getServiceRoad(serviceId) {
   if (s === 'Cancelled') nodes.push({ key: 'cancelled', label: 'Cancelled', state: 'cancelled', date: '', note: String(rec.notes || '') });
   else {
     nodes.push({ key: 'scheduled', label: 'Scheduled', state: s === 'Requested' ? 'next' : 'done', date: sched, by: rec.scheduled_by, note: rec.schedule_notes || '', late: !!sched && !!isoDay_(rec.window_to) && sched > isoDay_(rec.window_to) });
+    nodes.push({ key: 'assigned', label: 'Drone assigned', state: rec.drone ? 'done' : (s === 'Scheduled' ? 'next' : 'todo'), date: isoDay_(rec.assigned_on), by: rec.assigned_by, note: String(rec.drone || '') });
     nodes.push({ key: 'completed', label: 'Completed', state: s === 'Completed' ? 'done' : (s === 'Scheduled' ? 'next' : 'todo'), date: s === 'Completed' ? isoDay_(rec.service_date) : '', by: rec.completed_by, note: s === 'Completed' ? (Number(rec.acres_covered) || 0) + ' acres' : '' });
     nodes.push(money ? { key: 'paid', label: pay === 'Paid' ? 'Paid in full' : (pay === 'Partly paid' ? 'Advance paid' : (pay === 'Free' ? 'No charge' : 'Payment')), state: (pay === 'Paid' || pay === 'Free') ? 'done' : (pay === 'Partly paid' ? 'partial' : (s === 'Completed' ? 'next' : 'todo')),
       date: isoDay_(rec.paid_on), by: rec.paid_by, note: '' } : { key: 'paid', label: 'Payment', state: 'hidden', date: '', note: '' });
@@ -6005,9 +6484,45 @@ function getServiceRoad(serviceId) {
     can: {
       edit_request: s === 'Requested' && hasPower_(user, 'service.request'), cancel: (s === 'Requested' || s === 'Scheduled') && hasPower_(user, 'service.request'),
       schedule: (s === 'Requested' || s === 'Scheduled') && hasPower_(user, 'service.schedule'),
-      complete: (s === 'Scheduled' || s === 'Completed') && hasPower_(user, 'service.complete') && powerCovers_(user, 'service.complete', rec),
-      payment: (s === 'Scheduled' || s === 'Completed') && hasPower_(user, 'service.payment') && powerCovers_(user, 'service.payment', rec)
+      complete: (s === 'Scheduled' || s === 'Completed') && (s === 'Completed' || !!rec.drone) && hasPower_(user, 'service.complete') && powerCovers_(user, 'service.complete', rec),
+      payment: s !== 'Cancelled' && hasPower_(user, 'service.payment') && powerCovers_(user, 'service.payment', rec)
     }
+  });
+}
+
+// ---------- bills ----------
+
+// Issues (or shows again) the bill of a service. kind: 'final' (the individual payment bill with every detail of the job) or 'advance' (the advance payment bill).
+// The bill number is made the first time and kept, so printing again gives the same number. Returns everything the bill shows.
+function issueBill(serviceId, kind) {
+  const user = requirePower_('service.payment');
+  return withLock_(() => {
+    const rec = loadFlowRow_(serviceId);
+    if (!powerCovers_(user, 'service.payment', rec)) throw new Error('Not authorised: this job belongs to another base station or drone.');
+    if (kind !== 'advance' && kind !== 'final') throw new Error('Unknown bill.');
+    if (rec.status === 'Cancelled') throw new Error('A cancelled service has no bill.');
+    const adv = kind === 'advance';
+    if (adv && String(rec.advance_paid) !== 'Yes') throw new Error('No advance has been entered for this service.');
+    if (!adv && String(rec.payment_status || '') === '') throw new Error('Enter the payment first, then print the bill.');
+    let no = String(adv ? rec.advance_bill_no : rec.bill_no || ''), created = false, row = rec;
+    if (!no) {
+      no = nextId_(adv ? 'AB' : 'BL', 6); created = true;
+      row = saveFlowRow_(rec, adv ? { advance_bill_no: no, billed_on: localToday_() } : { bill_no: no, billed_on: localToday_() }, (adv ? 'advance bill ' : 'bill ') + no + ' issued');
+    } else audit_('view', 'Services', rec.service_id, (adv ? 'advance bill ' : 'bill ') + no + ' printed again', { farmer_id: rec.farmer_id, land_id: rec.land_id });
+    const farmer = readColumns_('Farmers', ['farmer_id', 'full_name', 'phone_primary', 'address', 'village', 'ds_division', 'district']).find(f => f.farmer_id === row.farmer_id) || {};
+    const land = row.land_id ? (readColumns_('Fields', ['field_id', 'land_name', 'acres', 'village', 'ds_division', 'district', 'tank']).find(l => l.field_id === row.land_id) || null) : null;
+    const total = Number(row.amount_charged) || 0, advAmt = Number(row.advance_amount) || 0, finAmt = Number(row.final_amount) || 0;
+    return plain_({
+      kind: kind, bill_no: no, issued_on: isoDay_(row.billed_on) || localToday_(), reissued: !created, prepared_by: user.name,
+      company: { name: String(getConfig_('bill_company') || 'CAFT drone spraying service'), address: String(getConfig_('bill_address') || ''), phone: String(getConfig_('bill_phone') || ''), footer: String(getConfig_('bill_footer') || 'Thank you.') },
+      farmer: { id: farmer.farmer_id || row.farmer_id, name: farmer.full_name || '', phone: farmer.phone_primary || '', address: [farmer.address, farmer.village, farmer.ds_division, farmer.district].filter(Boolean).join(', ') },
+      land: land ? { id: land.field_id, name: land.land_name || '', acres: Number(land.acres) || 0, place: [land.village, land.ds_division, land.district].filter(Boolean).join(', '), tank: land.tank || '' } : null,
+      service: { id: row.service_id, type: row.service_type, crop: row.crop, status: row.status, requested: isoDay_(row.requested_date), scheduled: isoDay_(row.scheduled_date), done: row.status === 'Completed' ? isoDay_(row.service_date) : '',
+        start: timeText_(row.start_time), end: timeText_(row.end_time), acres_requested: Number(row.acres_requested) || 0, acres_done: Number(row.acres_covered) || 0, tanks: row.tanks, product: row.product_used, quantity_l: row.quantity_l,
+        drone: row.drone, pilot: row.pilot_name, base_station: row.base_station, weather: row.weather },
+      money: { total: total, advance_paid: String(row.advance_paid) === 'Yes', advance_amount: advAmt, advance_date: isoDay_(row.advance_date), final_amount: finAmt, final_date: isoDay_(row.final_date), method: row.payment_method, ref: row.payment_ref,
+        paid: round2_(advAmt + finAmt), balance: round2_(total - advAmt - finAmt), status: row.payment_status }
+    });
   });
 }
 
@@ -6234,7 +6749,7 @@ function exportServices(input) {
 
 const SERVICE_STATUSES = ['Requested', 'Scheduled', 'Completed', 'Cancelled'];
 const PAYMENT_STATUSES = ['Paid', 'Partly paid', 'Unpaid', 'Free'];
-const SERVICE_LISTS = [['service_type', 'Kinds of service'], ['drone', 'Drones'], ['base_station', 'Base stations']];
+const SERVICE_LISTS = [['service_type', 'Kinds of service']];       // (drones and base stations have their own tabs, see Org.gs)
 const SERVICE_ROLES = ['Admin', 'Manager', 'Pilot'];
 const MAX_SERVICE_ACRES = 5000;
 const LOCAL_OFFSET_MINUTES = 330;     // Sri Lanka time (UTC+5:30): the "today" a pilot means, whatever the server clock says
@@ -6257,6 +6772,11 @@ function timeText_(v) {
 function serviceDay_(r) { return isoDay_(r.service_date) || isoDay_(r.requested_date); }
 
 function serviceListValues_(name, includeOff) {
+  // Base stations and drones have their own tabs now (Org.gs); the old Lists values were carried over once.
+  if (name === 'base_station' || name === 'drone') {
+    if (!orgSeeded_()) ensureOrg_();
+    return (name === 'base_station' ? stationRows_(includeOff) : droneRows_(includeOff)).map(r => String(r.name));
+  }
   return readAll_('Lists').filter(l => l.list_name === name && (includeOff || l.active === 'Yes')).map(l => String(l.value));
 }
 
@@ -6579,7 +7099,7 @@ function saveServiceLocked_(user, input) {
     if (existing._archived) existing = restoreServiceRow_(existing.service_id);   // an old job is brought back to the live sheet to be corrected
     const obj = Object.assign({}, existing, core, auditCols_(false));
     writeRowObject_('Services', existing._row, obj);
-    audit_('update', 'Services', obj.service_id, farmerId + ' ' + core.status);
+    audit_('update', 'Services', obj.service_id, farmerId + ' ' + core.status, { farmer_id: farmerId });
     return { service_id: obj.service_id, created: false };
   }
   // The same job saved twice in a row (a double tap on a slow connection) is refused.
@@ -6591,7 +7111,7 @@ function saveServiceLocked_(user, input) {
   const id = nextId_('SV', 6);
   const obj = Object.assign({ service_id: id, farmer_id: farmerId }, core, auditCols_(true));
   appendObjects_('Services', [obj]);
-  audit_('create', 'Services', id, farmerId + ' ' + core.status + ' ' + (core.acres_covered === '' ? '' : core.acres_covered + ' ac'));
+  audit_('create', 'Services', id, farmerId + ' ' + core.status + ' ' + (core.acres_covered === '' ? '' : core.acres_covered + ' ac'), { farmer_id: farmerId });
   return { service_id: id, created: true };
 }
 
@@ -6873,7 +7393,7 @@ const REV_TTL_ = 21600;              // the longest the cache keeps a value (6 h
 const REV_TABS_ = {
   Farmers: 'farmers', Fields: 'farmers', LandOwners: 'farmers', FarmerAnswers: 'farmers', FarmerIndex: 'farmers',
   Services: 'services', Messages: 'messages', Outreach: 'outreach',
-  FormQuestions: 'form', FormOptions: 'form', Lists: 'lists', Places: 'places', Users: 'users', Segments: 'segments'
+  FormQuestions: 'form', FormOptions: 'form', Lists: 'lists', BaseStations: 'lists', Drones: 'lists', Places: 'places', Users: 'users', Segments: 'segments'
 };
 const SYNC_CHUNKS_PER_CALL = 30;      // farmer chunks (100 farmers each) sent in one answer
 const SERVICE_SYNC_OVERLAP_MS = 5000; // rows changed this long before the last stamp are sent again, so nothing is missed
@@ -7032,12 +7552,17 @@ function getServiceRows(since, wantMessages) {
     const n = last - 1;
     const ids = sh.getRange(2, 1, n, 1).getValues();
     const stamps = sh.getRange(2, serviceCol_('updated_at'), n, 1).getValues();
-    const pilotCol = user.role === 'Pilot' ? sh.getRange(2, serviceCol_('pilot_email'), n, 1).getValues() : null;
+    // a person sees only the jobs of their base station, a drone account only its drone's jobs, a pilot only their own (see Powers.gs)
+    const scoped = user.role === 'Pilot' || !!user.base_station || !!user.drone;
+    const pilotCol = scoped ? sh.getRange(2, serviceCol_('pilot_email'), n, 1).getValues() : null;
+    const stCol = user.base_station ? sh.getRange(2, serviceCol_('base_station'), n, 1).getValues() : null;
+    const drCol = user.drone ? sh.getRange(2, serviceCol_('drone'), n, 1).getValues() : null;
     const cut = since ? new Date(Date.parse(String(since)) - SERVICE_SYNC_OVERLAP_MS).toISOString() : '';
     const pick = [];
     for (let i = 0; i < n; i++) {
       if (ids[i][0] === '') continue;
-      if (pilotCol && String(pilotCol[i][0]).toLowerCase() !== me) continue;
+      if (stCol && String(stCol[i][0]) !== '' && String(stCol[i][0]) !== user.base_station) continue;
+      if (pilotCol && (user.role === 'Pilot' || drCol) && String(pilotCol[i][0]).toLowerCase() !== me && !(drCol && String(drCol[i][0]) === user.drone)) continue;
       out.count++;
       liveIds[String(ids[i][0])] = true;
       const st = stampText_(stamps[i][0]);
@@ -7057,7 +7582,7 @@ function getServiceRows(since, wantMessages) {
     out.count += archivedServiceCount_(user);
     const aTop = archivedServiceStamp_();
     if (aTop > top) top = aTop;
-    if (!since) archivedCompact_().forEach(c => { if (!liveIds[c[CP_ID]] && (user.role !== 'Pilot' || c[CP_PILOT] === me)) recs.push(compactObject_(c)); });
+    if (!since) archivedCompact_().forEach(c => { if (!liveIds[c[CP_ID]] && (user.role !== 'Pilot' || c[CP_PILOT] === me) && !user.base_station && !user.drone) recs.push(compactObject_(c)); });
   }
   out.stamp = top;
   const typeAt = {}, pilotAt = {};
@@ -7092,7 +7617,7 @@ var __ENG = { meta: null, temps: null };
 var __ENG_READS = ['getRegistrationData', 'getFormDefinition', 'getFarmer', 'getFarmerView', 'findFarmers', 'getOriginMap', 'getFarmerOrigin', 'getDashboard', 'getFinderOptions', 'runFinder',
   'listSegments', 'getServiceOptions', 'findFarmersForService', 'getFarmerServices', 'getService', 'listRecentServices', 'listServices', 'getAreaOptions', 'getServiceReport', 'previewAudience',
   'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows', 'getLand', 'getFarmerLands', 'findLands', 'getServiceFlowOptions', 'listServiceFlow', 'getServiceMap', 'getServiceRoad'];
-var __ENG_WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer', 'createServiceRequest', 'updateServiceRequest', 'cancelService', 'scheduleService', 'completeService', 'recordPayment'];
+var __ENG_WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer', 'createServiceRequest', 'updateServiceRequest', 'cancelService', 'scheduleService', 'unscheduleService', 'assignJobs', 'completeService', 'recordPayment'];
 var __ENG_DATA_ENTRY = ['getRegistrationData', 'getFormDefinition', 'saveFarmer'];     // a data entry account receives no farmer data, so only these can be answered on the device
 
 // Numbers handed out on the device are in a range the server never reaches (F900001, SV900001 ...); they are replaced by the real ones once the server has the save.

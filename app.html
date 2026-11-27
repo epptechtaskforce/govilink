@@ -1016,6 +1016,110 @@
   .sv-modal .fold .ico, .sv-modal .foldbody .ico { margin:0; width:32px; height:32px; border-radius:10px; } .sv-modal .fold .ico svg { width:16px; height:16px; }
   .sv-modal .fold summary { text-align:left; }
   .sv-err { color:var(--red); margin:10px 0 0; } .sv-check { display:flex; align-items:center; gap:8px; margin:10px 0; cursor:pointer; min-height:36px; } .sv-check input { width:18px; height:18px; accent-color:var(--brand); }
+  /* ---------- the sidebar (REDESIGN.md): one tab per feature, labelled; a slide-out menu on phones ---------- */
+  .app { grid-template-columns:248px minmax(0,1fr); }
+  #rail { align-items:stretch; padding:16px 12px; }
+  .brand { display:flex; align-items:center; gap:11px; margin:0 6px 18px; cursor:pointer; color:#fff; flex:none; }
+  .brand b { font-size:18px; font-weight:600; letter-spacing:-.01em; }
+  .brand .logo { margin:0; }
+  #nav { gap:2px; }
+  .navbtn { flex-direction:row; justify-content:flex-start; gap:12px; padding:10px 12px; font-size:14px; text-align:left; border-radius:9px; min-height:44px; }
+  .navbtn svg { width:20px; height:20px; flex:none; }
+  .navbtn span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .navbtn.on::before { left:-12px; }
+  .navgroup { margin:16px 12px 4px; font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6f8a7d; }
+  #menubtn { display:none; place-items:center; width:40px; height:40px; border:0; border-radius:9px; background:transparent; color:var(--ink); cursor:pointer; margin-left:-8px; flex:none; }
+  #menubtn svg { width:22px; height:22px; stroke:currentColor; fill:none; stroke-width:1.9; stroke-linecap:round; }
+  #scrim { display:none; }
+  .wizbar, .savebar { bottom:14px; }
+  @media (max-width: 860px) {
+    #rail { position:fixed; top:0; bottom:0; left:0; right:auto; width:min(84vw, 300px); height:auto; flex-direction:column; align-items:stretch; padding:16px 12px calc(16px + env(safe-area-inset-bottom)); background:var(--deep); border:0; box-shadow:none; transform:translateX(-104%); transition:transform .2s ease-out; z-index:100; }
+    body.navopen #rail { transform:none; box-shadow:0 0 40px rgba(16,24,40,.35); }
+    body.navopen #scrim { display:block; position:fixed; inset:0; background:rgba(16,24,40,.5); z-index:95; }
+    .brand { display:flex; } .logo { display:grid; }
+    #nav { flex-direction:column; justify-content:flex-start; overflow:auto; }
+    .navbtn { color:#9fb3a9; font-size:15px; padding:11px 12px; flex:none; width:100%; }
+    .navbtn:hover { background:rgba(255,255,255,.06); color:#fff; }
+    .navbtn.on { background:rgba(255,255,255,.1); color:#fff; }
+    .navbtn.on::before { display:block; left:-12px; }
+    #menubtn { display:inline-grid; }
+    main { padding:16px 14px 40px; }
+    .app { grid-template-columns:1fr; }
+  }
+  .grid2 { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:0 16px; } @media (max-width:520px) { .grid2 { grid-template-columns:1fr; } }
+  .sv-bar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
+  /* ---------- service cards and their timeline (REDESIGN.md) ---------- */
+  .svcard { position:relative; background:#fff; border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow-sm); padding:14px 16px 12px; margin-bottom:12px; transition:border-color .12s, box-shadow .12s; }
+  .svcard.sel { border-color:var(--brand); box-shadow:0 0 0 3px var(--brand-50), var(--shadow-sm); }
+  .svcard.off { opacity:.62; }
+  .svc-top { display:flex; align-items:center; gap:12px; cursor:pointer; padding-right:46px; }
+  .svc-top .t { min-width:0; flex:1; } .svc-top .t b { display:block; font-weight:600; font-size:15px; }
+  .svc-top .t small { color:var(--muted); font-size:12.5px; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .svc-edit { position:absolute; top:10px; right:12px; }
+  .svc-facts { display:flex; flex-wrap:wrap; gap:6px 16px; margin:10px 0 6px; color:var(--ink); font-size:13px; }
+  .svc-facts span { display:inline-flex; align-items:center; gap:6px; } .svc-facts svg { width:15px; height:15px; color:var(--faint); flex:none; }
+  .svtl { display:flex; margin:16px 0 4px; }
+  .svs { position:relative; flex:1; display:flex; flex-direction:column; align-items:center; text-align:center; min-width:0; padding:0 2px; }
+  .svs::before { content:''; position:absolute; top:10px; right:50%; width:100%; height:2px; background:var(--line-strong); }
+  .svs:first-child::before { display:none; }
+  .svs.on::before, .svs.half::before { background:var(--brand); }
+  .svd { position:relative; z-index:1; width:22px; height:22px; border-radius:50%; background:#fff; border:2px solid var(--line-strong); display:grid; place-items:center; }
+  .svd svg { width:12px; height:12px; stroke:#fff; stroke-width:3; }
+  .svs.on .svd { background:var(--brand); border-color:var(--brand); }
+  .svs.half .svd { border-color:var(--brand); background:linear-gradient(90deg, var(--brand) 50%, #fff 50%); }
+  .svs.next .svd { border-color:var(--brand); box-shadow:0 0 0 3px var(--brand-50); }
+  .svs.bad .svd { background:var(--red); border-color:var(--red); } .svs.bad::before { background:var(--red); }
+  .svs b { font-size:11.5px; font-weight:600; margin-top:6px; color:var(--muted); white-space:nowrap; } .svs.on b, .svs.next b, .svs.half b { color:var(--ink); }
+  .svs em { font-style:normal; font-size:11px; color:var(--muted); min-height:14px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  @media (max-width:520px) { .svs b { font-size:10.5px; } .svs em { font-size:10px; } }
+  .svc-foot { margin-top:12px; padding-top:12px; border-top:1px dashed var(--line); }
+  .svc-sched { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-top:8px; } .svc-sched .lf { margin:0; } .svc-sched input { min-height:42px; } .svc-sched .b { min-height:42px; }
+  .svl-bar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:10px; }
+  .svl-find { display:flex; gap:10px; flex:1; min-width:240px; } .svl-find select, .svl-find input { flex:1; min-width:0; }
+  .svl-count { margin:8px 2px; }
+  .sv-sect { margin:28px 0 12px; } .sv-sect h2 { font-size:17px; font-weight:600; letter-spacing:-.01em; }
+  /* ---------- job assigning: the board and the day plan ---------- */
+  .as-board { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.4fr); gap:14px; align-items:start; }
+  @media (max-width:900px) { .as-board { grid-template-columns:1fr; } }
+  .as-drones { display:grid; gap:14px; }
+  .as-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:14px 0 10px; }
+  .as-list { min-height:56px; padding:2px 0 6px; border-radius:10px; transition:background .12s; } .as-list.over { background:var(--brand-50); outline:2px dashed var(--brand); }
+  .as-job { border:1px solid var(--line); border-radius:10px; background:#fff; padding:10px 12px; margin-top:8px; } .as-job.drag { opacity:.4; } .as-job[draggable=true] { cursor:grab; }
+  .as-row { display:flex; align-items:center; gap:10px; } .as-row .t { flex:1; min-width:0; } .as-row .t b { display:block; font-weight:600; font-size:14px; } .as-row .t small { color:var(--muted); font-size:12.5px; }
+  .as-grip { color:var(--faint); display:grid; } .as-grip svg { width:18px; height:18px; }
+  .as-place { display:flex; align-items:center; gap:6px; color:var(--muted); margin-top:6px; font-size:12px; } .as-place svg { width:13px; height:13px; }
+  .as-give { display:flex; gap:8px; align-items:center; margin-top:8px; } .as-give select { flex:1; min-height:40px; } .as-mv { display:flex; gap:6px; }
+  .as-mv .round:first-child svg { transform:rotate(-90deg); } .as-mv .round:last-child svg { transform:rotate(90deg); }
+  .round.sm { width:36px; height:36px; } .b.sm { min-height:36px; padding:0 12px; font-size:13px; }
+  .as-empty { text-align:center; padding:10px; }
+  .as-drone.viewed { border-color:var(--brand); box-shadow:0 0 0 3px var(--brand-50), var(--shadow-sm); }
+  .as-plan { margin-bottom:14px; } .as-pick { padding:10px 16px 12px; } .as-map { height:420px; } .as-legend { padding:12px 16px 14px; }
+  .as-legs { display:flex; flex-wrap:wrap; gap:6px 4px; align-items:center; font-size:12.5px; } .as-legs .lg { display:inline-flex; align-items:center; gap:4px; }
+  .as-legs .arrow { font-style:normal; color:var(--muted); padding:1px 8px; background:var(--soft); border-radius:999px; font-size:11.5px; margin-right:4px; }
+  .as-total { margin-top:8px; }
+  .as-base { background:#0f6b4a; color:#fff; border-radius:8px; padding:4px 9px 4px 6px; font-size:12px; font-weight:600; display:flex; align-items:center; gap:4px; } .as-base svg { width:14px; height:14px; stroke:#fff; }
+  .as-pin { position:relative; } .as-pin > span { display:grid; place-items:center; width:26px; height:26px; border-radius:50%; background:#fff; border:2.5px solid #0f6b4a; color:#0f6b4a; font-weight:700; font-size:12px; box-shadow:0 1px 4px rgba(16,24,40,.3); }
+  .as-tag { position:absolute; left:32px; top:-14px; background:#fff; border:1px solid var(--line-strong); border-radius:8px; padding:5px 8px; box-shadow:var(--shadow-md); font-size:11px; line-height:1.35; white-space:nowrap; display:flex; flex-direction:column; pointer-events:none; } .as-tag b { font-size:11.5px; }
+  .as-leg { background:#0f6b4a; color:#fff; border-radius:999px; padding:2px 8px; font-size:11px; font-weight:600; box-shadow:0 1px 3px rgba(16,24,40,.3); } .as-leg.back { background:#475467; }
+  /* ---------- printing: bills and reports ---------- */
+  .pr-bg { position:fixed; inset:0; z-index:200; background:#e5e7eb; overflow:auto; }
+  .pr-bar { position:sticky; top:0; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding:10px 16px; background:#fff; border-bottom:1px solid var(--line); z-index:1; }
+  .pr-act { display:flex; gap:8px; }
+  .pr-sheet { max-width:860px; margin:18px auto 40px; background:#fff; padding:36px 40px; box-shadow:var(--shadow-md); }
+  @media (max-width:700px) { .pr-sheet { margin:0; padding:18px 14px; box-shadow:none; } }
+  .bill { font-size:13.5px; color:#111827; } .bill h1 { font-size:21px; margin:0 0 4px; } .bill h2 { font-size:15px; letter-spacing:.06em; margin:0 0 6px; } .bill h3 { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:#475467; margin:20px 0 8px; padding:0; border:0; }
+  .bill-sm { color:#475467; font-size:12.5px; } .bill-head { display:flex; justify-content:space-between; gap:20px; padding-bottom:14px; border-bottom:2px solid #111827; } .bill-no { text-align:right; }
+  .bill-two { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:6px; }
+  .bill-t { width:100%; border-collapse:collapse; } .bill-t th { text-align:left; font-weight:500; color:#475467; width:38%; padding:5px 0; border-bottom:1px solid #e5e7eb; } .bill-t td { padding:5px 0; border-bottom:1px solid #e5e7eb; }
+  .bill-money td { text-align:right; font-variant-numeric:tabular-nums; } .bill-foot { margin-top:30px; padding-top:12px; border-top:1px solid #d0d5dd; display:flex; justify-content:space-between; gap:16px; }
+  .rep-t { width:100%; border-collapse:collapse; font-size:12.5px; } .rep-t th { text-align:left; background:#f2f4f7; padding:6px 8px; border:1px solid #d0d5dd; white-space:nowrap; } .rep-t td { padding:5px 8px; border:1px solid #e4e7ec; vertical-align:top; } .rep-t td.n { text-align:right; font-variant-numeric:tabular-nums; }
+  @media print {
+    body.printing > *:not(.pr-bg) { display:none !important; }
+    body.printing .pr-bg { position:static; background:#fff; overflow:visible; }
+    body.printing .pr-bar { display:none; }
+    body.printing .pr-sheet { box-shadow:none; margin:0; padding:0; max-width:none; }
+    .rep-t th { background:#eee !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  }
   .sv-modal .lform h3 { margin:2px 0 8px; padding:0; border:0; text-transform:none; letter-spacing:0; font-size:14px; color:var(--ink); }
 </style>
 
@@ -1295,11 +1399,12 @@
   <div id="loginview"></div>
   <div class="app">
     <aside id="rail">
-      <div class="logo" id="logo" title="Home"><svg viewBox="0 0 24 24"><path d="M7 20h10"/><path d="M10 20c5.5-2.5.8-6.4 3-10"/><path d="M9.5 9.4c1.1.8 1.8 2.2 2.3 3.7-2 .4-3.5.4-4.8-.3-1.2-.6-2.3-1.9-3-4.2 2.8-.5 4.4 0 5.5.8z"/><path d="M14.1 6a7 7 0 0 0-1.1 4c1.9-.1 3.3-.6 4.3-1.4 1-1 1.6-2.3 1.7-4.6-2.7.1-4 1-4.9 2z"/></svg></div>
+      <div class="brand" id="logo" title="Home"><div class="logo"><svg viewBox="0 0 24 24"><path d="M7 20h10"/><path d="M10 20c5.5-2.5.8-6.4 3-10"/><path d="M9.5 9.4c1.1.8 1.8 2.2 2.3 3.7-2 .4-3.5.4-4.8-.3-1.2-.6-2.3-1.9-3-4.2 2.8-.5 4.4 0 5.5.8z"/><path d="M14.1 6a7 7 0 0 0-1.1 4c1.9-.1 3.3-.6 4.3-1.4 1-1 1.6-2.3 1.7-4.6-2.7.1-4 1-4.9 2z"/></svg></div><b>GoviLink</b></div>
       <nav id="nav"></nav>
     </aside>
     <div class="main-wrap">
       <header class="topbar">
+        <button id="menubtn" type="button" aria-label="Menu" title="Menu"></button>
         <div class="pagehead">
           <button id="backbtn" type="button" aria-label="Back" title="Back"></button>
           <div id="pageico"></div>
@@ -1313,6 +1418,7 @@
       </main>
     </div>
   </div>
+  <div id="scrim"></div>
   <div id="sheet"><div class="panel"><div class="grab"></div><div id="sheetgrid"></div></div></div>
   <div id="msg" role="status"></div>
   <script>
@@ -1723,6 +1829,12 @@ var ICONS = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
   tag: '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z"/><circle cx="7" cy="7" r="1.5"/>',
   globe: '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+  menu: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>',
+  receipt: '<path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  printer: '<polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+  clipboard: '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/>',
+  grip: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'
 };
 function icon(name) {
@@ -2597,7 +2709,7 @@ var Sync = (function () {
     var READS = ['getRegistrationData', 'getFormDefinition', 'getFarmer', 'getFarmerView', 'findFarmers', 'getOriginMap', 'getFarmerOrigin', 'getDashboard', 'getFinderOptions', 'runFinder',
       'listSegments', 'getServiceOptions', 'findFarmersForService', 'getFarmerServices', 'getService', 'listRecentServices', 'listServices', 'getAreaOptions', 'getServiceReport', 'previewAudience',
       'listAudience', 'prepareMessage', 'listMessages', 'getFarmerContacts', 'getFarmerLogbook', 'getHome', 'getEarthGeo', 'getEarthData', 'getServiceSetup', 'getDesignerData', 'getFarmerChunks', 'getServiceRows', 'getLand', 'getFarmerLands', 'findLands', 'getServiceFlowOptions', 'listServiceFlow', 'getServiceMap', 'getServiceRoad'];
-    var WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer', 'createServiceRequest', 'updateServiceRequest', 'cancelService', 'scheduleService', 'completeService', 'recordPayment'];
+    var WRITES = ['saveFarmer', 'saveService', 'addInteraction', 'saveFarmerGps', 'removeFarmer', 'restoreFarmer', 'createServiceRequest', 'updateServiceRequest', 'cancelService', 'scheduleService', 'unscheduleService', 'assignJobs', 'completeService', 'recordPayment'];
     var DATA_ENTRY = ['getRegistrationData', 'getFormDefinition', 'saveFarmer'];
     function available() { return typeof Worker !== 'undefined' && typeof API_URL !== 'undefined' && !!API_URL && !(typeof google !== 'undefined' && google.script && google.script.run); }
     function send(msg) {
@@ -2946,7 +3058,7 @@ var Sync = (function () {
   // server cannot be reached) the save waits in this queue, on the device, and is sent by itself, in order, when the connection is back. Meanwhile the
   // device copy shows the save as if it was done (the "overlay"). A save the server refuses for a reason (a wrong number, a duplicate) stays in the queue
   // marked "needs attention", with the reason, until the person discards it.
-  var QUEUEABLE = { saveFarmer: 1, saveService: 1, addInteraction: 1, saveFarmerGps: 1, createServiceRequest: 1, updateServiceRequest: 1, cancelService: 1, scheduleService: 1, completeService: 1, recordPayment: 1 };
+  var QUEUEABLE = { saveFarmer: 1, saveService: 1, addInteraction: 1, saveFarmerGps: 1, createServiceRequest: 1, updateServiceRequest: 1, cancelService: 1, scheduleService: 1, unscheduleService: 1, assignJobs: 1, completeService: 1, recordPayment: 1 };
   var CORE_COPY = ['full_name', 'nic', 'date_of_birth', 'gender', 'language', 'farmer_type', 'phone_primary', 'phone_alt', 'address', 'district', 'ds_division', 'gn_division', 'village',
     'marketing_consent', 'do_not_contact', 'notes', 'latitude', 'longitude', 'gps_source', 'gps_accuracy'];
   var queue = [], idmap = {}, cleanup = [], flushing = null, flushTimer = null;       // cleanup: temporary numbers whose real rows are still to be taken in
@@ -3027,6 +3139,8 @@ var Sync = (function () {
     if (fn === 'updateServiceRequest') return 'Change a request';
     if (fn === 'cancelService') return 'Cancel a service';
     if (fn === 'scheduleService') return 'Schedule a service';
+    if (fn === 'unscheduleService') return 'Back to requested';
+    if (fn === 'assignJobs') return 'Give jobs to a drone';
     if (fn === 'completeService') return 'Operation report';
     if (fn === 'recordPayment') return 'Payment';
     return 'Farm location';
@@ -3094,7 +3208,7 @@ var Sync = (function () {
     flushing = next().then(function () { flushing = null; emit('status'); if (pending()) scheduleFlush(30000); }, function () { flushing = null; });
     return flushing;
   }
-  function tablesOf(fn) { return fn === 'saveService' || QUEUEABLE[fn] === 1 && /Service|Payment|cancel|complete|schedule/i.test(fn) ? ['Services'] : (fn === 'addInteraction' ? ['Outreach'] : ['Farmers', 'Fields', 'FarmerAnswers']); }
+  function tablesOf(fn) { return fn === 'saveService' || QUEUEABLE[fn] === 1 && /Service|Payment|cancel|complete|schedule|assign/i.test(fn) ? ['Services'] : (fn === 'addInteraction' ? ['Outreach'] : ['Farmers', 'Fields', 'FarmerAnswers']); }
   function discard(id) {
     var gone = queue.filter(function (o) { return o.id === id; })[0];
     queue = queue.filter(function (o) { return o.id !== id; });
@@ -6401,7 +6515,7 @@ var Register = (function () {
           softShow(el, function () {
             el.appendChild(h('div', { class: 'card svcdone' }, h('div', { class: 'tick' }, icon('check')), h('h2', { text: 'Registered' }), h('p', { class: 'hint', text: core.full_name + ' · ' + (r.queued ? 'waiting to upload' : r.farmer_id) }),
               h('div', { class: 'row' },
-                h('button', { class: 'b big', type: 'button', onclick: function () { Nav.open('Services', { tab: 'request', farmer_id: r.farmer_id }); } }, icon('drone'), 'Service'),
+                h('button', { class: 'b big', type: 'button', onclick: function () { Nav.open('Requests', { farmer_id: r.farmer_id }); } }, icon('drone'), 'Service'),
                 h('button', { class: 'b ghost big', type: 'button', onclick: function () { mount(el); } }, icon('plus'), 'Another'))));
           }, { fade: true });
         } else { mount(el, r.farmer_id).then(function () { showMsg('Saved', false); }); }
@@ -6418,7 +6532,7 @@ var Register = (function () {
     if (existing) {
       el.appendChild(h('div', { class: 'card' }, h('div', { class: 'profilehead' }, h('span', { class: 'avatar md', text: initials(core.full_name) }),
         h('div', { style: 'flex:1;min-width:160px' }, h('h2', { text: core.full_name || farmerId }), h('div', { class: 'meta', text: farmerId })),
-        h('button', { class: 's', type: 'button', onclick: function () { Nav.open('Services', { tab: 'request', farmer_id: farmerId }); } }, icon('drone'), h('span', { class: 'hidesm', text: 'Service' })),
+        h('button', { class: 's', type: 'button', onclick: function () { Nav.open('Requests', { farmer_id: farmerId }); } }, icon('drone'), h('span', { class: 'hidesm', text: 'Service' })),
         role === 'Admin' ? h('button', { class: 's', type: 'button', onclick: function () { Nav.open('View farmer', farmerId); } }, icon('user'), h('span', { class: 'hidesm', text: 'Profile' })) : null,
         h('button', { class: 's', type: 'button', style: 'color:var(--red)', onclick: function () {
           askConfirm('Remove ' + (core.full_name || farmerId) + '?', 'They will disappear from lists. An admin can bring them back.', 'Remove').then(function (ok) {
@@ -6476,7 +6590,7 @@ var Find = (function () {
       if (!isPilot && !gone) acts.appendChild(small('globe', 'Show on the map', function () { Nav.open('Earth', { farmer_id: r.farmer_id }); }, null, 'Map'));
       var place = [r.village, r.ds_division || r.district].filter(Boolean).join(', ');
       var open = function () {
-        if (isPilot) Nav.open('Services', { tab: 'request', farmer_id: r.farmer_id }); else Nav.openFarmer(r.farmer_id);
+        if (isPilot) Nav.open('Requests', { farmer_id: r.farmer_id }); else Nav.openFarmer(r.farmer_id);
       };
       var tags = [];
       if (gone) tags.push(h('span', { class: 'pill red' }, 'Removed'));
@@ -6848,7 +6962,7 @@ var LandView = (function () {
     if (Svc.can('service.view')) {
       var svBody = h('div', {}, loadingBox());
       el.appendChild(h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', {}, ico('drone', 'sky', 'sm'), 'Services on this land'),
-        Svc.can('service.request') && l.active === 'Yes' && owner ? h('button', { class: 's', type: 'button', onclick: function () { Nav.open('Services', { tab: 'request', farmer_id: owner.farmer_id }); } }, icon('plus'), 'New request') : null), svBody));
+        Svc.can('service.request') && l.active === 'Yes' && owner ? h('button', { class: 's', type: 'button', onclick: function () { Nav.open('Requests', { farmer_id: owner.farmer_id }); } }, icon('plus'), 'New request') : null), svBody));
       Sync.fast('listServiceFlow', [{ land_id: l.land_id, limit: 200 }]).then(function (s) {
         clear(svBody);
         if (!s.rows.length) { svBody.appendChild(emptyBox('drone', 'No service on this land yet')); return; }
@@ -7056,7 +7170,7 @@ var ViewFarmer = (function () {
         h('div', { class: 'acts' },
           f.phone_primary ? h('a', { class: 'callbtn', href: 'tel:' + String(f.phone_primary).replace(/[^\d+]/g, '') }, icon('phone'), f.phone_primary) : null,
           phoneDigits ? h('a', { class: 'callbtn chat', href: 'https://wa.me/' + phoneDigits, target: '_blank', rel: 'noopener noreferrer' }, icon('chat'), 'WhatsApp') : null,
-          h('button', { class: 'b', type: 'button', onclick: function () { Nav.open('Services', { tab: 'request', farmer_id: f.farmer_id }); } }, icon('drone'), 'Service'),
+          h('button', { class: 'b', type: 'button', onclick: function () { Nav.open('Requests', { farmer_id: f.farmer_id }); } }, icon('drone'), 'Service'),
           isAdmin ? h('button', { class: 'b ghost', type: 'button', onclick: function () { Nav.open('Register farmer', f.farmer_id); } }, icon('edit'), 'Edit') : null,
           isAdmin && !removed ? h('button', { class: 'b ghost', type: 'button', onclick: function () {
             askConfirm('Remove ' + f.full_name + '?', 'They will disappear from lists. You can restore them here.', 'Remove').then(function (ok) {
@@ -7110,21 +7224,11 @@ var ViewFarmer = (function () {
 </script>
 
   <script>
-// Admin screen for people: each person is a card with their role picture. Create people, give a role and a password, reset a password,
-// switch someone off.
+// Admin screen for people: each person is a card. Create people, give each a job role (the powers they have), a base station and (a pilot
+// account) one drone; reset a password; switch someone off. Job roles, stations and drones are made on their own screens (OrgUI.html).
 var Accounts = (function () {
-  var ROLES = [
-    ['DataEntry', 'Data entry', 'userplus', 'green', 'Registers new farmers only.'],
-    ['Pilot', 'Pilot', 'drone', 'sky', 'Registers and corrects farmers, records services.'],
-    ['Manager', 'Manager', 'chart', 'sun', 'Looks at farmers, map and reports; sends messages.'],
-    ['Admin', 'Admin', 'shield', 'violet', 'Everything, including people and settings.']
-  ];
-  function role(r) { for (var i = 0; i < ROLES.length; i++) if (ROLES[i][0] === r) return ROLES[i]; return [r, r, 'user', 'slate', '']; }
-  function roleName(r, u) { if (u && u.roleLabel) return u.roleLabel; return role(r)[1]; }
+  var ICON = { Admin: ['shield', 'violet'], Manager: ['chart', 'sun'], Pilot: ['drone', 'sky'], DataEntry: ['userplus', 'green'] };
   function when(iso) { if (!iso) return 'never'; var d = new Date(iso); return isNaN(d.getTime()) ? String(iso) : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); }
-  function rolePicker(current, onChange) {
-    return tilePicker(ROLES.map(function (r) { return { value: r[0], label: r[1], icon: r[2], color: r[3] }; }), current, onChange);
-  }
 
   function passwordField(label, placeholder) {
     var input = h('input', { type: 'password', autocomplete: 'new-password', maxlength: 100, placeholder: placeholder || null });
@@ -7133,7 +7237,7 @@ var Accounts = (function () {
   }
 
   function mount(el) {
-    var users = [];
+    var users = [], setup = null;
     var open = null;   // { id, mode: 'edit' | 'reset' }
     var listBox = h('div');
     var me = Session.user;
@@ -7143,7 +7247,17 @@ var Accounts = (function () {
     }
     function act(promise, done) {
       hideMsg();
-      return promise.then(function () { open = null; showMsg(done, false); return load(); }).catch(function (e) { showMsg(e.message, true); });
+      return promise.then(function () { open = null; OrgUI.forget(); showMsg(done, false); return load(); }).catch(function (e) { showMsg(e.message, true); });
+    }
+
+    // the three choices that make up a person's place in the organisation
+    function placePickers(cur) {
+      var roles = OrgUI.select(setup.roles.filter(function (r) { return r.active; }).map(function (r) { return { value: r.role_id, label: r.name }; }), cur.job_role_id || '', null);
+      var stations = OrgUI.select(setup.stations.filter(function (s) { return s.active; }).map(function (s) { return { value: s.name, label: s.name }; }), cur.base_station || '', 'Every base station');
+      var drones = OrgUI.select(setup.drones.filter(function (d) { return d.active; }).map(function (d) { return { value: d.name, label: d.name + (d.base_station ? ' · ' + d.base_station : '') }; }), cur.drone || '', 'No drone (not a pilot account)');
+      return { roles: roles, stations: stations, drones: drones,
+        el: h('div', { class: 'grid3' }, h('div', { class: 'fld' }, h('label', { class: 'f', text: 'Job role' }), roles), h('div', { class: 'fld' }, h('label', { class: 'f', text: 'Base station' }), stations), h('div', { class: 'fld' }, h('label', { class: 'f', text: 'Drone' }), drones)),
+        value: function () { return { job_role_id: roles.value, base_station: stations.value, drone: drones.value }; } };
     }
 
     function panel(u) {
@@ -7159,16 +7273,16 @@ var Accounts = (function () {
       var name = h('input', { type: 'text', value: u.name, maxlength: 80 });
       var label = h('input', { type: 'text', value: u.label || '', maxlength: 60, placeholder: 'Team or branch (optional)' });
       var emailBox = h('input', { type: 'text', value: u.email, maxlength: 120, disabled: !!u.roleLabel });
-      var rp = me.user_id === u.user_id || u.roleLabel ? null : rolePicker(u.role);
+      var place = me.user_id === u.user_id || u.roleLabel ? null : placePickers(u);
       return h('div', { class: 'fieldrow' },
         h('div', { class: 'grid3' }, h('div', { class: 'fld' }, h('label', { class: 'f', text: 'Name' }), name), h('div', { class: 'fld' }, h('label', { class: 'f', text: 'Team' }), label),
           me.tools ? h('div', { class: 'fld' }, h('label', { class: 'f', text: 'Email' }), emailBox) : null),
-        rp ? h('div', { class: 'fld' }, h('label', { class: 'f', text: 'Role' }), rp.el) : null,
+        place ? place.el : null,
         h('div', { style: 'margin-top:8px;display:flex;gap:10px' },
           h('button', { class: 'b', type: 'button', onclick: function () {
             var input = { name: name.value, label: label.value };
             if (me.tools && !u.roleLabel && emailBox.value.trim().toLowerCase() !== u.email) input.email = emailBox.value;
-            if (rp && rp.get() && rp.get() !== u.role) input.role = rp.get();
+            if (place) { var v = place.value(); if (v.job_role_id !== u.job_role_id || v.base_station !== (u.base_station || '') || v.drone !== (u.drone || '')) Object.assign(input, v); }
             act(call('updateUser', u.user_id, input), 'Saved');
           } }, icon('check'), 'Save'),
           h('button', { class: 's', type: 'button', onclick: function () { open = null; draw(); } }, icon('x'))),
@@ -7203,8 +7317,10 @@ var Accounts = (function () {
     function drawCards() {
       users.forEach(function (u) {
         var isMe = u.user_id === me.user_id;
-        var r = role(u.role);
-        var chips = [h('span', { class: 'pill ' + ({ green: 'green', sky: 'blue', sun: 'amber', violet: 'violet' }[r[3]] || '') }, icon(r[2]), roleName(u.role, u))];
+        var ic = ICON[u.role] || ['user', 'slate'];
+        var chips = [h('span', { class: 'pill ' + ({ green: 'green', sky: 'blue', sun: 'amber', violet: 'violet' }[ic[1]] || '') }, icon(ic[0]), u.roleLabel || u.job_role || u.role)];
+        if (u.base_station) chips.push(h('span', { class: 'pill' }, icon('pin'), u.base_station)); else if (u.role !== 'DataEntry') chips.push(h('span', { class: 'pill' }, icon('globe'), 'Every base station'));
+        if (u.drone) chips.push(h('span', { class: 'pill blue' }, icon('drone'), u.drone));
         if (u.active !== 'Yes') chips.push(h('span', { class: 'pill red' }, icon('x'), 'Off'));
         if (u.locked) chips.push(h('span', { class: 'pill amber' }, icon('lock'), 'Locked'));
         if (u.must_change) chips.push(h('span', { class: 'pill blue' }, icon('key'), 'New password'));
@@ -7223,39 +7339,41 @@ var Accounts = (function () {
       });
     }
 
-    // ---- new person
+    // ---- new person (built once the job roles, stations and drones are known)
     var addBox = h('div', { style: 'display:none' });
-    var nName = h('input', { type: 'text', maxlength: 80, placeholder: 'Name' });
-    var nEmail = h('input', { type: 'text', maxlength: 120, autocomplete: 'off', placeholder: 'Email' });
-    var nLabel = h('input', { type: 'text', maxlength: 60, placeholder: 'Team or branch (optional)' });
-    var roleHelp = h('p', { class: 'hint', text: ROLES[0][4] });
-    var nRole = rolePicker('DataEntry', function (v) { roleHelp.textContent = v ? role(v)[4] : ''; });
-    var nPw = passwordField('Password', '8+ characters, a letter and a number');
-    var nMust = h('input', { type: 'checkbox', checked: true });
-    var addBtn = h('button', { class: 'b big', type: 'button', onclick: create }, icon('check'), 'Create');
-    function create() {
-      hideMsg();
-      setBusy(addBtn, true);
-      call('createUser', { name: nName.value, email: nEmail.value, role: nRole.get(), label: nLabel.value, password: nPw.input.value, must_change: nMust.checked })
-        .then(function () {
-          showMsg('Created. Give them the email and the password.', false);
-          nName.value = ''; nEmail.value = ''; nLabel.value = ''; nPw.input.value = '';
-          setBusy(addBtn, false); slideTo(addBox, false);
-          return load();
-        }).catch(function (e) { setBusy(addBtn, false); showMsg(e.message, true); });
+    function buildAdd() {
+      var nName = h('input', { type: 'text', maxlength: 80, placeholder: 'Name' });
+      var nEmail = h('input', { type: 'text', maxlength: 120, autocomplete: 'off', placeholder: 'Email' });
+      var nLabel = h('input', { type: 'text', maxlength: 60, placeholder: 'Team or branch (optional)' });
+      var place = placePickers({ job_role_id: '' });
+      var nPw = passwordField('Password', '8+ characters, a letter and a number');
+      var nMust = h('input', { type: 'checkbox', checked: true });
+      var addBtn = h('button', { class: 'b big', type: 'button', onclick: create }, icon('check'), 'Create');
+      function create() {
+        hideMsg();
+        setBusy(addBtn, true);
+        call('createUser', Object.assign({ name: nName.value, email: nEmail.value, label: nLabel.value, password: nPw.input.value, must_change: nMust.checked }, place.value()))
+          .then(function () {
+            showMsg('Created. Give them the email and the password.', false);
+            nName.value = ''; nEmail.value = ''; nLabel.value = ''; nPw.input.value = '';
+            setBusy(addBtn, false); slideTo(addBox, false); OrgUI.forget();
+            return load();
+          }).catch(function (e) { setBusy(addBtn, false); showMsg(e.message, true); });
+      }
+      addBox.appendChild(h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', {}, ico('userplus', 'green', 'sm'), 'New person')),
+        place.el,
+        h('p', { class: 'hint', text: 'A base station limits the person to that station\'s jobs. A drone makes it that drone\'s pilot account (only its jobs). Leave both empty to see every station.' }),
+        h('div', { class: 'grid3' }, h('div', { class: 'fld' }, h('label', { class: 'f', text: 'Name' }), nName), h('div', { class: 'fld' }, h('label', { class: 'f', text: 'Email' }), nEmail), nPw.row),
+        h('div', { class: 'fld' }, h('label', { class: 'f', text: 'Team' }), nLabel),
+        h('div', { class: 'checks' }, h('label', {}, nMust, ' They choose their own password at first sign-in')),
+        h('div', { style: 'margin-top:12px' }, addBtn)));
     }
-    addBox.appendChild(h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', {}, ico('userplus', 'green', 'sm'), 'New person')),
-      nRole.el, roleHelp,
-      h('div', { class: 'grid3' }, h('div', { class: 'fld' }, h('label', { class: 'f', text: 'Name' }), nName), h('div', { class: 'fld' }, h('label', { class: 'f', text: 'Email' }), nEmail), nPw.row),
-      h('div', { class: 'fld' }, h('label', { class: 'f', text: 'Team' }), nLabel),
-      h('div', { class: 'checks' }, h('label', {}, nMust, ' They choose their own password at first sign-in')),
-      h('div', { style: 'margin-top:12px' }, addBtn)));
 
     el.appendChild(h('div', { style: 'display:flex;justify-content:flex-end;margin-bottom:14px' },
       h('button', { class: 'b', type: 'button', onclick: function () { slideTo(addBox, addBox.style.display === 'none'); } }, icon('plus'), 'New person')));
     el.appendChild(addBox);
     el.appendChild(listBox);
-    load();
+    OrgUI.load(true).then(function (s) { setup = s; buildAdd(); load(); }).catch(function (e) { showMsg(e.message, true); });
   }
   return { mount: mount };
 })();
@@ -7667,30 +7785,11 @@ var Home = (function () {
     var numsBox = h('div', { class: 'soft-box' });
     el.appendChild(numsBox);
     numsBox.appendChild(skeletonRow(4, 109));
-    var quickHead = h('div', { class: 'secthead', style: 'margin-top:4px' }, 'Quick actions');
-    el.appendChild(quickHead);
-    var serviceTile = tile('Services', 'drone', 'sky', 'Services');
-    if (role === 'Pilot') serviceTile.classList.add('primary');       // what a pilot does all day stands out
-    var launch;
-    if (role === 'Pilot') launch = h('div', { class: 'launch three' }, serviceTile, tile('Find farmer', 'search', 'green', 'Find farmer'), tile('New farmer', 'userplus', 'green', 'Register farmer'));
-    else launch = h('div', { class: 'launch' },
-      tile('Find farmer', 'search', 'green', 'Find farmer'), serviceTile, tile('Reports', 'chart', 'sun', 'Service report'),
-      tile('Map', 'globe', 'aqua', 'Earth'), tile('Message', 'megaphone', 'violet', 'Messages'),
-      role === 'Admin' ? tile('New farmer', 'userplus', 'green', 'Register farmer') : null);
-    el.appendChild(launch);
-    // a pilot starts with the things to do; the figures come after
-    if (role === 'Pilot') { var rb = el.querySelector('.rangebar'); el.insertBefore(quickHead, rb); el.insertBefore(launch, rb); }
     var more = h('div', { class: 'soft-box' });
     el.appendChild(more);
     more.appendChild(h('div', { class: 'dashgrid skel-row', 'aria-hidden': 'true' }, skeletonCard(342), skeletonCard(342)));
     var recent = h('div', { class: 'soft-box' });
     el.appendChild(recent);
-    if (role === 'Admin') {
-      el.appendChild(h('div', { class: 'secthead' }, 'Administration'));
-      el.appendChild(h('div', { class: 'launch' },
-        tile('People', 'users', 'slate', 'Accounts'), tile('Services setup', 'settings', 'slate', 'Service setup'), tile('Form', 'sliders', 'slate', 'Form Designer'), tile('Export', 'download', 'slate', 'Export data')));
-    }
-
     function stat(o, build) {
       var c = statCard(o);
       return openable(c, o.label, function () { if (!D) return; var p = popup(build(D, function () { p.close(); })); });
@@ -8177,8 +8276,8 @@ var Svc = (function () {
       }
       var acts = h('div', { class: 'sv-act' });
       if (can.schedule && c.status === 'Scheduled') acts.appendChild(h('button', { class: 'b ghost', type: 'button', onclick: openSchedule }, icon('calendar'), 'Move to another day'));
-      if (can.complete && c.status === 'Scheduled') acts.appendChild(h('button', { class: 'b ghost', type: 'button', onclick: function () { m.close(); Nav.open('Services', { tab: 'ops', service_id: serviceId }); } }, icon('note'), 'Enter completion'));
-      if (can.payment && c.status !== 'Requested' && c.status !== 'Cancelled') acts.appendChild(h('button', { class: 'b ghost', type: 'button', onclick: function () { m.close(); Nav.open('Services', { tab: 'pay', service_id: serviceId }); } }, icon('cash'), 'Enter payment'));
+      if (can.complete && c.status === 'Scheduled') acts.appendChild(h('button', { class: 'b ghost', type: 'button', onclick: function () { m.close(); Nav.open('Job completion', { service_id: serviceId }); } }, icon('note'), 'Enter completion'));
+      if (can.payment && c.status !== 'Requested' && c.status !== 'Cancelled') acts.appendChild(h('button', { class: 'b ghost', type: 'button', onclick: function () { m.close(); Nav.open('Payments', { service_id: serviceId }); } }, icon('cash'), 'Enter payment'));
       if (can.edit_request) acts.appendChild(h('button', { class: 'b ghost', type: 'button', onclick: function () { openEdit(rd); } }, icon('edit'), 'Change the request'));
       if (can.cancel) acts.appendChild(h('button', { class: 'b ghost', type: 'button', style: 'color:var(--red)', onclick: function () { openCancel(rd); } }, icon('x'), 'Cancel'));
       if (acts.firstChild) body.appendChild(acts);
@@ -8262,16 +8361,1076 @@ var ServiceHub = (function () {
 </script>
 
   <script>
-// Step 1 of a service: the REQUEST. Find the farmer, tick the lands that need a service, say which service and what the crop is, and give the day
-// CAFT promises (before a day, or an exact day). One request can name several lands: each becomes its own service.
+// Admin screens for the organisation (REDESIGN.md): job roles (named sets of powers) and the base stations and drones.
+// OrgUI holds what they share: the setup read from the server and the small form helpers.
+var OrgUI = (function () {
+  var cache = null;
+  function load(force) {
+    if (!cache || force) cache = call('getOrgSetup').catch(function (e) { cache = null; throw e; });
+    return cache;
+  }
+  function forget() { cache = null; }
+  // A drop-down from [{ value, label }] (blank = the first line, e.g. "Every base station"; null = no blank line).
+  function select(items, current, blank) {
+    var s = h('select', {});
+    if (blank !== null && blank !== undefined) s.appendChild(h('option', { value: '', text: blank }));
+    items.forEach(function (it) { s.appendChild(h('option', { value: it.value, text: it.label, selected: it.value === current })); });
+    if (current && !items.some(function (it) { return it.value === current; })) s.appendChild(h('option', { value: current, text: current, selected: true }));
+    return s;
+  }
+  function round(iconName, label, onclick) { return h('button', { class: 'round', type: 'button', title: label, 'aria-label': label, onclick: onclick }, icon(iconName)); }
+  function err() { var p = Svc.errBox(); return { el: p, clear: function () { p.style.display = 'none'; }, show: function (m) { p.textContent = m; p.style.display = 'block'; } }; }
+  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+  return { load: load, forget: forget, select: select, round: round, plural: plural, err: err };
+})();
+
+// ---------------------------------------------------------------- job roles
+var JobRoles = (function () {
+  var SHORT = {
+    'home.view': 'Home', 'farmer.register': 'Register farmers', 'farmer.find': 'Find farmers', 'land.edit': 'Edit lands', 'service.request': 'Requests', 'service.schedule': 'Scheduling',
+    'service.assign': 'Job assigning', 'service.complete': 'Completion', 'service.payment': 'Payments', 'service.view': 'Service lists', 'report.view': 'Reports', 'audit.view': 'Log book',
+    'insight.view': 'Earth map and tools', 'admin.manage': 'Administration'
+  };
+  function mount(el) {
+    var box = h('div'), setup = null;
+    el.appendChild(h('div', { class: 'sv-bar' },
+      h('p', { class: 'hint', style: 'margin:0;flex:1;min-width:220px', text: 'A job role is a named set of powers. Choose one when you create a person\'s account: they see only the tabs their powers allow.' }),
+      h('button', { class: 'b', type: 'button', onclick: function () { edit(null); } }, icon('plus'), 'New job role')));
+    el.appendChild(box);
+    function reload() { OrgUI.forget(); return softFetch(box, OrgUI.load(true), function (s) { setup = s; draw(); }); }
+
+    function draw() {
+      setup.roles.forEach(function (r) {
+        var names = Object.keys(r.powers).filter(function (p) { return r.powers[p]; }).map(function (p) { return h('span', { class: 'pill' + (r.powers[p] === 'own' ? ' amber' : '') }, SHORT[p] || p, r.powers[p] === 'own' ? ' (own drone)' : ''); });
+        box.appendChild(h('div', { class: 'card', style: 'padding:16px;margin-bottom:12px' + (r.active ? '' : ';opacity:.6') },
+          h('div', { class: 'profilehead' }, ico(r.fixed ? 'shield' : 'users', r.fixed ? 'violet' : 'green'),
+            h('div', { style: 'flex:1;min-width:180px' },
+              h('h2', { text: r.name, style: 'font-size:18px' }),
+              h('div', { class: 'meta', text: OrgUI.plural(r.users, 'person', 'people') + (r.system ? ' · built in' + (r.changed ? ', changed' : '') : '') + (r.active ? '' : ' · switched off') + (r.notes ? ' · ' + r.notes : '') }),
+              h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px' }, r.fixed ? h('span', { class: 'pill violet' }, icon('shield'), 'Every power, every base station') : names)),
+            r.fixed ? null : OrgUI.round('edit', 'Edit', function () { edit(r); }))));
+      });
+    }
+
+    function edit(r) {
+      var err = OrgUI.err();
+      var name = h('input', { type: 'text', maxlength: 40, value: r ? r.name : '', disabled: !!(r && r.system), placeholder: 'For example Clerk' });
+      var notes = h('input', { type: 'text', maxlength: 200, value: r ? r.notes : '', placeholder: 'What this job role is for (optional)' });
+      var on = h('input', { type: 'checkbox', checked: !r || r.active });
+      var checks = {}, own = {};
+      var body = h('div', { class: 'lform' }, Svc.lab('Name', name), Svc.lab('Note', notes));
+      setup.groups.forEach(function (g) {
+        body.appendChild(h('h3', { text: g[0] }));
+        g[1].forEach(function (id) {
+          var p = setup.powers.filter(function (x) { return x.id === id; })[0];
+          var cb = h('input', { type: 'checkbox', checked: !!(r && r.powers[id]) });
+          checks[id] = cb;
+          var line = h('label', { class: 'sv-check' }, cb, h('span', {}, h('b', { text: SHORT[id] || id }), h('small', { style: 'display:block;color:var(--muted)', text: p.label })));
+          body.appendChild(line);
+          if (p.limited) {
+            own[id] = h('input', { type: 'checkbox', checked: !!(r && r.powers[id] === 'own') });
+            body.appendChild(h('label', { class: 'sv-check', style: 'margin-left:30px;min-height:28px' }, own[id], h('span', { text: 'Only the jobs of the person\'s own drone' })));
+          }
+        });
+      });
+      if (r && !r.system) body.appendChild(h('label', { class: 'sv-check' }, on, h('span', { text: 'In use (switch off to stop giving it to people)' })));
+      var save = h('button', { class: 'b big', type: 'button' }, icon('check'), 'Save');
+      body.appendChild(err.el); body.appendChild(h('div', { class: 'sv-act' }, save));
+      var m = Svc.modal(r ? 'Job role: ' + r.name : 'New job role', body);
+      save.addEventListener('click', function () {
+        err.clear(); setBusy(save, true);
+        var powers = {};
+        Object.keys(checks).forEach(function (id) { if (checks[id].checked) powers[id] = own[id] && own[id].checked ? 'own' : true; });
+        call('saveJobRole', { role_id: r ? r.role_id : '', name: name.value, notes: notes.value, powers: powers, active: r && !r.system ? on.checked : true })
+          .then(function () { m.close(); showMsg('Saved', false); return reload(); })
+          .catch(function (e) { setBusy(save, false); err.show(e.message); });
+      });
+    }
+    reload();
+  }
+  return { mount: mount };
+})();
+
+// ---------------------------------------------------------------- base stations and drones
+var Stations = (function () {
+  function mount(el) {
+    var stBox = h('div'), drBox = h('div'), setup = null;
+    el.appendChild(h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', {}, ico('pin', 'green', 'sm'), 'Base stations'),
+      h('button', { class: 'b', type: 'button', onclick: function () { editStation(null); } }, icon('plus'), 'New base station')), stBox));
+    el.appendChild(h('div', { class: 'card', style: 'margin-top:14px' }, h('div', { class: 'cardhead' }, h('h2', {}, ico('drone', 'sky', 'sm'), 'Drones'),
+      h('button', { class: 'b', type: 'button', onclick: function () { editDrone(null); } }, icon('plus'), 'New drone')), drBox));
+    function reload() { OrgUI.forget(); return OrgUI.load(true).then(function (s) { setup = s; softShow(stBox, drawStations); softShow(drBox, drawDrones); }).catch(function (e) { showMsg(e.message, true); }); }
+
+    function drawStations() {
+      setup.stations.forEach(function (s) {
+        var n = setup.drones.filter(function (d) { return d.active && d.base_station === s.name; }).length;
+        stBox.appendChild(h('div', { class: 'pickrow', style: s.active ? '' : 'opacity:.55', onclick: function () { editStation(s); } },
+          ico('pin', 'green'),
+          h('div', { class: 't' }, h('b', { text: s.name }), h('small', {}, [s.district, OrgUI.plural(n, 'drone', 'drones')].filter(Boolean).join(' · ')),
+            h('div', { class: 'ftags' }, s.latitude === '' ? h('span', { class: 'pill amber' }, icon('alert'), 'No map point: day routes cannot start here') : h('span', { class: 'pill' }, icon('pin'), s.latitude + ', ' + s.longitude), s.active ? null : h('span', { class: 'pill red' }, 'Off'))),
+          h('span', { class: 'go', style: 'color:var(--faint)' }, icon('chevron'))));
+      });
+    }
+    function drawDrones() {
+      if (!setup.drones.length) drBox.appendChild(h('p', { class: 'hint', text: 'No drones yet. Add each drone, then give a pilot account its drone on the People screen.' }));
+      setup.drones.forEach(function (d) {
+        var who = (setup.drone_users || {})[d.name];
+        drBox.appendChild(h('div', { class: 'pickrow', style: d.active ? '' : 'opacity:.55', onclick: function () { editDrone(d); } },
+          ico('drone', 'sky'),
+          h('div', { class: 't' }, h('b', { text: d.name }), h('small', {}, [d.base_station || 'No base station', d.model].filter(Boolean).join(' · ')),
+            h('div', { class: 'ftags' }, who ? h('span', { class: 'pill green' }, icon('user'), who) : h('span', { class: 'pill' }, 'No pilot account'), d.active ? null : h('span', { class: 'pill red' }, 'Off'))),
+          h('span', { class: 'go', style: 'color:var(--faint)' }, icon('chevron'))));
+      });
+    }
+
+    function editStation(s) {
+      var err = OrgUI.err();
+      var name = h('input', { type: 'text', maxlength: 40, value: s ? s.name : '', disabled: !!s, placeholder: 'For example Ampara' });
+      var district = h('input', { type: 'text', maxlength: 40, value: s ? s.district : '' });
+      var lat = h('input', { type: 'text', inputmode: 'decimal', value: s && s.latitude !== '' ? s.latitude : '', placeholder: '7.2975' });
+      var lng = h('input', { type: 'text', inputmode: 'decimal', value: s && s.longitude !== '' ? s.longitude : '', placeholder: '81.6820' });
+      var on = h('input', { type: 'checkbox', checked: !s || s.active });
+      var save = h('button', { class: 'b big', type: 'button' }, icon('check'), 'Save');
+      var body = h('div', { class: 'lform' }, Svc.lab('Name', name, s ? 'The name cannot be changed: jobs and accounts keep it.' : ''), Svc.lab('District', district),
+        h('div', { class: 'grid2' }, Svc.lab('Latitude', lat), Svc.lab('Longitude', lng)),
+        h('p', { class: 'hint', text: 'The map point of the station: day routes start here. Copy it from Google Maps (press and hold on the place).' }),
+        s ? h('label', { class: 'sv-check' }, on, h('span', { text: 'In use' })) : null, err.el, h('div', { class: 'sv-act' }, save));
+      var m = Svc.modal(s ? s.name : 'New base station', body);
+      save.addEventListener('click', function () {
+        err.clear(); setBusy(save, true);
+        call('saveBaseStation', { station_id: s ? s.station_id : '', name: name.value, district: district.value, latitude: lat.value, longitude: lng.value, active: s ? on.checked : true })
+          .then(function () { m.close(); showMsg('Saved', false); return reload(); }).catch(function (e) { setBusy(save, false); err.show(e.message); });
+      });
+    }
+
+    function editDrone(d) {
+      var err = OrgUI.err();
+      var name = h('input', { type: 'text', maxlength: 40, value: d ? d.name : '', disabled: !!d, placeholder: 'For example Drone 1' });
+      var st = OrgUI.select(setup.stations.filter(function (x) { return x.active; }).map(function (x) { return { value: x.name, label: x.name }; }), d ? d.base_station : '', 'Choose the base station');
+      var model = h('input', { type: 'text', maxlength: 40, value: d ? d.model : '', placeholder: 'For example DJI Agras T50' });
+      var notes = h('input', { type: 'text', maxlength: 200, value: d ? d.notes : '' });
+      var on = h('input', { type: 'checkbox', checked: !d || d.active });
+      var save = h('button', { class: 'b big', type: 'button' }, icon('check'), 'Save');
+      var body = h('div', { class: 'lform' }, Svc.lab('Name', name, d ? 'The name cannot be changed: jobs and accounts keep it.' : ''), Svc.lab('Works from', st), Svc.lab('Model', model), Svc.lab('Note', notes),
+        d ? h('label', { class: 'sv-check' }, on, h('span', { text: 'In use' })) : null, err.el, h('div', { class: 'sv-act' }, save));
+      var m = Svc.modal(d ? d.name : 'New drone', body);
+      save.addEventListener('click', function () {
+        err.clear(); setBusy(save, true);
+        call('saveDrone', { drone_id: d ? d.drone_id : '', name: name.value, base_station: st.value, model: model.value, notes: notes.value, active: d ? on.checked : true })
+          .then(function () { m.close(); showMsg('Saved', false); return reload(); }).catch(function (e) { setBusy(save, false); err.show(e.message); });
+      });
+    }
+    reload();
+  }
+  return { mount: mount };
+})();
+</script>
+
+  <script>
+// A small map of Sri Lanka for the service screens (MapLibre, light grey tiles, district lines). GeoMap.create(box) gives a handle:
+//   handle.setPoints([{ id, lat, lng, color, ring }], fit)   dots; with fit=true the map zooms to show every dot (the whole island when there are none)
+//   handle.onPoint(fn)                                      fn(id) when a dot is pressed
+//   handle.map                                              the MapLibre map (other screens add their own layers once handle.ready is resolved)
+//   handle.ready                                            a promise resolved when the map has loaded
+//   handle.destroy()
+var GeoMap = (function () {
+  var LIB_JS = 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js';
+  var LIB_CSS = 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css';
+  var LIGHT = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+  var ISLAND = [[79.55, 5.8], [82.05, 10.0]];
+  var libPromise = null;
+  function loadLib() {
+    if (window.maplibregl) return Promise.resolve();
+    if (libPromise) return libPromise;
+    libPromise = new Promise(function (resolve, reject) {
+      var css = document.createElement('link'); css.rel = 'stylesheet'; css.href = LIB_CSS; document.head.appendChild(css);
+      var s = document.createElement('script'); s.src = LIB_JS; s.onload = resolve;
+      s.onerror = function () { libPromise = null; reject(new Error('The map could not be loaded. Check the internet connection.')); };
+      document.head.appendChild(s);
+    });
+    return libPromise;
+  }
+  function hasWebGL() { try { var c = document.createElement('canvas'); return !!(window.WebGLRenderingContext && (c.getContext('webgl') || c.getContext('experimental-webgl'))); } catch (e) { return false; } }
+
+  function create(box, opts) {
+    opts = opts || {};
+    var H = { map: null, isReady: false, dead: false, pending: null, clickFn: null };
+    H.ready = new Promise(function (resolve, reject) { H._ok = resolve; H._bad = reject; });
+    H.ready.catch(function () {});
+    if (!hasWebGL()) { box.appendChild(emptyBox('globe', 'This device cannot show the map', 'The list below still works.')); H._bad(new Error('no webgl')); return H; }
+    box.appendChild(loadingBox('Loading the map…'));
+    Promise.all([loadLib(), Sync.fast('getEarthGeo', [], { strict: true })]).then(function (r) {
+      if (H.dead) return;
+      var geo = JSON.parse(r[1].districts);
+      clear(box);
+      var map = new maplibregl.Map({ container: box, bounds: ISLAND, fitBoundsOptions: { padding: 8 }, minZoom: 5, maxZoom: 17, attributionControl: false,
+        style: { version: 8, sources: { light: { type: 'raster', tiles: [LIGHT], tileSize: 256, maxzoom: 16 } }, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#e9eef2' } }, { id: 'light', type: 'raster', source: 'light' }] } });
+      H.map = map;
+      map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+      map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: ['Basemap © Esri', 'Boundaries: Survey Department of Sri Lanka via geoBoundaries'] }));
+      map.on('load', function () {
+        map.addSource('dist', { type: 'geojson', data: geo });
+        map.addSource('pts', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+        map.addLayer({ id: 'dist-fill', type: 'fill', source: 'dist', paint: { 'fill-color': '#cfd8d3', 'fill-opacity': 0.28 } });
+        map.addLayer({ id: 'dist-line', type: 'line', source: 'dist', paint: { 'line-color': '#ffffff', 'line-width': 1.1, 'line-opacity': 0.9 } });
+        map.addLayer({ id: 'pts', type: 'circle', source: 'pts', paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 4, 9, 7, 13, 10], 'circle-color': ['get', 'color'],
+          'circle-stroke-width': ['case', ['get', 'sel'], 3, 1.6], 'circle-stroke-color': ['case', ['get', 'sel'], '#111827', ['get', 'ring'], '#dc2626', '#ffffff'], 'circle-opacity': 0.92 } });
+        map.on('mouseenter', 'pts', function () { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'pts', function () { map.getCanvas().style.cursor = ''; });
+        map.on('click', 'pts', function (e) { if (H.clickFn && e.features && e.features.length) H.clickFn(e.features[0].properties.id); });
+        H.isReady = true;
+        if (H.pending) { var p = H.pending; H.pending = null; H.setPoints(p.points, p.fit); }
+        H._ok(map);
+      });
+    }).catch(function (e) { clear(box); box.appendChild(emptyBox('globe', 'The map could not be shown', e.message)); H._bad(e); });
+
+    H.setPoints = function (points, fit) {
+      if (!H.isReady) { H.pending = { points: points, fit: fit }; return; }
+      H.map.getSource('pts').setData({ type: 'FeatureCollection', features: (points || []).map(function (p) {
+        return { type: 'Feature', properties: { id: p.id, color: p.color || '#0ea5e9', ring: !!p.ring, sel: !!p.sel }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } };
+      }) });
+      if (fit) H.fit(points);
+    };
+    // zoom so that every point is on the screen (one point: a close view of it; none: the whole island)
+    H.fit = function (points, pad) {
+      if (!H.isReady) return;
+      var pts = (points || []).filter(function (p) { return isFinite(p.lat) && isFinite(p.lng); });
+      var p = pad || 44;
+      if (!pts.length) { H.map.fitBounds(ISLAND, { padding: 8, duration: 400 }); return; }
+      if (pts.length === 1) { H.map.easeTo({ center: [pts[0].lng, pts[0].lat], zoom: 11, duration: 400 }); return; }
+      var b = new maplibregl.LngLatBounds([pts[0].lng, pts[0].lat], [pts[0].lng, pts[0].lat]);
+      pts.forEach(function (q) { b.extend([q.lng, q.lat]); });
+      H.map.fitBounds(b, { padding: { top: p, bottom: p, left: p, right: p }, maxZoom: 12, duration: 500 });
+    };
+    H.onPoint = function (fn) { H.clickFn = fn; };
+    H.resize = function () { if (H.map) H.map.resize(); };
+    H.destroy = function () { H.dead = true; try { if (H.map) H.map.remove(); } catch (e) { /* already gone */ } H.map = null; };
+    return H;
+  }
+  return { create: create, hasWebGL: hasWebGL };
+})();
+</script>
+
+  <script>
+// The service CARD (REDESIGN.md): who and where, what was asked, the base station, and a horizontal TIMELINE Requested > Scheduled > Drone > Completed > Paid.
+// SvcCard.card(c, opts) makes one; SvcList.mount(box, cfg) is the filtered card list the Requests, Scheduling and other screens put under their own controls.
+var SvcCard = (function () {
+  function place(c) { return [c.village, c.ds_division, c.district].filter(function (v, i, a) { return v && a.indexOf(v) === i; }).join(', '); }
+
+  // The steps of one service. A step is done, half done (advance paid) or still to do; the first one still to do is "next".
+  function steps(c) {
+    if (c.status === 'Cancelled') return [{ name: 'Requested', on: true, when: Svc.short(c.requested_date) }, { name: 'Cancelled', on: true, bad: true, when: '' }];
+    var paid = c.payment_status === 'Paid' || c.payment_status === 'Free', part = c.payment_status === 'Partly paid';
+    var out = [
+      { name: 'Requested', on: true, when: Svc.short(c.requested_date) },
+      { name: 'Scheduled', on: c.status === 'Scheduled' || c.status === 'Completed', when: c.scheduled_date ? Svc.short(c.scheduled_date) + (c.scheduled_time ? ' ' + c.scheduled_time : '') : '' },
+      { name: 'Drone', on: !!c.drone, when: c.drone || '' },
+      { name: 'Completed', on: c.status === 'Completed', when: c.status === 'Completed' ? Svc.short(c.service_date) : '' }
+    ];
+    if (!c.money_hidden) out.push({ name: part ? 'Advance paid' : (c.payment_status === 'Free' ? 'No charge' : 'Paid'), on: paid, half: part, when: paid ? Svc.short(c.paid_on) : (part && c.advance_amount !== '' ? Svc.money(c.advance_amount) : '') });
+    return out;
+  }
+  function timeline(c) {
+    var list = steps(c), nextSet = false;
+    return h('div', { class: 'svtl', role: 'list', 'aria-label': 'Where this service is' }, list.map(function (s) {
+      var cls = 'svs' + (s.on ? ' on' : '') + (s.half ? ' half' : '') + (s.bad ? ' bad' : '');
+      if (!s.on && !s.half && !nextSet) { cls += ' next'; nextSet = true; }
+      return h('div', { class: cls, role: 'listitem' }, h('span', { class: 'svd' }, s.on && !s.bad ? icon('check') : (s.bad ? icon('x') : null)), h('b', { text: s.name }), h('em', { text: s.when || '' }));
+    }));
+  }
+
+  // opts: { edit (function: shows a pencil), footer (a node under the timeline), selected, onclick }
+  function card(c, opts) {
+    opts = opts || {};
+    var k = ServiceLog.kindOf(c.service_type);
+    var tags = [];
+    tags.push(h('span', { class: 'pill ' + (c.base_station ? '' : 'amber') }, icon('pin'), c.base_station || 'No base station'));
+    if (c.overdue) tags.push(h('span', { class: 'pill red' }, icon('alert'), c.status === 'Requested' ? 'Past the promised day' : 'After the promised day'));
+    var el = h('div', { class: 'svcard' + (c.status === 'Cancelled' ? ' off' : '') + (opts.selected ? ' sel' : ''), 'data-id': c.service_id },
+      h('div', { class: 'svc-top', onclick: opts.onclick || function () { Svc.openRoad(c.service_id); } },
+        ico(k.icon, k.color),
+        h('div', { class: 't' }, h('b', { text: c.farmer_name }), h('small', { text: c.farmer_id + ' · ' + c.land_label + (c.land_id ? ' · ' + c.land_id : '') })),
+        h('span', { class: 'fid', text: c.service_id })),
+      opts.edit ? h('button', { class: 'round svc-edit', type: 'button', title: 'Edit the request', 'aria-label': 'Edit the request', onclick: function (e) { e.stopPropagation(); opts.edit(c); } }, icon('edit')) : null,
+      h('div', { class: 'svc-facts' },
+        h('span', {}, icon('drone'), (c.service_type || 'Service') + (c.acres ? ' · ' + c.acres + ' ac' : '')),
+        c.crop ? h('span', {}, icon('wheat'), c.crop) : null,
+        place(c) ? h('span', {}, icon('pin'), place(c)) : null,
+        h('span', {}, icon('calendar'), Svc.whenText(c))),
+      h('div', { class: 'ftags' }, tags),
+      timeline(c), opts.footer || null);
+    return el;
+  }
+  return { card: card, timeline: timeline, place: place };
+})();
+
+// A filtered list of cards. cfg: { stage (the first choice), stages: [[value, label]], fixed: { filters always sent }, cardOpts: function (c) { return opts; },
+//   onData: function (data), emptyText, station: true (show the base station choice), search: true }
+var SvcList = (function () {
+  function mount(box, cfg) {
+    var f = { stage: cfg.stage || '', station: '', q: '' };
+    var H = { data: null };
+    var bar = h('div', { class: 'svl-bar' }), listBox = h('div', { class: 'svl-list' }), countEl = h('div', { class: 'hint svl-count' });
+    var stageBtns = {};
+    if (cfg.stages) {
+      var seg = h('div', { class: 'chipbar seg' });
+      cfg.stages.forEach(function (s) { stageBtns[s[0]] = h('button', { class: 'chip', type: 'button', text: s[1], onclick: function () { f.stage = s[0]; paint(); H.reload(); } }); seg.appendChild(stageBtns[s[0]]); });
+      bar.appendChild(seg);
+    }
+    var station = null, search = null;
+    if (cfg.station !== false) {
+      station = h('select', { 'aria-label': 'Base station' });
+      station.addEventListener('change', function () { f.station = station.value; H.reload(); });
+    }
+    if (cfg.search !== false) {
+      search = h('input', { type: 'text', inputmode: 'search', placeholder: 'Search by name, ID or village', maxlength: 60, 'aria-label': 'Search' });
+      var t = null; search.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { f.q = search.value.trim(); H.reload(); }, 250); });
+    }
+    if (station || search) bar.appendChild(h('div', { class: 'svl-find' }, station, search));
+    box.appendChild(bar); box.appendChild(countEl); box.appendChild(listBox);
+    function paint() { Object.keys(stageBtns).forEach(function (k) { stageBtns[k].className = 'chip' + (f.stage === k ? ' on' : ''); }); }
+    paint();
+    Svc.options().then(function (o) {
+      if (!station) return;
+      if (o.my_station) { station.style.display = 'none'; return; }
+      station.appendChild(h('option', { value: '', text: 'All base stations' }));
+      o.base_stations.forEach(function (s) { station.appendChild(h('option', { value: s, text: s })); });
+    }).catch(function () {});
+
+    H.filters = f;
+    H.reload = function () {
+      var q = Object.assign({}, cfg.fixed || {}, { stage: f.stage, base_station: f.station, q: f.q, limit: 300 });
+      if (!f.stage) delete q.stage;
+      return softFetch(listBox, call('listServiceFlow', q), function (d) {
+        H.data = d;
+        countEl.textContent = d.total ? (d.total + (d.total === 1 ? ' service' : ' services') + (d.truncated ? ' (the first 300 are shown)' : '')) : '';
+        if (!d.rows.length) listBox.appendChild(h('div', { class: 'card' }, emptyBox('drone', cfg.emptyText || 'Nothing here', 'Change the filters to see more.')));
+        d.rows.forEach(function (c) { listBox.appendChild(SvcCard.card(c, cfg.cardOpts ? cfg.cardOpts(c) : {})); });
+        if (cfg.onData) cfg.onData(d);
+      });
+    };
+    H.reload();
+    return H;
+  }
+  return { mount: mount };
+})();
+
+// Changing a request that has not been scheduled yet: crop, service, acres, base station, the promise, a note; or cancelling it.
+var SvcEdit = (function () {
+  function open(c, onDone) {
+    var body = h('div', {}, loadingBox());
+    var m = Svc.modal('Edit the request', body);
+    Promise.all([Svc.options(), Sync.fast('getServiceRoad', [c.service_id], { strict: true })]).then(function (r) {
+      var o = r[0], d = r[1].detail;
+      clear(body);
+      var crop = Svc.select(o.crops, c.crop, ''), type = Svc.select(o.types, c.service_type, '');
+      var acres = h('input', { type: 'number', step: 'any', min: '0', inputmode: 'decimal', value: c.acres });
+      var station = o.my_station ? h('input', { type: 'text', value: o.my_station, disabled: true }) : Svc.select(o.base_stations, c.base_station, 'Choose the base station');
+      var to = h('input', { type: 'date', min: o.today, value: c.window_to });
+      var exact = h('input', { type: 'checkbox', checked: c.exact_day });
+      var note = h('input', { type: 'text', maxlength: 300, value: d.request_notes || '' });
+      var err = Svc.errBox();
+      var go = h('button', { class: 'b', type: 'button' }, icon('check'), 'Save');
+      go.addEventListener('click', function () {
+        var patch = { crop: crop.value, service_type: type.value, acres: acres.value, notes: note.value };
+        if (!o.my_station) patch.base_station = station.value;
+        if (exact.checked) { patch.exact_day = to.value; patch.window_to = ''; patch.window_from = ''; } else { patch.window_to = to.value; patch.exact_day = ''; }
+        Svc.submit(go, err, function () { return Svc.changed(call('updateServiceRequest', c.service_id, patch)); }, function () { showMsg('Saved', false); m.close(); if (onDone) onDone(); });
+      });
+      var cancel = h('button', { class: 'b ghost', type: 'button', style: 'color:var(--red)' }, icon('x'), 'Cancel this request');
+      cancel.addEventListener('click', function () {
+        var why = h('input', { type: 'text', maxlength: 200, placeholder: 'Why is it cancelled?' }), err2 = Svc.errBox();
+        var yes = h('button', { class: 'b danger', type: 'button' }, icon('x'), 'Cancel this request');
+        var sub = Svc.modal('Cancel this request', h('div', { class: 'lform' }, h('p', { class: 'hint', text: c.farmer_name + ' · ' + c.land_label }), Svc.lab('Reason', why), err2, h('div', { class: 'row', style: 'margin-top:14px' }, yes)));
+        yes.addEventListener('click', function () { Svc.submit(yes, err2, function () { return Svc.changed(call('cancelService', c.service_id, why.value)); }, function () { showMsg('Cancelled', false); sub.close(); m.close(); if (onDone) onDone(); }); });
+      });
+      body.appendChild(h('div', { class: 'lform' }, h('p', { class: 'hint', text: c.farmer_name + ' · ' + c.land_label + ' · ' + c.service_id }),
+        h('div', { class: 'two' }, Svc.lab('Crop', crop), Svc.lab('Service', type)), h('div', { class: 'two' }, Svc.lab('Acres', acres), Svc.lab('Base station', station)),
+        Svc.lab(exact.checked ? 'Exact day' : 'Promised before', to), h('label', { class: 'sv-check' }, exact, ' This is an exact day, not "before"'), Svc.lab('Note', note), err,
+        h('div', { class: 'row', style: 'margin-top:14px;gap:10px;flex-wrap:wrap' }, go, cancel)));
+    }).catch(function (e) { clear(body); body.appendChild(h('p', { class: 'hint', text: e.message })); });
+  }
+  return { open: open };
+})();
+</script>
+
+  <script>
+// Scheduling (step 2 of a service): a map of Sri Lanka with the requested and scheduled services that match the filters (stage, base station, promised day or
+// range, kind of service), the same cards below, and ONE thing to do on a card: give it a day and a time (Schedule), move it, or send it back to Requested.
+// The request itself cannot be edited here. The map zooms to the dots by itself.
+var SvcSchedule = (function () {
+  var COLOR = { Requested: '#f59e0b', Scheduled: '#0ea5e9' };
+  var memo = { stage: 'Requested', station: '', type: '', from: '', to: '' };
+
+  function iso(n) { return new Date(Date.now() + 330 * 60000 + n * 86400000).toISOString().slice(0, 10); }
+
+  function mount(el) {
+    var f = memo, S = { sel: '', data: null, o: null };
+    var filters = h('div', { class: 'card sv-filters lform' }), mapCard = h('div', { class: 'card flush sv-mapcard' }), mapBox = h('div', { class: 'sv-map' }), sum = h('div', { class: 'hint svl-count' }), listBox = h('div', { class: 'svl-list' });
+    mapCard.appendChild(mapBox);
+    el.appendChild(filters); el.appendChild(mapCard); el.appendChild(sum); el.appendChild(listBox);
+
+    // ----- filters -----
+    var stageBtns = {}, seg = h('div', { class: 'chipbar seg' });
+    [['Requested', 'Requested'], ['Scheduled', 'Scheduled'], ['Active', 'Both']].forEach(function (s) {
+      stageBtns[s[0]] = h('button', { class: 'chip', type: 'button', onclick: function () { f.stage = s[0]; paint(); load(true); } }, h('i', { class: 'dotc', style: 'background:' + (COLOR[s[0]] || 'linear-gradient(90deg,#f59e0b 50%,#0ea5e9 50%)') }), s[1]);
+      seg.appendChild(stageBtns[s[0]]);
+    });
+    var station = h('select', { 'aria-label': 'Base station' }), type = h('select', { 'aria-label': 'Kind of service' });
+    var from = h('input', { type: 'date', value: f.from, 'aria-label': 'From' }), to = h('input', { type: 'date', value: f.to, 'aria-label': 'To' });
+    var quick = h('div', { class: 'chipbar' }, [['Any day', '', ''], ['Next 7 days', 0, 7], ['Next 14 days', 0, 14], ['Next 30 days', 0, 30]].map(function (q) {
+      return h('button', { class: 'chip', type: 'button', text: q[0], onclick: function () { f.from = q[1] === '' ? '' : iso(q[1]); f.to = q[2] === '' ? '' : iso(q[2]); from.value = f.from; to.value = f.to; load(true); } });
+    }));
+    function paint() { Object.keys(stageBtns).forEach(function (k) { stageBtns[k].className = 'chip' + (f.stage === k ? ' on' : ''); }); }
+    station.addEventListener('change', function () { f.station = station.value; load(true); });
+    type.addEventListener('change', function () { f.type = type.value; load(true); });
+    from.addEventListener('change', function () { f.from = from.value; if (f.from && !f.to) { f.to = f.from; to.value = f.to; } load(true); });
+    to.addEventListener('change', function () { f.to = to.value; load(true); });
+    var stationLab = Svc.lab('Base station', station);
+    filters.appendChild(h('div', { class: 'sv-frow' }, seg));
+    filters.appendChild(h('div', { class: 'two sv-frow' }, stationLab, Svc.lab('Kind of service', type)));
+    filters.appendChild(h('div', { class: 'two sv-frow' }, Svc.lab('Promised or planned: from', from), Svc.lab('to', to)));
+    filters.appendChild(h('div', { class: 'sv-frow' }, quick));
+    paint();
+
+    Svc.options().then(function (o) {
+      S.o = o;
+      if (o.my_station) { f.station = o.my_station; stationLab.style.display = 'none'; }
+      else { station.appendChild(h('option', { value: '', text: 'All base stations' })); o.base_stations.forEach(function (s) { station.appendChild(h('option', { value: s, text: s, selected: s === f.station })); }); }
+      type.appendChild(h('option', { value: '', text: 'All kinds' })); o.types.forEach(function (t) { type.appendChild(h('option', { value: t, text: t, selected: t === f.type })); });
+      load(true);
+    }).catch(function (e) { showMsg(e.message, true); });
+
+    // ----- the map -----
+    var geo = GeoMap.create(mapBox);
+    geo.onPoint(function (id) { select(id, true); });
+
+    function query() {
+      var q = { stage: f.stage, base_station: f.station, service_type: f.type, limit: 300 };
+      if (f.from) q.from = f.from; if (f.to) q.to = f.to || f.from;
+      return q;
+    }
+    function dots() {
+      var d = S.data; if (!d) return [];
+      return (d.points || []).map(function (p) { return { id: p.id, lat: p.lat, lng: p.lng, color: COLOR[p.status] || '#94a3b8', ring: !!p.overdue, sel: p.id === S.sel }; });
+    }
+    function select(id, scroll) {
+      S.sel = S.sel === id && !scroll ? '' : id;
+      Array.prototype.forEach.call(listBox.querySelectorAll('.svcard'), function (n) { n.classList.toggle('sel', n.getAttribute('data-id') === S.sel); });
+      geo.setPoints(dots(), false);
+      if (scroll && S.sel) { var n = listBox.querySelector('.svcard[data-id="' + S.sel + '"]'); if (n && n.scrollIntoView) n.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    }
+
+    // ----- the cards -----
+    function footer(c) {
+      var minDay = (S.o && S.o.today) || iso(0), moving = c.status === 'Scheduled';
+      var date = h('input', { type: 'date', min: minDay, value: moving ? c.scheduled_date : '', 'aria-label': 'Day to do it' });
+      var time = h('input', { type: 'time', value: c.scheduled_time || '', 'aria-label': 'Time' });
+      var err = Svc.errBox();
+      var go = h('button', { class: 'b', type: 'button' }, icon('calendar'), moving ? 'Move' : 'Schedule');
+      go.addEventListener('click', function () {
+        Svc.submit(go, err, function () { return Svc.changed(call('scheduleService', c.service_id, date.value, { time: time.value })); }, function (r) {
+          showMsg(r.late ? 'Scheduled, after the promised day' : (moving ? 'Moved' : 'Scheduled'), false); load(false);
+        });
+      });
+      var row = h('div', { class: 'svc-sched' }, h('div', { class: 'lf' }, h('label', { text: moving ? 'Planned day' : 'Day' }), date), h('div', { class: 'lf' }, h('label', { text: 'Time' }), time), go);
+      var wrap = h('div', { class: 'svc-foot' }, h('div', { class: 'hint', text: c.status === 'Requested' ? (Svc.windowText(c) ? 'Promised: ' + Svc.windowText(c) : 'No promised day') : 'Promised: ' + (Svc.windowText(c) || '—') + (c.drone ? ' · A job given to a drone loses it when moved to another day.' : '') }), row, err);
+      if (moving) {
+        var back = h('button', { class: 'b ghost', type: 'button' }, icon('undo'), 'Back to requested');
+        back.addEventListener('click', function () { Svc.submit(back, err, function () { return Svc.changed(call('unscheduleService', c.service_id, '')); }, function () { showMsg('Back in the requests', false); load(false); }); });
+        row.appendChild(back);
+      }
+      return wrap;
+    }
+
+    var seq = 0;
+    function load(fit) {
+      var my = ++seq;
+      return softFetch(listBox, Sync.fast('getServiceMap', [query()]), function (d) {
+        if (my !== seq) return;
+        S.data = d;
+        var shown = (d.points || []).length;
+        sum.textContent = d.total ? d.total + (d.total === 1 ? ' service' : ' services') + (d.summary.unlocated ? ' · ' + d.summary.unlocated + ' without a map point' : '') + (d.truncated ? ' · the first 300 are listed' : '') : '';
+        geo.ready.then(function () { geo.setPoints(dots(), fit); }).catch(function () {});
+        if (!d.rows.length) listBox.appendChild(h('div', { class: 'card' }, emptyBox('calendar', 'No services match', 'Change the filters to see more.')));
+        d.rows.forEach(function (c) {
+          listBox.appendChild(SvcCard.card(c, { selected: c.service_id === S.sel, footer: Svc.can('service.schedule') ? footer(c) : null, onclick: function () { select(c.service_id, false); if (c.located && geo.map) geo.map.easeTo({ center: [c.longitude, c.latitude], zoom: Math.max(geo.map.getZoom(), 10), duration: 400 }); } }));
+        });
+      });
+    }
+    return { destroy: function () { geo.destroy(); } };
+  }
+  return { mount: mount };
+})();
+</script>
+
+  <script>
+// Job assigning (step 2b): the SCHEDULED jobs of a base station for one day (or a range of days), and the drones of that base station. For one day the jobs and the drones
+// are side by side; in edit mode a job is dragged onto a drone (or given with its drop-down, for phones) and put in order. Above is the map of the day plan of the chosen
+// drone: the route from the base station to every land and back, the kilometres of each leg, and a tag at every stop (service, hectares, land, farmer).
+// Roads come from the free OpenStreetMap routing service (OSRM) when there is a connection; without one the legs are straight lines x 1.3 and it says so.
+
+var Route = (function () {
+  var cache = {};
+  function rad(x) { return x * Math.PI / 180; }
+  function km(a, b) {
+    var dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+    var x = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 6371 * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  }
+  // nearest-neighbour order from the base (jobs without a point go last, in their old order)
+  function best(base, jobs) {
+    var left = jobs.filter(function (j) { return j.located; }), out = [], cur = base;
+    while (left.length) {
+      var bi = 0, bd = Infinity;
+      left.forEach(function (j, i) { var d = km(cur, { lat: j.latitude, lng: j.longitude }); if (d < bd) { bd = d; bi = i; } });
+      var j = left.splice(bi, 1)[0]; out.push(j); cur = { lat: j.latitude, lng: j.longitude };
+    }
+    return out.concat(jobs.filter(function (j) { return !j.located; }));
+  }
+  function straight(pts) {
+    var legs = [];
+    for (var i = 1; i < pts.length; i++) legs.push(km(pts[i - 1], pts[i]) * 1.3);
+    return { road: false, legs: legs, total: legs.reduce(function (a, b) { return a + b; }, 0), line: pts.map(function (p) { return [p.lng, p.lat]; }) };
+  }
+  // pts: base, stop 1 .. stop n, base. Resolves { road, legs (km), total, line (coordinates) }.
+  function plan(pts) {
+    if (pts.length < 2) return Promise.resolve({ road: false, legs: [], total: 0, line: [] });
+    var key = pts.map(function (p) { return p.lat.toFixed(5) + ',' + p.lng.toFixed(5); }).join(';');
+    if (cache[key]) return Promise.resolve(cache[key]);
+    var url = 'https://router.project-osrm.org/route/v1/driving/' + pts.map(function (p) { return p.lng.toFixed(6) + ',' + p.lat.toFixed(6); }).join(';') + '?overview=full&geometries=geojson';
+    var ctl = typeof AbortController !== 'undefined' ? new AbortController() : null, timer = setTimeout(function () { if (ctl) ctl.abort(); }, 7000);
+    return fetch(url, ctl ? { signal: ctl.signal } : {}).then(function (r) { return r.json(); }).then(function (j) {
+      clearTimeout(timer);
+      if (!j.routes || !j.routes[0]) throw new Error('no route');
+      var rt = j.routes[0], res = { road: true, legs: rt.legs.map(function (l) { return l.distance / 1000; }), total: rt.distance / 1000, line: rt.geometry.coordinates };
+      cache[key] = res; return res;
+    }).catch(function () { clearTimeout(timer); return straight(pts); });
+  }
+  return { km: km, best: best, plan: plan };
+})();
+
+var SvcAssign = (function () {
+  var HA = 0.404686;
+  var memo = { station: '', type: '', from: '', to: '' };
+  function iso(n) { return new Date(Date.now() + 330 * 60000 + n * 86400000).toISOString().slice(0, 10); }
+  function ha(ac) { return Math.round((Number(ac) || 0) * HA * 100) / 100; }
+  function kmText(v) { return (Math.round(v * 10) / 10) + ' km'; }
+  // the point of the route nearest to (lng, lat), so a leg's label sits on the road
+  function onLine(line, lng, lat) {
+    var best = [lng, lat], bd = Infinity;
+    line.forEach(function (c) { var d = (c[0] - lng) * (c[0] - lng) + (c[1] - lat) * (c[1] - lat); if (d < bd) { bd = d; best = c; } });
+    return best;
+  }
+  function order(a, b) { return (Number(a.stop_order) || 999) - (Number(b.stop_order) || 999) || String(a.service_id).localeCompare(String(b.service_id)); }
+
+  function mount(el) {
+    var f = memo, S = { o: null, jobs: [], drone: '', edit: false, tags: true, mapGen: 0, markers: [], stationPt: null };
+    if (!f.from) { f.from = f.to = iso(1); }
+    var canAssign = Svc.can('service.assign');
+    var filters = h('div', { class: 'card sv-filters lform' }), planBox = h('div'), boardBox = h('div');
+    el.appendChild(filters); el.appendChild(planBox); el.appendChild(boardBox);
+
+    // ----- filters -----
+    var station = h('select', { 'aria-label': 'Base station' }), type = h('select', { 'aria-label': 'Kind of service' });
+    var from = h('input', { type: 'date', value: f.from, 'aria-label': 'From' }), to = h('input', { type: 'date', value: f.to, 'aria-label': 'To' });
+    var quick = h('div', { class: 'chipbar' }, [['Today', 0, 0], ['Tomorrow', 1, 1], ['Next 7 days', 0, 7]].map(function (q) {
+      return h('button', { class: 'chip', type: 'button', text: q[0], onclick: function () { f.from = iso(q[1]); f.to = iso(q[2]); from.value = f.from; to.value = f.to; load(); } });
+    }));
+    station.addEventListener('change', function () { f.station = station.value; S.drone = ''; load(); });
+    type.addEventListener('change', function () { f.type = type.value; load(); });
+    from.addEventListener('change', function () { f.from = from.value; if (!f.to || f.to < f.from) { f.to = f.from; to.value = f.to; } load(); });
+    to.addEventListener('change', function () { f.to = to.value || f.from; if (f.to < f.from) { f.from = f.to; from.value = f.from; } load(); });
+    var stationLab = Svc.lab('Base station', station);
+    filters.appendChild(h('div', { class: 'two sv-frow' }, stationLab, Svc.lab('Kind of service', type)));
+    filters.appendChild(h('div', { class: 'two sv-frow' }, Svc.lab('Day (or first day)', from), Svc.lab('Last day (for a range)', to)));
+    filters.appendChild(h('div', { class: 'sv-frow' }, quick));
+
+    Svc.options().then(function (o) {
+      S.o = o;
+      if (o.my_station) { f.station = o.my_station; stationLab.style.display = 'none'; }
+      else { if (!f.station) f.station = o.base_stations[0] || ''; o.base_stations.forEach(function (s) { station.appendChild(h('option', { value: s, text: s, selected: s === f.station })); }); }
+      type.appendChild(h('option', { value: '', text: 'All kinds' })); o.types.forEach(function (t) { type.appendChild(h('option', { value: t, text: t, selected: t === f.type })); });
+      S.stationPt = (o.stations.filter(function (s) { return s.name === f.station; })[0]) || null;
+      load();
+    }).catch(function (e) { showMsg(e.message, true); });
+
+    var seq = 0;
+    function load() {
+      var my = ++seq;
+      S.stationPt = S.o ? (S.o.stations.filter(function (s) { return s.name === f.station; })[0] || null) : null;
+      var q = { stage: 'Scheduled', from: f.from, to: f.to, base_station: f.station, service_type: f.type, limit: 300 };
+      return softFetch(boardBox, Sync.fast('listServiceFlow', [q]), function (d) {
+        if (my !== seq) return;
+        S.jobs = d.rows; S.truncated = d.truncated;
+        draw();
+      });
+    }
+
+    function single() { return f.from === f.to; }
+    function drones() { return (S.o ? S.o.drone_list : []).filter(function (d) { return !f.station || d.base_station === f.station; }); }
+    function byDrone(name) { return S.jobs.filter(function (j) { return (j.drone || '') === name; }).sort(order); }
+
+    function draw() {
+      clear(boardBox);
+      if (!S.jobs.length) {
+        boardBox.appendChild(h('div', { class: 'card' }, emptyBox('calendar', 'No scheduled jobs', 'Jobs appear here once they have been scheduled in Scheduling.')));
+        drawPlan(); return;
+      }
+      if (!single()) { drawRange(); drawPlan(); return; }
+      drawDay(); drawPlan();
+    }
+
+    // ----- a range of days: read only, day by day -----
+    function drawRange() {
+      var days = {}; S.jobs.forEach(function (c) { (days[c.scheduled_date] = days[c.scheduled_date] || []).push(c); });
+      boardBox.appendChild(h('p', { class: 'hint', text: 'Pick one day to give the jobs to drones.' }));
+      Object.keys(days).sort().forEach(function (dk) {
+        boardBox.appendChild(h('div', { class: 'sv-sect' }, h('h2', { text: Svc.day(dk) + ' · ' + Svc.plural(days[dk].length, 'job', 'jobs') })));
+        days[dk].forEach(function (c) { boardBox.appendChild(SvcCard.card(c, {})); });
+      });
+    }
+
+    // ----- one day: the jobs and the drones side by side -----
+    function jobTile(c) {
+      var tile = h('div', { class: 'as-job', 'data-id': c.service_id, draggable: S.edit ? 'true' : null });
+      if (S.edit) {
+        tile.addEventListener('dragstart', function (e) { try { e.dataTransfer.setData('text/plain', c.service_id); e.dataTransfer.effectAllowed = 'move'; } catch (x) { /* old browser */ } tile.classList.add('drag'); });
+        tile.addEventListener('dragend', function () { tile.classList.remove('drag'); });
+      }
+      var give = null;
+      if (S.edit) {
+        give = h('select', { 'aria-label': 'Give to a drone' }, h('option', { value: '', text: 'Not given' }), drones().map(function (d) { return h('option', { value: d.name, text: d.name, selected: d.name === (c.drone || '') }); }));
+        give.addEventListener('change', function () { place(c.service_id, give.value, undefined); });
+      }
+      var k = ServiceLog.kindOf(c.service_type);
+      tile.appendChild(h('div', { class: 'as-row' }, S.edit ? h('span', { class: 'as-grip', title: 'Drag' }, icon('grip')) : null, ico(k.icon, k.color, 'sm'),
+        h('div', { class: 't' }, h('b', { text: c.farmer_name }), h('small', { text: (c.service_type || 'Service') + ' · ' + c.acres + ' ac (' + ha(c.acres) + ' ha) · ' + c.land_id })),
+        c.scheduled_time ? h('span', { class: 'pill' }, icon('clock'), c.scheduled_time) : null));
+      tile.appendChild(h('small', { class: 'as-place' }, icon('pin'), SvcCard.place(c) || 'Place not recorded', c.located ? '' : ' · no map point'));
+      if (give) {
+        var ud = h('span', { class: 'as-mv' },
+          c.drone ? h('button', { class: 'round sm', type: 'button', title: 'Earlier', 'aria-label': 'Earlier', onclick: function () { nudge(c, -1); } }, icon('chevron')) : null,
+          c.drone ? h('button', { class: 'round sm', type: 'button', title: 'Later', 'aria-label': 'Later', onclick: function () { nudge(c, 1); } }, icon('chevron')) : null);
+        tile.appendChild(h('div', { class: 'as-give' }, give, ud));
+      }
+      return tile;
+    }
+    function dropList(name) {
+      var list = h('div', { class: 'as-list', 'data-drone': name });
+      if (S.edit) {
+        list.addEventListener('dragover', function (e) { e.preventDefault(); list.classList.add('over'); });
+        list.addEventListener('dragleave', function () { list.classList.remove('over'); });
+        list.addEventListener('drop', function (e) {
+          e.preventDefault(); list.classList.remove('over');
+          var id = ''; try { id = e.dataTransfer.getData('text/plain'); } catch (x) { id = ''; }
+          if (!id) return;
+          var kids = Array.prototype.slice.call(list.querySelectorAll('.as-job:not(.drag)')), idx = kids.length;
+          for (var i = 0; i < kids.length; i++) { var r = kids[i].getBoundingClientRect(); if (e.clientY < r.top + r.height / 2) { idx = i; break; } }
+          place(id, name, idx);
+        });
+      }
+      return list;
+    }
+    function drawDay() {
+      var un = byDrone('');
+      var left = h('div', { class: 'card as-col' }, h('div', { class: 'cardhead' }, h('h2', {}, ico('list', 'sun', 'sm'), 'Jobs of the day'), h('span', { class: 'pill', text: String(un.length) })));
+      var ul = dropList(''); un.forEach(function (c) { ul.appendChild(jobTile(c)); });
+      if (!un.length) ul.appendChild(h('p', { class: 'hint as-empty', text: 'Every job has a drone.' }));
+      left.appendChild(ul);
+      var right = h('div', { class: 'as-drones' });
+      var ds = drones();
+      if (!ds.length) right.appendChild(h('div', { class: 'card' }, emptyBox('drone', 'No drone at this base station', 'Add the drones on the Stations and drones screen.')));
+      ds.forEach(function (d) {
+        var jobs = byDrone(d.name), acres = jobs.reduce(function (a, c) { return a + (Number(c.acres) || 0); }, 0);
+        var box = h('div', { class: 'card as-drone' + (S.drone === d.name ? ' viewed' : '') },
+          h('div', { class: 'cardhead' }, h('h2', {}, ico('drone', 'sky', 'sm'), d.name),
+            h('button', { class: 'b ghost sm', type: 'button', onclick: function () { S.drone = S.drone === d.name ? '' : d.name; draw(); } }, icon('route'), S.drone === d.name ? 'Hide route' : 'Show route')),
+          h('div', { class: 'ftags' }, d.pilot ? h('span', { class: 'pill green' }, icon('user'), d.pilot) : h('span', { class: 'pill amber' }, icon('alert'), 'No pilot account'),
+            h('span', { class: 'pill' }, Svc.plural(jobs.length, 'job', 'jobs') + ' · ' + (Math.round(acres * 100) / 100) + ' ac (' + ha(acres) + ' ha)')));
+        var dl = dropList(d.name); jobs.forEach(function (c) { dl.appendChild(jobTile(c)); });
+        if (!jobs.length) dl.appendChild(h('p', { class: 'hint as-empty', text: S.edit ? 'Drop jobs here' : 'No jobs yet' }));
+        box.appendChild(dl);
+        right.appendChild(box);
+      });
+      var bar = h('div', { class: 'as-bar' }, h('p', { class: 'hint', style: 'margin:0;flex:1', text: S.edit ? 'Drag a job onto a drone, or use the list on the job. Changes are saved at once.' : 'Press Edit to give jobs to drones.' }),
+        canAssign ? h('button', { class: S.edit ? 'b' : 'b ghost', type: 'button', onclick: function () { S.edit = !S.edit; draw(); } }, icon(S.edit ? 'check' : 'edit'), S.edit ? 'Done' : 'Edit') : null,
+        canAssign && S.edit && S.drone ? h('button', { class: 'b ghost', type: 'button', onclick: bestOrder }, icon('route'), 'Best order for ' + S.drone) : null);
+      boardBox.appendChild(bar);
+      boardBox.appendChild(h('div', { class: 'as-board' }, left, right));
+    }
+
+    // ----- changing the plan: the changed drone lists are sent in order -----
+    function byId(id) { return S.jobs.filter(function (j) { return j.service_id === id; })[0]; }
+    function place(id, drone, index) {
+      var job = byId(id); if (!job) return;
+      var oldDrone = job.drone || '';
+      var lists = {};
+      S.jobs.forEach(function (j) { if (j !== job) (lists[j.drone || ''] = lists[j.drone || ''] || []).push(j); });
+      Object.keys(lists).forEach(function (k) { lists[k].sort(order); });
+      var target = lists[drone] = lists[drone] || [];
+      if (index === undefined || index > target.length) index = target.length;
+      target.splice(index, 0, job);
+      var changes = [];
+      [oldDrone, drone].filter(function (k, i, a) { return a.indexOf(k) === i; }).forEach(function (k) {
+        (lists[k] || []).forEach(function (j, i) {
+          if (k) { j.drone = k; j.stop_order = i + 1; changes.push({ service_id: j.service_id, drone: k, stop_order: i + 1 }); }
+          else if (j === job) { j.drone = ''; j.stop_order = ''; changes.push({ service_id: j.service_id, drone: '', stop_order: '' }); }
+        });
+      });
+      if (drone && !S.drone) S.drone = drone;
+      draw();
+      send(changes);
+    }
+    function nudge(c, dir) {
+      var list = byDrone(c.drone), i = list.indexOf(c), j = i + dir;
+      if (i < 0 || j < 0 || j >= list.length) return;
+      list.splice(i, 1); list.splice(j, 0, c);
+      send(list.map(function (x, n) { x.stop_order = n + 1; return { service_id: x.service_id, drone: c.drone, stop_order: n + 1 }; }));
+      draw();
+    }
+    function bestOrder() {
+      if (!S.stationPt || S.stationPt.latitude === '') { showMsg('The base station has no map point yet.', true); return; }
+      var base = { lat: S.stationPt.latitude, lng: S.stationPt.longitude };
+      var sorted = Route.best(base, byDrone(S.drone));
+      send(sorted.map(function (x, n) { x.stop_order = n + 1; return { service_id: x.service_id, drone: S.drone, stop_order: n + 1 }; }));
+      draw();
+    }
+    function send(changes) {
+      if (!changes.length) return;
+      call('assignJobs', changes).catch(function (e) { showMsg(e.message, true); load(); });
+    }
+
+    // ----- the map of the plan of the chosen drone -----
+    var geo = null, planBuilt = false, mapBox = null, legend = null, viewBtn = null, titleEl = null;
+    function buildPlan() {
+      planBuilt = true;
+      mapBox = h('div', { class: 'sv-map as-map' }); legend = h('div', { class: 'as-legend' });
+      viewBtn = h('button', { class: 'b ghost sm', type: 'button', onclick: function () { S.tags = !S.tags; viewBtn.className = 'b sm' + (S.tags ? '' : ' ghost'); drawPlan(); } }, icon('eye'), 'Details on the map');
+      viewBtn.className = 'b sm';
+      titleEl = h('h2', {}, ico('route', 'green', 'sm'), 'Day plan');
+      var sel = h('div', { class: 'chipbar as-pick' });
+      S.pickBar = sel;
+      planBox.appendChild(h('div', { class: 'card flush sv-mapcard as-plan' }, h('div', { class: 'cardhead', style: 'padding:14px 16px 0' }, titleEl, viewBtn), sel, mapBox, legend));
+      geo = GeoMap.create(mapBox);
+      geo.ready.then(function (map) {
+        map.addSource('route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+        map.addLayer({ id: 'route-casing', type: 'line', source: 'route', paint: { 'line-color': '#ffffff', 'line-width': 7, 'line-opacity': 0.9 } });
+        map.addLayer({ id: 'route-line', type: 'line', source: 'route', paint: { 'line-color': '#0f6b4a', 'line-width': 4 } });
+        drawPlan();
+      }).catch(function () {});
+    }
+    function clearMarkers() { S.markers.forEach(function (m) { m.remove(); }); S.markers = []; }
+    function drawPlan() {
+      if (!single() || !S.jobs.length) { planBox.style.display = 'none'; return; }
+      planBox.style.display = '';
+      if (!planBuilt) buildPlan();
+      // the drone choice
+      clear(S.pickBar);
+      drones().forEach(function (d) {
+        S.pickBar.appendChild(h('button', { class: 'chip' + (S.drone === d.name ? ' on' : ''), type: 'button', text: d.name + ' (' + byDrone(d.name).length + ')', onclick: function () { S.drone = d.name; draw(); } }));
+      });
+      S.pickBar.appendChild(h('button', { class: 'chip' + (S.drone === '' ? ' on' : ''), type: 'button', text: 'Jobs without a drone (' + byDrone('').length + ')', onclick: function () { S.drone = ''; draw(); } }));
+      var gen = ++S.mapGen;
+      var jobs = S.drone ? byDrone(S.drone) : byDrone('');
+      clear(legend); clearMarkers();
+      if (!S.stationPt || S.stationPt.latitude === '') {
+        legend.appendChild(h('p', { class: 'hint', text: 'This base station has no map point, so the route cannot start. Add it on the Stations and drones screen.' }));
+        if (geo.isReady) geo.setPoints([], true); return;
+      }
+      var base = { lat: S.stationPt.latitude, lng: S.stationPt.longitude };
+      var stops = jobs.filter(function (j) { return j.located; }), nope = jobs.filter(function (j) { return !j.located; });
+      var pts = [base].concat(stops.map(function (j) { return { lat: j.latitude, lng: j.longitude }; }));
+      if (!geo.isReady) return;
+      geo.setPoints([], false);
+      if (!S.drone) {
+        // jobs with no drone yet: just where they are, round the base
+        geo.setPoints(stops.map(function (j) { return { id: j.service_id, lat: j.latitude, lng: j.longitude, color: '#f59e0b' }; }).concat([{ id: 'base', lat: base.lat, lng: base.lng, color: '#0f6b4a' }]), true);
+        geo.map.getSource('route').setData({ type: 'FeatureCollection', features: [] });
+        legend.appendChild(h('p', { class: 'hint', text: 'Choose a drone above to see its route. The dots are the jobs that have no drone yet.' }));
+        return;
+      }
+      if (!stops.length) { geo.map.getSource('route').setData({ type: 'FeatureCollection', features: [] }); geo.setPoints([{ id: 'base', lat: base.lat, lng: base.lng, color: '#0f6b4a' }], true); legend.appendChild(h('p', { class: 'hint', text: 'This drone has no jobs with a map point on this day.' })); return; }
+      legend.appendChild(h('p', { class: 'hint', text: 'Working out the route…' }));
+      Route.plan(pts.concat([base])).then(function (r) {
+        if (gen !== S.mapGen) return;
+        clear(legend);
+        geo.map.getSource('route').setData({ type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: r.line } }] });
+        geo.setPoints([], false);
+        var all = pts.concat([base]);
+        // base marker, numbered stops with their tags, the km of every leg
+        function mk(inner, lng, lat, anchor, offset) { var wrap = document.createElement('div'); wrap.appendChild(inner); var m = new maplibregl.Marker({ element: wrap, anchor: anchor || 'center', offset: offset || [0, 0] }).setLngLat([lng, lat]).addTo(geo.map); S.markers.push(m); }
+        mk(h('div', { class: 'as-base' }, icon('pin'), 'Base'), base.lng, base.lat, 'bottom');
+        stops.forEach(function (j, i) {
+          var pin = h('div', { class: 'as-pin' }, h('span', { text: String(i + 1) }));
+          if (S.tags) pin.appendChild(h('div', { class: 'as-tag' }, h('b', { text: j.service_type || 'Service' }), h('span', { text: ha(j.acres) + ' ha · ' + j.land_id }), h('span', { text: j.farmer_name + ' (' + j.farmer_id + ')' })));
+          mk(pin, j.longitude, j.latitude);
+        });
+        r.legs.forEach(function (d, i) {
+          var a = all[i], b = all[i + 1];
+          var mid = onLine(r.line, (a.lng + b.lng) / 2, (a.lat + b.lat) / 2);
+          mk(h('div', { class: 'as-leg' + (i === r.legs.length - 1 ? ' back' : '') }, kmText(d)), mid[0], mid[1]);
+        });
+        var legs = [h('span', { class: 'lg' }, h('b', { text: 'Base' }))];
+        stops.forEach(function (j, i) { legs.push(h('span', { class: 'lg' }, h('i', { class: 'arrow' }, kmText(r.legs[i])), h('b', { text: String(i + 1) }), ' ' + j.farmer_name)); });
+        legs.push(h('span', { class: 'lg' }, h('i', { class: 'arrow' }, kmText(r.legs[r.legs.length - 1])), h('b', { text: 'Base' })));
+        legend.appendChild(h('div', { class: 'as-legs' }, legs));
+        legend.appendChild(h('div', { class: 'as-total' }, h('b', { text: 'Whole day: ' + kmText(r.total) }), h('span', { class: 'hint', text: r.road ? ' by road (OpenStreetMap)' : ' estimated: straight lines x 1.3, there is no connection to the road service' })));
+        if (nope.length) legend.appendChild(h('p', { class: 'hint', text: nope.length + (nope.length === 1 ? ' job has' : ' jobs have') + ' no map point and ' + (nope.length === 1 ? 'is' : 'are') + ' not on the route.' }));
+        var b = new maplibregl.LngLatBounds([base.lng, base.lat], [base.lng, base.lat]);
+        r.line.forEach(function (c) { b.extend(c); });
+        geo.map.fitBounds(b, { padding: { top: 60, bottom: 60, left: 80, right: 120 }, maxZoom: 13, duration: 500 });
+      });
+    }
+    return { destroy: function () { if (geo) geo.destroy(); } };
+  }
+  return { mount: mount };
+})();
+</script>
+
+  <script>
+// Printing: Print.show(title, node) puts a document on the screen with a Print / Save as PDF button; only the document is printed.
+// Bill.open(serviceId, kind) issues the bill of a service (kind 'final' or 'advance') and shows it. The same bill number is shown every time it is printed.
+var Print = (function () {
+  function show(title, node, o) {
+    o = o || {};
+    var area = h('div', { id: 'printarea' }, node);
+    var bar = h('div', { class: 'pr-bar' }, h('b', { text: title }),
+      h('div', { class: 'pr-act' }, h('button', { class: 'b', type: 'button', onclick: function () { window.print(); } }, icon('printer'), 'Print or save as PDF'), h('button', { class: 'b ghost', type: 'button', onclick: close }, icon('x'), 'Close')));
+    var bg = h('div', { class: 'pr-bg' }, bar, h('div', { class: 'pr-sheet' }, area));
+    var tok = null;
+    function close() { document.body.classList.remove('printing'); if (tok) { var t = tok; tok = null; Back.release(t); } if (bg.parentNode) bg.parentNode.removeChild(bg); if (o.onclose) o.onclose(); }
+    document.body.appendChild(bg); document.body.classList.add('printing');
+    tok = Back.push(function () { tok = null; close(); });
+    return { close: close };
+  }
+  return { show: show };
+})();
+
+var Bill = (function () {
+  function money(v) { return 'Rs ' + (Number(v) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function day(iso) { return iso ? LandUI.day(iso) : '—'; }
+  function row(k, v) { return v === '' || v === null || v === undefined ? null : h('tr', {}, h('th', { text: k }), h('td', { text: String(v) })); }
+  function render(b) {
+    var s = b.service, m = b.money, adv = b.kind === 'advance';
+    var doc = h('div', { class: 'bill' },
+      h('div', { class: 'bill-head' },
+        h('div', {}, h('h1', { text: b.company.name }), b.company.address ? h('div', { class: 'bill-sm', text: b.company.address }) : null, b.company.phone ? h('div', { class: 'bill-sm', text: b.company.phone }) : null),
+        h('div', { class: 'bill-no' }, h('h2', { text: adv ? 'ADVANCE PAYMENT BILL' : 'PAYMENT BILL' }), h('div', {}, 'No. ', h('b', { text: b.bill_no })), h('div', { class: 'bill-sm', text: 'Date ' + day(b.issued_on) }), b.reissued ? h('div', { class: 'bill-sm', text: 'Copy of the bill issued earlier' }) : null)),
+      h('div', { class: 'bill-two' },
+        h('div', {}, h('h3', { text: 'Farmer' }), h('div', {}, h('b', { text: b.farmer.name || b.farmer.id })), h('div', { class: 'bill-sm', text: 'Farmer ID ' + b.farmer.id }), b.farmer.phone ? h('div', { class: 'bill-sm', text: b.farmer.phone }) : null, b.farmer.address ? h('div', { class: 'bill-sm', text: b.farmer.address }) : null),
+        h('div', {}, h('h3', { text: 'Land' }), b.land ? h('div', {}, h('b', { text: b.land.name || b.land.id }), h('div', { class: 'bill-sm', text: 'Land ID ' + b.land.id + ' · ' + b.land.acres + ' acres' }), b.land.place ? h('div', { class: 'bill-sm', text: b.land.place }) : null, b.land.tank ? h('div', { class: 'bill-sm', text: 'Tank: ' + b.land.tank }) : null) : h('div', { class: 'bill-sm', text: 'Not recorded' }))),
+      h('h3', { text: 'Service' }),
+      h('table', { class: 'bill-t' }, row('Service number', s.id), row('Service', s.type), row('Crop', s.crop), row('Requested on', day(s.requested)), row('Scheduled for', s.scheduled ? day(s.scheduled) : ''),
+        s.status === 'Completed' ? [row('Done on', day(s.done)), row('Time', s.start && s.end ? s.start + ' to ' + s.end : ''), row('Area requested', s.acres_requested ? s.acres_requested + ' acres' : ''), row('Area sprayed', s.acres_done ? s.acres_done + ' acres (' + Math.round(s.acres_done * 0.404686 * 100) / 100 + ' ha)' : ''),
+          row('Tanks', s.tanks), row('Product', s.product), row('Quantity', s.quantity_l !== '' && s.quantity_l !== undefined ? s.quantity_l + ' litres' : ''), row('Weather', s.weather)] : row('Area requested', s.acres_requested ? s.acres_requested + ' acres' : ''),
+        row('Base station', s.base_station), row('Drone', s.drone), row('Pilot', s.pilot)),
+      h('h3', { text: adv ? 'Advance' : 'Charges' }),
+      h('table', { class: 'bill-t bill-money' }, row('Total charge', money(m.total)),
+        m.advance_paid ? row('Advance paid' + (m.advance_date ? ' on ' + day(m.advance_date) : ''), money(m.advance_amount)) : null,
+        !adv && m.final_amount ? row('Payment received' + (m.final_date ? ' on ' + day(m.final_date) : ''), money(m.final_amount)) : null,
+        !adv ? row('Total paid', money(m.paid)) : null, row(adv ? 'Balance after the advance' : 'Balance due', money(adv ? m.total - m.advance_amount : m.balance)),
+        !adv ? row('Status', m.status === 'Paid' ? 'Paid in full' : (m.status === 'Partly paid' ? 'Part paid' : m.status)) : null, row('Method', m.method), row('Reference', m.ref)),
+      h('div', { class: 'bill-foot' }, h('div', { text: b.company.footer }), h('div', { class: 'bill-sm', text: 'Prepared by ' + b.prepared_by })));
+    return doc;
+  }
+  function open(serviceId, kind) {
+    return call('issueBill', serviceId, kind).then(function (b) { Print.show((kind === 'advance' ? 'Advance bill ' : 'Bill ') + b.bill_no, render(b)); return b; }).catch(function (e) { showMsg(e.message, true); });
+  }
+  return { open: open };
+})();
+</script>
+
+  <script>
+// Reports (a plain table of the services with the same filters as everywhere, and a printable service report) and the Log book (every change, with the audit report).
+var Tabular = (function () {
+  function csvCell(v) { var s = String(v === undefined || v === null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+  function csv(cols, rows) {
+    return '﻿' + [cols.map(function (c) { return csvCell(c.h); }).join(',')].concat(rows.map(function (r) { return cols.map(function (c) { return csvCell(c.get(r)); }).join(','); })).join('\r\n');
+  }
+  function download(name, text) {
+    var a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' })), download: name });
+    document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); if (a.parentNode) a.parentNode.removeChild(a); }, 500);
+  }
+  // A table for the screen or the printed page. max = rows drawn (all of them when omitted).
+  function table(cols, rows, max) {
+    var t = h('table', { class: 'rep-t' }, h('thead', {}, h('tr', {}, cols.map(function (c) { return h('th', { text: c.h }); }))));
+    var body = h('tbody');
+    rows.slice(0, max || rows.length).forEach(function (r) { body.appendChild(h('tr', {}, cols.map(function (c) { return h('td', { class: c.n ? 'n' : '', text: String(c.get(r) === undefined || c.get(r) === null ? '' : c.get(r)) }); }))); });
+    t.appendChild(body);
+    return t;
+  }
+  return { csv: csv, download: download, table: table };
+})();
+
+// ---------------------------------------------------------------- reports
+var SvcReport = (function () {
+  var memo = { stage: '', station: '', drone: '', type: '', payment: '', from: '', to: '', q: '' };
+  // the money paid so far; a payment entered the old way (only 'Paid' and a total) counts as paid in full
+  function paidOf(c) { if (c.money_hidden || c.amount_charged === '' || c.amount_charged === undefined) return ''; var p = (Number(c.advance_paid === 'Yes' ? c.advance_amount : 0) || 0) + (Number(c.final_amount) || 0); return !p && c.payment_status === 'Paid' ? Number(c.amount_charged) || 0 : p; }
+  function num(v) { return v === '' || v === null || v === undefined ? '' : Number(v); }
+  function mount(el) {
+    var f = memo, S = { data: null, o: null };
+    var money = Svc.can('service.payment');
+    var cols = [
+      { h: 'Service', get: function (c) { return c.service_id; } }, { h: 'Farmer', get: function (c) { return c.farmer_name; } }, { h: 'Farmer ID', get: function (c) { return c.farmer_id; } },
+      { h: 'Land', get: function (c) { return c.land_id; } }, { h: 'Place', get: function (c) { return SvcCard.place(c); } }, { h: 'Service type', get: function (c) { return c.service_type; } }, { h: 'Crop', get: function (c) { return c.crop; } },
+      { h: 'Acres', n: true, get: function (c) { return c.acres; } }, { h: 'Status', get: function (c) { return c.status; } }, { h: 'Requested', get: function (c) { return c.requested_date; } },
+      { h: 'Scheduled', get: function (c) { return c.scheduled_date; } }, { h: 'Done', get: function (c) { return c.service_date; } }, { h: 'Base station', get: function (c) { return c.base_station; } },
+      { h: 'Drone', get: function (c) { return c.drone; } }, { h: 'Pilot', get: function (c) { return c.pilot_name; } }
+    ];
+    if (money) cols = cols.concat([
+      { h: 'Total (Rs)', n: true, get: function (c) { return num(c.amount_charged); } },
+      { h: 'Paid (Rs)', n: true, get: function (c) { return paidOf(c); } },
+      { h: 'Payment', get: function (c) { return c.payment_status; } }]);
+
+    var bar = h('div', { class: 'card sv-filters lform' }), sum = h('div', { class: 'hint svl-count' }), box = h('div', { class: 'rep-wrap' });
+    var stage = h('select'), station = h('select'), drone = h('select'), type = h('select'), pay = h('select'), from = h('input', { type: 'date', value: f.from }), to = h('input', { type: 'date', value: f.to });
+    [['', 'Every status'], ['Requested', 'Requested'], ['Scheduled', 'Scheduled'], ['Completed', 'Completed'], ['Cancelled', 'Cancelled']].forEach(function (s) { stage.appendChild(h('option', { value: s[0], text: s[1], selected: s[0] === f.stage })); });
+    [['', 'Any payment'], ['Unpaid', 'Not paid'], ['Partly paid', 'Advance paid'], ['Paid', 'Paid in full'], ['Free', 'No charge']].forEach(function (s) { pay.appendChild(h('option', { value: s[0], text: s[1], selected: s[0] === f.payment })); });
+    var search = h('input', { type: 'text', inputmode: 'search', placeholder: 'Search by name, ID or village', maxlength: 60, value: f.q });
+    var t = null; search.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { f.q = search.value.trim(); load(); }, 250); });
+    [[stage, 'stage'], [station, 'station'], [drone, 'drone'], [type, 'type'], [pay, 'payment']].forEach(function (p) { p[0].addEventListener('change', function () { f[p[1]] = p[0].value; load(); }); });
+    from.addEventListener('change', function () { f.from = from.value; load(); }); to.addEventListener('change', function () { f.to = to.value; load(); });
+    var stLab = Svc.lab('Base station', station);
+    bar.appendChild(h('div', { class: 'two sv-frow' }, Svc.lab('Job status', stage), stLab));
+    bar.appendChild(h('div', { class: 'two sv-frow' }, Svc.lab('Drone', drone), Svc.lab('Kind of service', type)));
+    bar.appendChild(h('div', { class: 'two sv-frow' }, Svc.lab('From day', from), Svc.lab('To day', to)));
+    bar.appendChild(h('div', { class: 'two sv-frow' }, money ? Svc.lab('Payment', pay) : h('div'), Svc.lab('Search', search)));
+    var go = h('button', { class: 'b', type: 'button', onclick: function () { printReport(); } }, icon('printer'), 'Generate the service report');
+    var dl = h('button', { class: 'b ghost', type: 'button', onclick: function () { if (S.data) Tabular.download('service-report.csv', Tabular.csv(cols, S.data.rows)); } }, icon('download'), 'Download as a spreadsheet (CSV)');
+    bar.appendChild(h('div', { class: 'sv-act' }, go, dl));
+    el.appendChild(bar); el.appendChild(sum); el.appendChild(h('div', { class: 'card flush', style: 'overflow:auto' }, box));
+
+    Svc.options().then(function (o) {
+      S.o = o;
+      if (o.my_station) stLab.style.display = 'none'; else { station.appendChild(h('option', { value: '', text: 'All base stations' })); o.base_stations.forEach(function (s) { station.appendChild(h('option', { value: s, text: s, selected: s === f.station })); }); }
+      drone.appendChild(h('option', { value: '', text: 'All drones' })); o.drone_list.forEach(function (d) { drone.appendChild(h('option', { value: d.name, text: d.name, selected: d.name === f.drone })); });
+      type.appendChild(h('option', { value: '', text: 'All kinds' })); o.types.forEach(function (x) { type.appendChild(h('option', { value: x, text: x, selected: x === f.type })); });
+      load();
+    }).catch(function (e) { showMsg(e.message, true); });
+
+    function query() { var q = { stage: f.stage, base_station: f.station, drone: f.drone, service_type: f.type, payment: f.payment, q: f.q }; if (f.from) q.from = f.from; if (f.to) q.to = f.to; return q; }
+    function totals(rows) {
+      var ac = 0, tot = 0, paid = 0;
+      rows.forEach(function (c) { ac += Number(c.acres) || 0; if (!c.money_hidden && c.amount_charged !== '' && c.amount_charged !== undefined) { tot += Number(c.amount_charged) || 0; paid += Number(paidOf(c)) || 0; } });
+      return { acres: Math.round(ac * 100) / 100, ha: Math.round(ac * 0.404686 * 100) / 100, total: tot, paid: paid };
+    }
+    var seq = 0;
+    function load() {
+      var my = ++seq;
+      return softFetch(box, call('getServiceTable', query()), function (d) {
+        if (my !== seq) return;
+        S.data = d;
+        var t = totals(d.rows);
+        sum.textContent = d.total + (d.total === 1 ? ' service' : ' services') + ' · ' + t.acres + ' acres (' + t.ha + ' ha)' + (money ? ' · charged Rs ' + t.total.toLocaleString() + ' · paid Rs ' + t.paid.toLocaleString() : '') + (d.truncated ? ' · the first ' + d.rows.length + ' only, narrow the filters' : '');
+        if (!d.rows.length) { box.appendChild(emptyBox('list', 'No services match', 'Change the filters to see more.')); return; }
+        box.appendChild(Tabular.table(cols, d.rows, 1000));
+        if (d.rows.length > 1000) box.appendChild(h('p', { class: 'hint', style: 'padding:10px 14px', text: 'The first 1000 rows are shown here. The report and the spreadsheet have all ' + d.rows.length + '.' }));
+      });
+    }
+    function printReport() {
+      if (!S.data) return;
+      var d = S.data, t = totals(d.rows), parts = [];
+      if (f.stage) parts.push('Status: ' + f.stage); if (f.station) parts.push('Base station: ' + f.station); if (f.drone) parts.push('Drone: ' + f.drone); if (f.type) parts.push('Service: ' + f.type);
+      if (f.payment) parts.push('Payment: ' + f.payment); if (f.from || f.to) parts.push('Days: ' + (f.from || '…') + ' to ' + (f.to || '…')); if (f.q) parts.push('Search: ' + f.q);
+      var doc = h('div', { class: 'bill' }, h('div', { class: 'bill-head' }, h('div', {}, h('h1', { text: 'Service report' }), h('div', { class: 'bill-sm', text: parts.join(' · ') || 'All services' })),
+        h('div', { class: 'bill-no' }, h('div', { class: 'bill-sm', text: 'Made on ' + Svc.day(S.o ? S.o.today : '') }), h('div', { class: 'bill-sm', text: 'By ' + (Session.user && Session.user.name) }))),
+        h('h3', { text: 'Summary' }),
+        h('table', { class: 'bill-t bill-money' }, h('tr', {}, h('th', { text: 'Services' }), h('td', { text: String(d.total) })), h('tr', {}, h('th', { text: 'Area' }), h('td', { text: t.acres + ' acres (' + t.ha + ' ha)' })),
+          money ? h('tr', {}, h('th', { text: 'Charged' }), h('td', { text: 'Rs ' + t.total.toLocaleString() })) : null, money ? h('tr', {}, h('th', { text: 'Paid' }), h('td', { text: 'Rs ' + t.paid.toLocaleString() })) : null),
+        h('h3', { text: 'Services' }), Tabular.table(cols, d.rows), d.truncated ? h('p', { class: 'bill-sm', text: 'Only the first ' + d.rows.length + ' services are listed. Narrow the filters for the rest.' }) : null);
+      Print.show('Service report', doc);
+    }
+    return {};
+  }
+  return { mount: mount };
+})();
+
+// ---------------------------------------------------------------- log book
+var LogBook = (function () {
+  var ENT = { Farmers: 'Farmer', Fields: 'Land', LandOwners: 'Land owner', Services: 'Service', Users: 'Account', Lists: 'List', Outreach: 'Call or note', Messages: 'Message', Places: 'Place', Backup: 'Export', Archive: 'Archive',
+    FormQuestions: 'Form question', FormOptions: 'Form option', BaseStations: 'Base station', Drones: 'Drone', JobRoles: 'Job role', Lands: 'Lands' };
+  var ACT = { create: 'Created', update: 'Changed', remove: 'Removed', restore: 'Restored', login: 'Signed in', login_failed: 'Failed sign-in', export: 'Exported', migrate: 'Carried over', transfer: 'Land transferred', view: 'Printed again', archive: 'Archived', delete: 'Deleted' };
+  function ent(e) { return ENT[e] || e; } function act(a) { return ACT[a] || a; }
+  function ago(n) { return new Date(Date.now() + 330 * 60000 - n * 86400000).toISOString().slice(0, 10); }
+  var memo = { from: '', to: '', user: '', entity: '', action: '', farmer: '', land: '', service: '', q: '' };
+  function mount(el) {
+    var f = memo; if (!f.from) { f.from = ago(7); f.to = ago(0); }
+    var S = { data: null };
+    var cols = [{ h: 'When', get: function (r) { return r.at; } }, { h: 'Person', get: function (r) { return r.name || r.user; } }, { h: 'Event', get: function (r) { return act(r.action); } }, { h: 'Record', get: function (r) { return ent(r.entity); } },
+      { h: 'ID', get: function (r) { return r.entity_id; } }, { h: 'Details', get: function (r) { return r.details; } }];
+    var bar = h('div', { class: 'card sv-filters lform' }), sum = h('div', { class: 'hint svl-count' }), box = h('div');
+    var from = h('input', { type: 'date', value: f.from }), to = h('input', { type: 'date', value: f.to }), user = h('select'), entity = h('select'), action = h('select');
+    var farmer = h('input', { type: 'text', placeholder: 'F000123', maxlength: 20, value: f.farmer }), land = h('input', { type: 'text', placeholder: 'FLD000123', maxlength: 20, value: f.land }), service = h('input', { type: 'text', placeholder: 'SV000123', maxlength: 20, value: f.service });
+    var q = h('input', { type: 'text', inputmode: 'search', placeholder: 'Words in the details', maxlength: 60, value: f.q });
+    var t = null;
+    [[farmer, 'farmer'], [land, 'land'], [service, 'service'], [q, 'q']].forEach(function (p) { p[0].addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { f[p[1]] = p[0].value.trim(); load(); }, 350); }); });
+    [[user, 'user'], [entity, 'entity'], [action, 'action']].forEach(function (p) { p[0].addEventListener('change', function () { f[p[1]] = p[0].value; load(); }); });
+    from.addEventListener('change', function () { f.from = from.value; load(); }); to.addEventListener('change', function () { f.to = to.value; load(); });
+    bar.appendChild(h('div', { class: 'two sv-frow' }, Svc.lab('From day', from), Svc.lab('To day', to)));
+    bar.appendChild(h('div', { class: 'two sv-frow' }, Svc.lab('Person', user), Svc.lab('Kind of record', entity)));
+    bar.appendChild(h('div', { class: 'two sv-frow' }, Svc.lab('Kind of event', action), Svc.lab('Words', q)));
+    bar.appendChild(h('div', { class: 'two sv-frow' }, Svc.lab('Farmer', farmer), Svc.lab('Land', land)));
+    bar.appendChild(h('div', { class: 'two sv-frow' }, Svc.lab('Service', service), h('div')));
+    bar.appendChild(h('div', { class: 'sv-act' }, h('button', { class: 'b', type: 'button', onclick: report }, icon('printer'), 'Generate the audit report'),
+      h('button', { class: 'b ghost', type: 'button', onclick: function () { if (S.data) Tabular.download('audit-log.csv', Tabular.csv(cols, S.data.rows)); } }, icon('download'), 'Download as a spreadsheet (CSV)')));
+    el.appendChild(bar); el.appendChild(sum); el.appendChild(h('div', { class: 'card flush', style: 'overflow:auto' }, box));
+    var filled = false;
+    function fillChoices(d) {
+      if (filled) return; filled = true;
+      user.appendChild(h('option', { value: '', text: 'Everyone' })); d.users.forEach(function (u) { user.appendChild(h('option', { value: u.email, text: u.name + ' (' + u.email + ')', selected: u.email === f.user })); });
+      entity.appendChild(h('option', { value: '', text: 'Every kind' })); d.entities.forEach(function (e) { entity.appendChild(h('option', { value: e, text: ent(e), selected: e === f.entity })); });
+      action.appendChild(h('option', { value: '', text: 'Every event' })); d.actions.forEach(function (a) { action.appendChild(h('option', { value: a, text: act(a), selected: a === f.action })); });
+    }
+    function query(all) { return { from: f.from, to: f.to, user: f.user, entity: f.entity, action: f.action, farmer_id: f.farmer, land_id: f.land, service_id: f.service, q: f.q, all: !!all }; }
+    var seq = 0;
+    function load() {
+      var my = ++seq;
+      return softFetch(box, call('getAuditLog', query(false)), function (d) {
+        if (my !== seq) return;
+        S.data = d; fillChoices(d);
+        sum.textContent = d.total + (d.total === 1 ? ' entry' : ' entries') + (d.truncated ? ' · the newest ' + d.rows.length + ' are shown' : '');
+        if (!d.rows.length) { box.appendChild(emptyBox('book', 'Nothing was recorded for these settings', 'Change the days or the filters.')); return; }
+        box.appendChild(Tabular.table(cols, d.rows, 600));
+        if (d.rows.length > 600) box.appendChild(h('p', { class: 'hint', style: 'padding:10px 14px', text: 'The first 600 entries are shown here. The audit report and the spreadsheet have all of them.' }));
+      });
+    }
+    function report() {
+      call('getAuditLog', query(true)).then(function (d) {
+        var parts = ['Days: ' + f.from + ' to ' + f.to];
+        var nm = d.users.filter(function (u) { return u.email === f.user; })[0];
+        if (f.user) parts.push('Person: ' + (nm ? nm.name : f.user)); if (f.entity) parts.push('Record: ' + ent(f.entity)); if (f.action) parts.push('Event: ' + act(f.action));
+        if (f.farmer) parts.push('Farmer: ' + f.farmer); if (f.land) parts.push('Land: ' + f.land); if (f.service) parts.push('Service: ' + f.service); if (f.q) parts.push('Words: ' + f.q);
+        var doc = h('div', { class: 'bill' }, h('div', { class: 'bill-head' }, h('div', {}, h('h1', { text: 'Audit report' }), h('div', { class: 'bill-sm', text: parts.join(' · ') })),
+          h('div', { class: 'bill-no' }, h('div', { class: 'bill-sm', text: d.total + ' entries' }), h('div', { class: 'bill-sm', text: 'By ' + (Session.user && Session.user.name) }))),
+          h('h3', { text: 'Entries, newest first' }), Tabular.table(cols, d.rows), d.truncated ? h('p', { class: 'bill-sm', text: 'Only the newest ' + d.rows.length + ' entries are listed. Choose fewer days.' }) : null);
+        Print.show('Audit report', doc);
+      }).catch(function (e) { showMsg(e.message, true); });
+    }
+    load();
+    return {};
+  }
+  return { mount: mount };
+})();
+</script>
+
+  <script>
+// Service requests (step 1 of a service): the entry form on top (find the farmer, tick the lands, say the service, the crop, the base station that will handle it and the
+// day CAFT promises), and under it the registered requests as cards with their timeline and an edit icon. One request can name several lands: each becomes its own service.
 var SvcRequest = (function () {
   function plus(n) { var d = new Date(Date.now() + 330 * 60000 + n * 86400000); return d.toISOString().slice(0, 10); }
 
   function mount(el, arg) {
     var S = { o: null, farmer: null, lands: [], picks: {} };
     var farmerBox = h('div'), landsBox = h('div'), sendBox = h('div'), doneBox = h('div');
-    el.appendChild(h('div', { class: 'sv-intro' }, h('h2', { text: 'Record a service request' }), h('p', { class: 'hint', text: 'Find the farmer, choose the land and the service, and give the day CAFT promises.' })));
+    var listBox = h('div', { class: 'sv-below' });
     el.appendChild(farmerBox); el.appendChild(landsBox); el.appendChild(sendBox); el.appendChild(doneBox);
+    el.appendChild(h('div', { class: 'sv-sect' }, h('h2', { text: 'Registered requests' })));
+    el.appendChild(listBox);
+    var list = SvcList.mount(listBox, { stage: 'Active', stages: [['Active', 'Open'], ['Requested', 'Requested'], ['Scheduled', 'Scheduled'], ['Completed', 'Completed'], ['', 'All']], emptyText: 'No requests yet',
+      cardOpts: function (c) { return c.status === 'Requested' ? { edit: function (x) { SvcEdit.open(x, function () { list.reload(); }); } } : {}; } });
 
     Svc.options().then(function (o) { S.o = o; drawFarmer(); if (arg && arg.farmer_id) preselect(arg.farmer_id); }).catch(function (e) { farmerBox.appendChild(h('p', { class: 'hint', text: e.message })); });
 
@@ -8383,31 +9542,24 @@ var SvcRequest = (function () {
     function updateCount() { var n = Object.keys(S.picks).filter(function (k) { return S.picks[k].on(); }).length; if (sendBtn) { sendBtn.disabled = n === 0; count.textContent = n ? (n === 1 ? 'Record 1 request' : 'Record ' + n + ' requests') : 'Choose a land'; } }
     function drawSend() {
       var o = S.o;
+      var station = o.my_station ? h('input', { type: 'text', value: o.my_station, disabled: true }) : Svc.select(o.base_stations, '', 'Choose the base station');
       var source = Svc.select(o.sources, 'Field officer'), note = h('textarea', { maxlength: 300, style: 'min-height:64px', placeholder: 'Anything the planner should know (optional)' }), err = Svc.errBox();
       sendBtn = h('button', { class: 'b big', type: 'button', onclick: function () {
         var items = Object.keys(S.picks).filter(function (k) { return S.picks[k].on(); }).map(function (k) { return S.picks[k].get(); });
-        Svc.submit(sendBtn, err, function () { return Svc.changed(call('createServiceRequest', { farmer_id: S.farmer.farmer_id, source: source.value, notes: note.value, items: items })); }, success);
+        Svc.submit(sendBtn, err, function () { return Svc.changed(call('createServiceRequest', { farmer_id: S.farmer.farmer_id, source: source.value, base_station: o.my_station || station.value, notes: note.value, items: items })); }, success);
       } }, icon('check'), count);
       sendBox.appendChild(h('div', { class: 'card sv-step' }, h('div', { class: 'cardhead' }, h('h2', {}, h('span', { class: 'sv-n', text: '3' }), 'Order details')),
-        h('div', { class: 'lform' }, h('div', { class: 'two' }, Svc.lab('Where did the order come from?', source), Svc.lab('Recorded by', h('input', { type: 'text', value: o.me.name + ' · ' + Svc.day(o.today), disabled: true }))),
+        h('div', { class: 'lform' }, h('div', { class: 'two' }, Svc.lab('Base station that will handle it', station), Svc.lab('Where did the order come from?', source)),
           Svc.lab('Note', note), err, h('div', { class: 'row', style: 'margin-top:14px;justify-content:flex-end' }, sendBtn))));
       updateCount();
     }
 
     function success(r) {
-      var f = S.farmer;
-      clear(landsBox); clear(sendBox); clear(farmerBox); clear(doneBox);
-      var ids = r.service_ids || [];
-      var box = h('div', { class: 'card sv-done' }, ico('check', 'green'), h('h2', { text: ids.length <= 1 ? 'Request recorded' : ids.length + ' requests recorded' }),
-        h('p', { class: 'hint', text: f.full_name + (r.queued ? ' · saved on this phone, it is sent by itself when there is a connection' : (r.request_group ? ' · ' + r.request_group : '')) }), h('div', { class: 'sv-donelist' }));
-      doneBox.appendChild(box);
-      call('listServiceFlow', { farmer_id: f.farmer_id, stage: 'Requested', limit: 30 }).then(function (d) {
-        d.rows.filter(function (c) { return ids.indexOf(c.service_id) !== -1; }).forEach(function (c) { box.querySelector('.sv-donelist').appendChild(Svc.row(c)); });
-      }).catch(function () {});
-      box.appendChild(h('div', { class: 'row', style: 'margin-top:16px;justify-content:center;gap:10px;flex-wrap:wrap' },
-        h('button', { class: 'b', type: 'button', onclick: function () { Nav.open('Services', { tab: 'request' }); } }, icon('plus'), 'Record another'),
-        Svc.can('service.view') ? h('button', { class: 'b ghost', type: 'button', onclick: function () { Nav.open('Services', { tab: 'map' }); } }, icon('globe'), 'See the requests on the map') : null,
-        h('button', { class: 'b ghost', type: 'button', onclick: function () { Nav.openFarmer(f.farmer_id); } }, icon('user'), 'Open the farmer')));
+      var n = (r.service_ids || []).length;
+      showMsg(r.queued ? 'Saved on this phone. It is sent by itself when there is a connection.' : (n > 1 ? n + ' requests recorded' : 'Request recorded'), false);
+      S.farmer = null; S.lands = []; S.picks = {};
+      clear(landsBox); clear(sendBox); clear(doneBox); drawFarmer();
+      list.reload();
     }
   }
   return { mount: mount };
@@ -8587,8 +9739,8 @@ var SvcMap = (function () {
 
   <script>
 // Steps 3 and 4 and the history of the services:
-//   SvcOps     the OPERATION REPORT: the scheduled services; a click opens the sheet where the facts of the job are entered, and it becomes Completed.
-//   SvcPay     PAYMENTS: scheduled and completed services; a click opens the payment sheet (advance yes/no, amounts, days); it becomes Paid / Advance paid.
+//   SvcOps     JOB COMPLETION: only the jobs that were given to a drone on a planned day (a pilot account sees its own drone's jobs); a card opens the sheet where the facts of the job are entered.
+//   SvcPay     PAYMENTS: find a job (drone, service, stage); a card opens the payment sheet (advance yes/no, amounts, days); the bill buttons print the individual and the advance bill.
 //   SvcHistory every service with its road and the days it took, with filters for the stage and the payment.
 var SvcShared = (function () {
   // The head of a sheet: who, where, what and what was promised.
@@ -8617,32 +9769,45 @@ var SvcShared = (function () {
 // ---------- the operation report ----------
 var SvcOps = (function () {
   var WEATHER = ['Clear', 'Cloudy', 'Windy', 'Light rain', 'Heavy rain', 'Other'];
+  function ago(n) { return new Date(Date.now() + 330 * 60000 - n * 86400000).toISOString().slice(0, 10); }
   function mount(el, arg) {
-    var listBox = h('div'), S = { gen: 0, dead: false };
-    var tb = SvcShared.toolbar([['todo', 'To do'], ['late', 'Late'], ['done', 'Done lately']], 'todo', load);
-    el.appendChild(h('div', { class: 'sv-intro' }, h('h2', { text: 'Operation report' }), h('p', { class: 'hint', text: 'Open a scheduled service and enter how the job went. It is then marked as completed.' })));
+    var listBox = h('div'), S = { gen: 0, dead: false, o: null };
+    var tb = SvcShared.toolbar([['todo', 'To do'], ['late', 'Late'], ['done', 'Done lately']], 'todo', function () { load(); });
+    var station = h('select', { 'aria-label': 'Base station' }), type = h('select', { 'aria-label': 'Kind of service' }), day = h('input', { type: 'date', 'aria-label': 'Planned day' });
+    [station, type, day].forEach(function (x) { x.addEventListener('change', function () { load(); }); });
+    var stationLab = Svc.lab('Base station', station);
+    tb.el.appendChild(h('div', { class: 'two sv-frow' }, stationLab, Svc.lab('Kind of service', type)));
+    tb.el.appendChild(h('div', { class: 'sv-frow' }, Svc.lab('Planned day (empty = every day)', day)));
     el.appendChild(tb.el); el.appendChild(listBox);
-    load();
-    if (arg && arg.service_id) openSheet(arg.service_id);
+    Svc.options().then(function (o) {
+      S.o = o;
+      if (o.my_station) stationLab.style.display = 'none'; else { station.appendChild(h('option', { value: '', text: 'All base stations' })); o.base_stations.forEach(function (s) { station.appendChild(h('option', { value: s, text: s })); }); }
+      type.appendChild(h('option', { value: '', text: 'All kinds' })); o.types.forEach(function (t) { type.appendChild(h('option', { value: t, text: t })); });
+      load();
+      if (arg && arg.service_id) openSheet(arg.service_id);
+    }).catch(function (e) { showMsg(e.message, true); });
 
     function load() {
       var gen = ++S.gen, k = tb.state.key;
-      var filter = { stage: k === 'done' ? 'Completed' : 'Scheduled', q: tb.state.q, limit: 300 };
-      if (k === 'done') filter.from = (function () { var d = new Date(Date.now() + 330 * 60000 - 30 * 86400000); return d.toISOString().slice(0, 10); })();
+      var filter = { stage: k === 'done' ? 'Completed' : 'Scheduled', assigned: k === 'done' ? '' : 'Yes', q: tb.state.q, base_station: station.value, service_type: type.value, limit: 300 };
+      if (day.value) { filter.from = day.value; filter.to = day.value; } else if (k === 'done') filter.from = ago(30);
       softFetch(listBox, Sync.fast('listServiceFlow', [filter]), function (d) {
         if (gen !== S.gen || S.dead) return;
-        var rows = d.rows;
-        if (Svc.scope('service.complete') === 'own') rows = rows.filter(SvcShared.mine);
+        var rows = d.rows, me = Svc.me(), myDrone = String((Session.user && Session.user.drone) || '');
+        if (Svc.scope('service.complete') === 'own') rows = rows.filter(function (c) { return (myDrone && c.drone === myDrone) || String(c.pilot_email || '').toLowerCase() === me; });
         if (k === 'late') rows = rows.filter(function (c) { return c.scheduled_date && c.scheduled_date < d.today; });
-        if (!rows.length) { listBox.appendChild(emptyBox('note', k === 'done' ? 'Nothing was completed in the last 30 days' : 'No scheduled services', k === 'todo' ? 'Services appear here once a request has been given a day.' : '')); return; }
-        listBox.appendChild(h('p', { class: 'hint', text: Svc.plural(rows.length, 'service', 'services') }));
-        rows.forEach(function (c) { listBox.appendChild(Svc.row(c, { onclick: function () { openSheet(c.service_id); } })); });
+        if (!rows.length) { listBox.appendChild(emptyBox('note', k === 'done' ? 'Nothing was completed in the last 30 days' : 'No jobs to complete', k === 'todo' ? 'Jobs appear here once they have a day and a drone (Job assigning).' : '')); return; }
+        listBox.appendChild(h('p', { class: 'hint', text: Svc.plural(rows.length, 'job', 'jobs') }));
+        rows.forEach(function (c) {
+          listBox.appendChild(SvcCard.card(c, { onclick: function () { openSheet(c.service_id); },
+            footer: h('div', { class: 'svc-foot' }, h('button', { class: k === 'done' ? 'b ghost' : 'b', type: 'button', onclick: function () { openSheet(c.service_id); } }, icon('note'), k === 'done' ? 'Edit the report' : 'Enter the report')) }));
+        });
       }, function (e) { softShow(listBox, function () { listBox.appendChild(h('p', { class: 'hint', text: e.message })); }); });
     }
 
     function openSheet(serviceId) {
       var body = h('div', {}, loadingBox());
-      var m = Svc.modal('Operation report', body);
+      var m = Svc.modal('Job completion', body);
       Promise.all([Sync.fast('getServiceRoad', [serviceId], { strict: true }), Svc.options()]).then(function (r) { clear(body); form(r[0], r[1]); }).catch(function (e) { clear(body); body.appendChild(h('p', { class: 'hint', text: e.message })); });
       function form(rd, o) {
         var c = rd.card, d = rd.detail, done = c.status === 'Completed';
@@ -8655,8 +9820,6 @@ var SvcOps = (function () {
         var pilot = Svc.select(o.pilots.map(function (p) { return p.email; }), (done ? d.pilot_email : c.pilot_email) || (ownOnly ? Svc.me() : ''), 'Choose the pilot');
         Array.prototype.forEach.call(pilot.options, function (op) { var p = o.pilots.filter(function (x) { return x.email === op.value; })[0]; if (p) op.textContent = p.name; });
         if (ownOnly) pilot.disabled = true;
-        var drone = o.drones.length ? Svc.select(o.drones, done ? d.drone : '', 'Choose the drone') : null;
-        var base = o.base_stations.length ? Svc.select(o.base_stations, c.base_station || '', 'Choose the base station') : h('input', { type: 'text', maxlength: 60, value: c.base_station || '', placeholder: 'Base station' });
         var acres = h('input', { type: 'number', step: 'any', min: '0', inputmode: 'decimal', value: done ? d.acres_covered : c.acres });
         var tanks = h('input', { type: 'number', step: '1', min: '0', inputmode: 'numeric', value: done ? d.tanks : '' });
         var product = h('input', { type: 'text', maxlength: 80, value: done ? d.product_used : '', placeholder: 'Chemical or product used' });
@@ -8667,7 +9830,7 @@ var SvcOps = (function () {
         var notes = h('textarea', { maxlength: 300, style: 'min-height:60px', placeholder: 'Anything to remember (optional)' }); notes.value = done ? (d.notes || '') : '';
         var err = Svc.errBox();
         var go = h('button', { class: 'b', type: 'button', onclick: function () {
-          var data = { service_date: day.value, start_time: start.value, end_time: end.value, pilot_email: pilot.value, drone: drone ? drone.value : '', base_station: base.value, acres_covered: acres.value, tanks: tanks.value,
+          var data = { service_date: day.value, start_time: start.value, end_time: end.value, pilot_email: pilot.value, acres_covered: acres.value, tanks: tanks.value,
             product_used: product.value, quantity_l: qty.value, weather: weather.value, crop: crop.value, service_type: type.value, satisfaction: rating.value, notes: notes.value };
           Svc.submit(go, err, function () { return Svc.changed(call('completeService', serviceId, data)); }, function () { showMsg(done ? 'Changes saved' : 'Marked as completed', false); m.close(); load(); });
         } }, icon('check'), done ? 'Save changes' : 'Mark as completed');
@@ -8676,10 +9839,10 @@ var SvcOps = (function () {
           h('div', { class: 'two' }, Svc.lab('Start time', start), Svc.lab('End time', end)),
           h('div', { class: 'two' }, Svc.lab('Acres sprayed', acres, c.acres ? 'Requested: ' + c.acres + ' ac' : ''), Svc.lab('Tanks used', tanks)),
           h('div', { class: 'two' }, Svc.lab('Product', product), Svc.lab('Quantity (litres)', qty)),
-          h('div', { class: 'two' }, drone ? Svc.lab('Drone', drone) : h('div'), Svc.lab('Base station', base)),
+          h('div', { class: 'two' }, Svc.lab('Drone', h('input', { type: 'text', value: c.drone || '—', disabled: true })), Svc.lab('Base station', h('input', { type: 'text', value: c.base_station || '—', disabled: true }))),
           h('div', { class: 'two' }, Svc.lab('Weather', weather), Svc.lab('Farmer\'s rating', rating)),
           h('div', { class: 'two' }, Svc.lab('Crop', crop), Svc.lab('Service', type)), Svc.lab('Notes', notes), err, h('div', { class: 'row', style: 'margin-top:14px' }, go)));
-        if (rd.can.schedule && !done) {
+        if (false) {
           var date = h('input', { type: 'date', min: o.today }), why = h('input', { type: 'text', maxlength: 120, placeholder: 'For example: heavy rain' }), err2 = Svc.errBox();
           var mv = h('button', { class: 'b ghost', type: 'button', onclick: function () {
             Svc.submit(mv, err2, function () { return Svc.changed(call('scheduleService', serviceId, date.value, { note: why.value })); }, function () { showMsg('Moved to another day', false); m.close(); load(); });
@@ -8698,28 +9861,45 @@ var SvcOps = (function () {
 var SvcPay = (function () {
   var METHODS = ['Cash', 'Bank transfer', 'Cheque', 'Card', 'Other'];
   function mount(el, arg) {
-    var listBox = h('div'), S = { gen: 0, dead: false };
-    var tb = SvcShared.toolbar([['all', 'All'], ['none', 'Not paid'], ['adv', 'Advance paid'], ['paid', 'Paid in full']], 'all', load);
-    el.appendChild(h('div', { class: 'sv-intro' }, h('h2', { text: 'Payments' }), h('p', { class: 'hint', text: 'Open a scheduled or completed service to enter the advance and the payment.' })));
+    var listBox = h('div'), S = { gen: 0, dead: false, o: null };
+    var tb = SvcShared.toolbar([['all', 'All'], ['none', 'Not paid'], ['adv', 'Advance paid'], ['paid', 'Paid in full']], 'all', function () { load(); });
+    var drone = h('select', { 'aria-label': 'Drone' }), type = h('select', { 'aria-label': 'Kind of service' }), stage = h('select', { 'aria-label': 'Job status' });
+    [['', 'Any job status'], ['Requested', 'Requested'], ['Scheduled', 'Scheduled'], ['Completed', 'Completed']].forEach(function (s) { stage.appendChild(h('option', { value: s[0], text: s[1] })); });
+    [drone, type, stage].forEach(function (x) { x.addEventListener('change', function () { load(); }); });
+    var droneLab = Svc.lab('Drone', drone);
+    tb.el.appendChild(h('div', { class: 'two sv-frow' }, droneLab, Svc.lab('Kind of service', type)));
+    tb.el.appendChild(h('div', { class: 'sv-frow' }, Svc.lab('Job status', stage)));
     el.appendChild(tb.el); el.appendChild(listBox);
-    load();
-    if (arg && arg.service_id) openSheet(arg.service_id);
+    Svc.options().then(function (o) {
+      S.o = o;
+      drone.appendChild(h('option', { value: '', text: 'All drones' })); o.drone_list.forEach(function (d) { drone.appendChild(h('option', { value: d.name, text: d.name })); });
+      if (o.my_drone) droneLab.style.display = 'none';
+      type.appendChild(h('option', { value: '', text: 'All kinds' })); o.types.forEach(function (t) { type.appendChild(h('option', { value: t, text: t })); });
+      load();
+      if (arg && arg.service_id) openSheet(arg.service_id);
+    }).catch(function (e) { showMsg(e.message, true); });
 
     function load() {
       var gen = ++S.gen, k = tb.state.key;
-      softFetch(listBox, Sync.fast('listServiceFlow', [{ stage: 'Payable', q: tb.state.q, limit: 300 }]), function (d) {
+      softFetch(listBox, Sync.fast('listServiceFlow', [{ stage: stage.value || 'Payable', q: tb.state.q, drone: drone.value, service_type: type.value, limit: 300 }]), function (d) {
         if (gen !== S.gen || S.dead) return;
         var rows = d.rows;
-        if (Svc.scope('service.payment') === 'own') rows = rows.filter(SvcShared.mine);
+        if (Svc.scope('service.payment') === 'own') { var me = Svc.me(), myDrone = String((Session.user && Session.user.drone) || ''); rows = rows.filter(function (c) { return (myDrone && c.drone === myDrone) || String(c.pilot_email || '').toLowerCase() === me; }); }
         rows = rows.filter(function (c) {
           var p = c.payment_status || '';
           return k === 'all' || (k === 'none' && (p === '' || p === 'Unpaid')) || (k === 'adv' && p === 'Partly paid') || (k === 'paid' && (p === 'Paid' || p === 'Free'));
         });
-        if (!rows.length) { listBox.appendChild(emptyBox('cash', 'Nothing here', 'Scheduled and completed services appear here.')); return; }
+        if (!rows.length) { listBox.appendChild(emptyBox('cash', 'Nothing here', 'Change the filters to see more jobs.')); return; }
         var due = 0; rows.forEach(function (c) { if (c.amount_charged !== '' && c.amount_charged !== undefined) due += Number(c.amount_charged) || 0; });
-        listBox.appendChild(h('p', { class: 'hint', text: Svc.plural(rows.length, 'service', 'services') + (due ? ' · total charged Rs ' + due.toLocaleString() : '') }));
+        listBox.appendChild(h('p', { class: 'hint', text: Svc.plural(rows.length, 'job', 'jobs') + (due ? ' · total charged Rs ' + due.toLocaleString() : '') }));
         rows.forEach(function (c) {
-          listBox.appendChild(Svc.row(c, { onclick: function () { openSheet(c.service_id); }, extra: c.amount_charged !== '' && c.amount_charged !== undefined ? h('b', { class: 'sv-amt', text: Svc.money(c.amount_charged) }) : null }));
+          var paid = (Number(c.advance_paid === 'Yes' ? c.advance_amount : 0) || 0) + (Number(c.final_amount) || 0); if (!paid && c.payment_status === 'Paid') paid = Number(c.amount_charged) || 0;
+          var money = c.amount_charged !== '' && c.amount_charged !== undefined ? h('div', { class: 'hint' }, 'Total ' + Svc.money(c.amount_charged) + ' · paid ' + Svc.money(paid) + ' · balance ' + Svc.money((Number(c.amount_charged) || 0) - paid)) : h('div', { class: 'hint', text: 'No payment entered yet' });
+          var foot = h('div', { class: 'svc-foot' }, money, h('div', { class: 'sv-act' },
+            h('button', { class: 'b', type: 'button', onclick: function () { openSheet(c.service_id); } }, icon('cash'), 'Enter or change the payment'),
+            c.advance_paid === 'Yes' ? h('button', { class: 'b ghost', type: 'button', onclick: function () { Bill.open(c.service_id, 'advance'); } }, icon('receipt'), 'Advance bill') : null,
+            c.payment_status ? h('button', { class: 'b ghost', type: 'button', onclick: function () { Bill.open(c.service_id, 'final'); } }, icon('receipt'), 'Bill') : null));
+          listBox.appendChild(SvcCard.card(c, { onclick: function () { openSheet(c.service_id); }, footer: foot }));
         });
       }, function (e) { softShow(listBox, function () { listBox.appendChild(h('p', { class: 'hint', text: e.message })); }); });
     }
@@ -9409,7 +10589,7 @@ var TopSearch = (function () {
 
     function open(f) {
       input.value = ''; close(); input.blur();
-      if (pilot) Nav.open('Services', { tab: 'request', farmer_id: f.farmer_id }); else Nav.openFarmer(f.farmer_id);
+      if (pilot) Nav.open('Requests', { farmer_id: f.farmer_id }); else Nav.openFarmer(f.farmer_id);
     }
     function close() { list.style.display = 'none'; clear(list); rows = []; active = -1; box.classList.remove('open'); }
     function paintActive() { Array.prototype.forEach.call(list.querySelectorAll('.tsrow'), function (el, i) { el.classList.toggle('on', i === active); }); }
@@ -10057,13 +11237,11 @@ var Nav = (function () {
   function open(label, arg, fromBack, scrollY) {
     hideMsg();
     if (!fromBack) Back.closeLayers();      // pop-ups that are open close first (the sheet below is one of them)
-    closeSheet();
+    closeSheet(); closeDrawer();
     var m = meta[label] || {};
     var lit = m.parent || label;
     var litMeta = meta[lit] || m;
-    // a screen reached from "More" lights up the More button
-    var inBar = tabs.some(function (t) { return t.label === lit && t.primary; });
-    highlight(inBar ? lit : '__more');
+    highlight(lit);
     setTitle(m.title || label, m.icon || litMeta.icon, m.color || litMeta.color, m.sub || '');
     // Each screen draws into its own container. A slow screen that finishes loading after the user has
     // moved on draws into a container that is no longer on the page, so it cannot overwrite the current one.
@@ -10161,21 +11339,22 @@ var Nav = (function () {
   document.body.appendChild(pbar);
   function progress(on) { pbar.className = on ? 'on' : ''; }
 
+  // The sidebar: every tab is a labelled button; tabs with a `group` sit under a small heading (a drawer on phones, opened by the menu button).
+  var menuBtn = document.getElementById('menubtn'), drawerTok = null;
+  menuBtn.appendChild(icon('menu'));
+  function closeDrawer() { var t = drawerTok; drawerTok = null; document.body.classList.remove('navopen'); if (t) Back.release(t); }
+  function openDrawer() { document.body.classList.add('navopen'); if (!drawerTok) drawerTok = Back.push(closeDrawer); }
+  menuBtn.addEventListener('click', function () { if (document.body.classList.contains('navopen')) closeDrawer(); else openDrawer(); });
+  document.getElementById('scrim').addEventListener('click', closeDrawer);
   function navButton(t) {
     return h('button', { type: 'button', class: 'navbtn c-' + (t.color || 'green'), 'data-label': t.label, 'aria-label': t.title || t.label, onclick: function () { open(t.label); } },
       icon(t.icon || 'home'), h('span', { text: t.short || t.label }));
   }
-  function moreButton() {
-    return h('button', { type: 'button', class: 'navbtn c-slate', 'data-label': '__more', 'aria-label': 'More', onclick: openMore }, icon('more'), h('span', { text: 'More' }));
-  }
-
-  function openMore() {
-    clear(sheetGrid);
-    sheetGrid.appendChild(h('div', { class: 'launch' }, tabs.filter(function (t) { return !t.primary; }).map(function (t) {
-      return h('button', { type: 'button', class: 'lt c-' + (t.color || 'green'), onclick: function () { open(t.label); } }, ico(t.icon, t.color || 'green'), h('span', { class: 'ltt' }, h('b', { text: t.short || t.label }), t.sub ? h('small', { text: t.sub }) : null));
-    })));
-    sheet.className = 'open';
-    if (!sheetTok) sheetTok = Back.push(closeSheet);
+  var lastGroup = '';
+  function addNavItem(t) {
+    if (t.group && t.group !== lastGroup) nav.appendChild(h('div', { class: 'navgroup', text: t.group }));
+    lastGroup = t.group || lastGroup;
+    nav.appendChild(navButton(t));
   }
 
   // tabs: { label, screen, icon, color, title, short, primary }. extra screens can be opened but have no button of their own.
@@ -10183,22 +11362,21 @@ var Nav = (function () {
     wipe();
     tabs = list;
     list.forEach(function (t) { screens[t.label] = function (el, arg) { t.screen.mount(el, arg); }; meta[t.label] = t; });
-    list.filter(function (t) { return t.primary; }).forEach(function (t) { nav.appendChild(navButton(t)); });
-    if (list.some(function (t) { return !t.primary; })) nav.appendChild(moreButton());
+    lastGroup = '';
+    list.forEach(addNavItem);
     document.body.classList.toggle('single', list.length < 2);
     (extra || []).forEach(function (t) { screens[t.label] = function (el, arg) { t.screen.mount(el, arg); }; meta[t.label] = t; });
   }
   // Adds one more screen after the others were drawn (it goes under "More").
   function addTab(t) {
-    t.primary = false;
+    t.group = t.group || 'Admin';
     screens[t.label] = function (el, arg) { t.screen.mount(el, arg); };
     meta[t.label] = t;
-    var hadMore = tabs.some(function (x) { return !x.primary; });
     tabs.push(t);
-    if (!hadMore) nav.appendChild(moreButton());
+    addNavItem(t);
   }
   // Empties the menu and the screen area. The browser history is left alone (the same person may be setting the menu up again).
-  function wipe() { cancelPending(); screens = {}; meta = {}; tabs = []; clear(nav); clear(main); setTitle('', ''); closeSheet(); document.body.classList.remove('single'); }
+  function wipe() { cancelPending(); screens = {}; meta = {}; tabs = []; clear(nav); clear(main); setTitle('', ''); closeSheet(); closeDrawer(); document.body.classList.remove('single'); }
   // Sign-out or another person: the menu is emptied and the history of the old session is thrown away.
   function reset() { Back.reset(); wipe(); }
   // Shows the screen the history says we are on again (a pop-up page such as "Change password" has just been left by Back).
@@ -10211,27 +11389,37 @@ var Nav = (function () {
 
 // Which screens each role gets. The server enforces the same rules; this only decides what to show.
 function startApp() {
-  var role = Session.user.role;
-  var can = { enter: role === 'Admin' || role === 'DataEntry' || role === 'Pilot', look: role === 'Admin' || role === 'Manager', admin: role === 'Admin', serve: role === 'Admin' || role === 'Manager' || role === 'Pilot' };
+  // What a person sees follows their POWERS (Powers.gs): each power is one sidebar tab. The server checks the same powers.
+  var can = function (p) { return Svc.can(p); };
   var tabs = [];
-  if (role !== 'DataEntry') tabs.push({ label: 'Home', screen: Home, icon: 'home', color: 'green', title: 'Home', short: 'Home', sub: '', primary: true });
-  if (can.enter) tabs.push({ label: 'Register farmer', screen: Register, icon: 'userplus', color: 'green', title: 'New farmer', short: role === 'Pilot' ? 'New' : 'Register', sub: 'Add a farmer in five short steps', primary: role !== 'Admin' });
-  if (can.look || role === 'Pilot') tabs.push({ label: 'Find farmer', screen: Find, icon: 'search', color: 'green', title: 'Find a farmer', short: 'Find', sub: 'Search by name, phone, village or ID', primary: true });
-  if (Svc.can('service.request') || Svc.can('service.view') || Svc.can('service.complete') || Svc.can('service.payment')) tabs.push({ label: 'Services', screen: ServiceHub, icon: 'drone', color: 'sky', title: 'Services', short: 'Services', sub: 'Request, schedule, complete and payment', primary: true });
-  if (can.look) tabs.push({ label: 'Service report', screen: ServiceReport, icon: 'chart', color: 'sun', title: 'Reports', short: 'Report', sub: 'Figures by time, place, pilot and crop', primary: true });
-  if (can.look) tabs.push({ label: 'Messages', screen: Messages, icon: 'megaphone', color: 'violet', title: 'Send a message', short: 'Message', sub: 'Write to a group of farmers', primary: false });
-  if (can.look) tabs.push({ label: 'Earth', screen: Earth, icon: 'globe', color: 'aqua', title: 'Earth', short: 'Map', sub: 'Farmers and spraying on the map', primary: true, instant: true });
-  if (can.look) tabs.push({ label: 'Export data', screen: DataExport, icon: 'download', color: 'slate', title: 'Export', short: 'Export', sub: 'Download your data', primary: false });
-  if (can.admin) {
-    tabs.push({ label: 'Form Designer', screen: Designer, icon: 'sliders', color: 'slate', title: 'Form designer', short: 'Form', sub: 'The questions asked when registering', primary: false });
-    tabs.push({ label: 'Form Preview', screen: Preview, icon: 'eye', color: 'slate', title: 'Form preview', short: 'Preview', sub: 'See the form as staff see it', primary: false });
-    tabs.push({ label: 'Service setup', screen: ServiceSetup, icon: 'settings', color: 'slate', title: 'Service setup', short: 'Setup', sub: 'Kinds of service and drones', primary: false });
-    tabs.push({ label: 'Accounts', screen: Accounts, icon: 'users', color: 'slate', title: 'People', short: 'People', sub: 'Accounts and who can do what', primary: false });
+  if (can('home.view')) tabs.push({ label: 'Home', screen: Home, icon: 'home', color: 'green', title: 'Home', short: 'Home', sub: 'How the jobs are going' });
+  if (can('farmer.register')) tabs.push({ label: 'Register farmer', screen: Register, icon: 'userplus', color: 'green', title: 'New farmer', short: 'Register farmer', sub: 'Add a farmer in five short steps' });
+  if (can('farmer.find')) tabs.push({ label: 'Find farmer', screen: Find, icon: 'search', color: 'green', title: 'Find a farmer or a land', short: 'Find farmer / land', sub: 'Search by name, phone, village, land or ID' });
+  if (can('service.request')) tabs.push({ label: 'Requests', screen: SvcRequest, icon: 'clipboard', color: 'sky', title: 'Service requests', short: 'Service requests', sub: 'Register a request and see the registered ones' });
+  if (can('service.schedule')) tabs.push({ label: 'Scheduling', screen: SvcSchedule, icon: 'calendar', color: 'sky', title: 'Scheduling', short: 'Scheduling', sub: 'Give requested services a day and a time', instant: true });
+  if (can('service.assign')) tabs.push({ label: 'Job assigning', screen: SvcAssign, icon: 'route', color: 'sky', title: 'Job assigning', short: 'Job assigning', sub: 'Give the scheduled jobs of a day to drones', instant: true });
+  if (can('service.complete')) tabs.push({ label: 'Job completion', screen: SvcOps, icon: 'check', color: 'sky', title: 'Job completion', short: 'Job completion', sub: 'Enter what was done' });
+  if (can('service.payment')) tabs.push({ label: 'Payments', screen: SvcPay, icon: 'cash', color: 'sky', title: 'Payments', short: 'Payments', sub: 'Advance and full payments, and bills' });
+  if (can('report.view')) tabs.push({ label: 'Service report', screen: SvcReport, icon: 'chart', color: 'sun', title: 'Reports', short: 'Reports', sub: 'The services as a table, and the service report' });
+  if (can('audit.view')) tabs.push({ label: 'Log book', screen: LogBook, icon: 'book', color: 'slate', title: 'Log book', short: 'Log book', sub: 'Everything that was done in the app, and the audit report' });
+  if (can('insight.view')) {
+    tabs.push({ label: 'Earth', screen: Earth, icon: 'globe', color: 'aqua', title: 'Earth', short: 'Earth map', sub: 'Farmers and spraying on the map', instant: true, group: 'Admin' });
+    tabs.push({ label: 'Messages', screen: Messages, icon: 'megaphone', color: 'violet', title: 'Send a message', short: 'Messages', sub: 'Write to a group of farmers', group: 'Admin' });
+    tabs.push({ label: 'Export data', screen: DataExport, icon: 'download', color: 'slate', title: 'Export', short: 'Export', sub: 'Download your data', group: 'Admin' });
   }
+  if (can('admin.manage')) {
+    tabs.push({ label: 'Accounts', screen: Accounts, icon: 'users', color: 'slate', title: 'People', short: 'People', sub: 'Accounts, job role, base station and drone', group: 'Admin' });
+    tabs.push({ label: 'Job roles', screen: JobRoles, icon: 'shield', color: 'slate', title: 'Job roles', short: 'Job roles', sub: 'Which powers each job role has', group: 'Admin' });
+    tabs.push({ label: 'Base stations', screen: Stations, icon: 'pin', color: 'slate', title: 'Base stations and drones', short: 'Stations and drones', sub: 'Where the drones work from', group: 'Admin' });
+    tabs.push({ label: 'Service setup', screen: ServiceSetup, icon: 'settings', color: 'slate', title: 'Service setup', short: 'Kinds of service', sub: 'The kinds of service offered', group: 'Admin' });
+    tabs.push({ label: 'Form Designer', screen: Designer, icon: 'sliders', color: 'slate', title: 'Form designer', short: 'Form designer', sub: 'The questions asked when registering', group: 'Admin' });
+    tabs.push({ label: 'Form Preview', screen: Preview, icon: 'eye', color: 'slate', title: 'Form preview', short: 'Form preview', sub: 'See the form as staff see it', group: 'Admin' });
+  }
+  if (!tabs.length) { showMsg('Your account has no powers yet. Ask an admin to give you a job role.', true); return; }
   Nav.setTabs(tabs, [{ label: 'View farmer', screen: ViewFarmer, icon: 'user', color: 'green', title: 'Farmer', sub: 'Profile, route and log book', parent: 'Find farmer' }, { label: 'View land', screen: LandView, icon: 'wheat', color: 'sun', title: 'Land', sub: 'Details and every owner it had', parent: 'Find farmer' }, { label: 'Origin Map', screen: OriginMap, icon: 'network', color: 'aqua', title: 'Tree map', sub: 'How farmers reach each origin', parent: 'Earth' }]);
   // The copy of the data kept on this device is opened first (a fraction of a second), so the first screen can draw from it at once.
   var opened = false;
-  function first() { if (opened) return; opened = true; Nav.open(tabs[0].label); }
+  function first() { if (opened || !tabs.length) return; opened = true; Nav.open(tabs[0].label); }
   Sync.start().then(first, first);
   setTimeout(first, 400);
   TopSearch.mount();        // the search box in the top bar (computers)
